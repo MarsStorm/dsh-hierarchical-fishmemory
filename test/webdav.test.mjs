@@ -20,6 +20,8 @@ import {
   ensureRemoteDir,
   joinUrl,
   listRemoteBackups,
+  listRemoteConfigs,
+  downloadRemoteText,
   normalizeWebdavConfig,
   pruneRemoteBackups,
   pushBackupToCloud,
@@ -66,6 +68,14 @@ function startFakeServer() {
           .join('')}</d:multistatus>`;
         res.writeHead(207, { 'Content-Type': 'application/xml; charset=utf-8' });
         return res.end(xml);
+      }
+      if (req.method === 'GET') {
+        if (!files.has(pathname)) {
+          res.writeHead(404);
+          return res.end();
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(files.get(pathname));
       }
       if (req.method === 'DELETE') {
         files.delete(pathname);
@@ -274,4 +284,34 @@ test('explainWebdavError：401/403/404/域名解析都给中文提示', () => {
   assert.match(explainWebdavError(new Error('WebDAV 返回 404（MKCOL http://x）')), /地址路径不对/);
   assert.match(explainWebdavError(new Error('fetch failed ENOTFOUND')), /域名解析/);
   assert.equal(explainWebdavError(new Error('别的错')), '别的错');
+});
+
+
+test('listRemoteConfigs：只认 `配置-*.json`，和记忆备份分得开', async () => {
+  const fake = await startFakeServer();
+  try {
+    const cfg = normalizeWebdavConfig({ webdavUrl: fake.url, webdavDir: '属于我们的回忆' });
+    await uploadBackupText(cfg, { text: '{"a":1}', fileName: '备份-20261031-120000.json' });
+    await uploadBackupText(cfg, { text: '{"format":"x"}', fileName: '配置-20261031-120500.json' });
+    const configs = await listRemoteConfigs(cfg);
+    const backups = await listRemoteBackups(cfg);
+    assert.deepEqual(configs, ['配置-20261031-120500.json']);
+    assert.deepEqual(backups, ['备份-20261031-120000.json']);
+  } finally {
+    await fake.close();
+  }
+});
+
+test('downloadRemoteText：取回正文，文件名里的分隔符会被压平', async () => {
+  const fake = await startFakeServer();
+  try {
+    const cfg = normalizeWebdavConfig({ webdavUrl: fake.url, webdavDir: '属于我们的回忆' });
+    await uploadBackupText(cfg, { text: '{"hello":"世界"}', fileName: '配置-20261031-120500.json' });
+    const got = await downloadRemoteText(cfg, '配置-20261031-120500.json');
+    assert.equal(got.text, '{"hello":"世界"}');
+    assert.equal(got.fileName, '配置-20261031-120500.json');
+    assert.equal(got.status, 200);
+  } finally {
+    await fake.close();
+  }
 });

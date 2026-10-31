@@ -16,6 +16,8 @@
 
 /** 远程目录里认得出的备份文件名（和 backupFileName() 的前缀一致）。 */
 export const REMOTE_PREFIX = '备份-';
+/** 配置备份的文件前缀（只装插件配置，不装四本账）。 */
+export const CONFIG_PREFIX = '配置-';
 
 /**
  * 归一化配置。永远不抛错：没填 URL 就是「没配置」，调用方据此给一句人话。
@@ -175,7 +177,7 @@ export async function uploadBackupText(cfg, input) {
  * 列远程目录里的备份文件。PROPFIND 拿不到（有的网盘禁了）就返回空数组，
  * 让「保留最近 N 份」退化成「什么都不删」，而不是整个上传失败。
  */
-export async function listRemoteBackups(cfg, options = {}) {
+async function listRemoteFiles(cfg, prefix, options = {}) {
   if (!cfg.dir) return [];
   const target = joinUrl(cfg.url, cfg.dir);
   let text = '';
@@ -205,10 +207,29 @@ export async function listRemoteBackups(cfg, options = {}) {
     } catch {
       // 解码失败就用原串
     }
-    if (name.startsWith(REMOTE_PREFIX) && name.endsWith('.json') && !names.includes(name)) names.push(name);
+    if (name.startsWith(prefix) && name.endsWith('.json') && !names.includes(name)) names.push(name);
   }
   // 文件名里带 UTC 时间戳，字典序即时间序（旧 → 新）
   return names.sort();
+}
+
+/** 列远程目录里的记忆备份。PROPFIND 拿不到就返回空数组。 */
+export async function listRemoteBackups(cfg, options = {}) {
+  return listRemoteFiles(cfg, REMOTE_PREFIX, options);
+}
+
+/** 列远程目录里的**配置**备份（`配置-*.json`）。 */
+export async function listRemoteConfigs(cfg, options = {}) {
+  return listRemoteFiles(cfg, CONFIG_PREFIX, options);
+}
+
+/** 从云端取回一个文件的正文（配置恢复用）。 */
+export async function downloadRemoteText(cfg, fileName, options = {}) {
+  const name = String(fileName ?? '').replace(/[\\/]+/g, '-');
+  if (!name) throw new Error('下载失败：文件名为空');
+  const target = joinUrl(cfg.url, cfg.dir, name);
+  const res = await webdavRequest(cfg, 'GET', encodePathUrl(target), { timeoutMs: options.timeoutMs });
+  return { url: target, fileName: name, text: res.text, status: res.status };
 }
 
 /** 删掉超出 keep 的旧份（最旧的先删）。PROPFIND 不可用时静默跳过。 */

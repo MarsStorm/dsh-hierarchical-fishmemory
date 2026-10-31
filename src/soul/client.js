@@ -218,6 +218,16 @@ window.__ModuleLoader__.load({
       cloudTestOk: "连接正常",
       cloudTestNoList: "（这个网盘不让列目录，但目录建得起来）",
       cloudRemote: "云端已有",
+      cloudCfgHint: "配置很小：地址、账号、保留份数这些。四本账走上面那份整包备份，别混。",
+      cloudCfgUpload: "配置传到云端",
+      cloudCfgUploaded: "配置已上传：{name}（{bytes} 字节）",
+      cloudCfgList: "看看云端有哪些配置",
+      cloudCfgEmpty: "云端还没有配置备份",
+      cloudCfgRestore: "看看会改什么",
+      cloudCfgConfirm: "确认恢复",
+      cloudCfgCancel: "算了",
+      cloudCfgApplied: "已恢复 {n} 项配置",
+      cloudCfgFail: "配置操作失败：{detail}",
       cloudLoaded: "已读取当前设置",
       cloudLoadFail: "读不到云端设置：{detail}",
       cloudSaveFail: "保存失败：{detail}",
@@ -304,6 +314,16 @@ window.__ModuleLoader__.load({
       cloudTestOk: "Connected",
       cloudTestNoList: " (this server does not allow listing, but the folder was created)",
       cloudRemote: "on the server:",
+      cloudCfgHint: "Small stuff only: URL, account, keep-count. The four ledgers ride on the full backup above.",
+      cloudCfgUpload: "Upload config",
+      cloudCfgUploaded: "Config uploaded: {name} ({bytes} bytes)",
+      cloudCfgList: "List config backups",
+      cloudCfgEmpty: "No config backup on the server yet",
+      cloudCfgRestore: "Preview",
+      cloudCfgConfirm: "Restore",
+      cloudCfgCancel: "Cancel",
+      cloudCfgApplied: "Restored {n} settings",
+      cloudCfgFail: "Config operation failed: {detail}",
       cloudLoaded: "Loaded current settings",
       cloudLoadFail: "Could not read cloud settings: {detail}",
       cloudSaveFail: "Save failed: {detail}",
@@ -365,6 +385,11 @@ window.__ModuleLoader__.load({
       var [error, setError] = react.useState(null);
       var [testBusy, setTestBusy] = react.useState(false);
       var [testResult, setTestResult] = react.useState(null);
+      var [cfgBusy, setCfgBusy] = react.useState(false);
+      var [cfgNotice, setCfgNotice] = react.useState(null);
+      var [cfgError, setCfgError] = react.useState(null);
+      var [cfgFiles, setCfgFiles] = react.useState(null);
+      var [cfgPlan, setCfgPlan] = react.useState(null);
 
       react.useEffect(function () {
         var alive = true;
@@ -431,6 +456,97 @@ window.__ModuleLoader__.load({
           .catch(function (e) {
             setTestBusy(false);
             setTestResult({ error: true, text: String((e && e.message) || e) });
+          });
+      }
+
+      function describePlan(name, body) {
+        var keys = Object.keys(body.changes || {});
+        if (!keys.length) return name + "：和现在一样，没东西要改";
+        return name + "：会改 " + keys.length + " 项（" + keys.slice(0, 6).join("、") + (keys.length > 6 ? "…" : "") + "）";
+      }
+
+      function backupConfig() {
+        if (cfgBusy) return;
+        setCfgBusy(true); setCfgNotice(null); setCfgError(null); setCfgPlan(null);
+        fetch(CLOUD_API + "/config-backup", { method: "POST", credentials: "same-origin" })
+          .then(function (r) { return r.json(); })
+          .then(function (body) {
+            setCfgBusy(false);
+            if (!body || body.ok !== true) {
+              setCfgError(t("cloudCfgFail", { detail: (body && body.error) || "unexpected response" }));
+              return;
+            }
+            setCfgNotice(t("cloudCfgUploaded", { name: body.fileName, bytes: body.bytes }));
+          })
+          .catch(function (e) {
+            setCfgBusy(false);
+            setCfgError(t("cloudCfgFail", { detail: String((e && e.message) || e) }));
+          });
+      }
+
+      function listConfigs() {
+        if (cfgBusy) return;
+        setCfgBusy(true); setCfgNotice(null); setCfgError(null); setCfgPlan(null);
+        fetch(CLOUD_API + "/config-backup", { credentials: "same-origin" })
+          .then(function (r) { return r.json(); })
+          .then(function (body) {
+            setCfgBusy(false);
+            if (!body || body.ok !== true) {
+              setCfgError(t("cloudCfgFail", { detail: (body && body.error) || "unexpected response" }));
+              return;
+            }
+            setCfgFiles(Array.isArray(body.files) ? body.files : []);
+          })
+          .catch(function (e) {
+            setCfgBusy(false);
+            setCfgError(t("cloudCfgFail", { detail: String((e && e.message) || e) }));
+          });
+      }
+
+      function restoreConfig(name, confirm) {
+        if (cfgBusy) return;
+        setCfgBusy(true); setCfgNotice(null); setCfgError(null);
+        fetch(CLOUD_API + "/config-restore", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ file: name, confirm: Boolean(confirm) })
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (body) {
+            setCfgBusy(false);
+            if (!body || body.ok !== true) {
+              setCfgError(t("cloudCfgFail", { detail: (body && body.error) || "unexpected response" }));
+              return;
+            }
+            if (body.dryRun === true) {
+              setCfgPlan({ file: name, text: describePlan(name, body) });
+              return;
+            }
+            setCfgPlan(null);
+            setCfgNotice(t("cloudCfgApplied", { n: (body.applied || []).length }));
+            // 配置变了 → 重新读一次状态，表单跟着换。
+            fetch(CLOUD_API, { credentials: "same-origin" })
+              .then(function (r) { return r.json(); })
+              .then(function (next) {
+                if (next && next.ok === true) {
+                  setState({ status: "ready", value: next });
+                  setDraft({
+                    url: next.url || "",
+                    user: next.user || "",
+                    password: "",
+                    dir: next.dir || "",
+                    keep: String(next.keep || 10),
+                    enabled: next.enabled !== false,
+                    auto: Boolean(next.auto)
+                  });
+                }
+              })
+              .catch(function () { /* 读不回就保持旧表单，不影响已保存的事实 */ });
+          })
+          .catch(function (e) {
+            setCfgBusy(false);
+            setCfgError(t("cloudCfgFail", { detail: String((e && e.message) || e) }));
           });
       }
 
@@ -532,6 +648,34 @@ window.__ModuleLoader__.load({
         ),
         testResult
           ? h("p", { className: testResult.error ? "__sm_error" : "__sm_status", role: testResult.error ? "alert" : undefined }, testResult.text)
+          : null,
+
+        h("p", { className: "__sm_hint", style: { margin: "8px 0 2px" } }, t("cloudCfgHint")),
+        h("div", { className: "__sm_actions" },
+          h("button", { type: "button", className: "__sm_btn", onClick: backupConfig, disabled: cfgBusy }, t("cloudCfgUpload")),
+          h("button", { type: "button", className: "__sm_btn", onClick: listConfigs, disabled: cfgBusy }, t("cloudCfgList")),
+          cfgBusy ? h("span", { className: "__sm_status" }, t("saving")) : null,
+          cfgNotice ? h("span", { className: "__sm_status" }, cfgNotice) : null,
+          cfgError ? h("span", { className: "__sm_error", role: "alert" }, cfgError) : null
+        ),
+        cfgFiles
+          ? (cfgFiles.length === 0
+            ? h("p", { className: "__sm_hint" }, t("cloudCfgEmpty"))
+            : h("div", { className: "__sm_group" }, cfgFiles.slice().reverse().map(function (name) {
+              var plan = cfgPlan && cfgPlan.file === name ? cfgPlan : null;
+              return h("div", { key: name },
+                h("div", { className: "__sm_row" },
+                  h("span", { className: "__sm_hint", style: { flex: "1 1 auto", wordBreak: "break-all" } }, name),
+                  plan
+                    ? h("span", {},
+                      h("button", { type: "button", className: "__sm_btn __sm_btnPrimary", onClick: function () { restoreConfig(name, true); } }, t("cloudCfgConfirm")),
+                      h("button", { type: "button", className: "__sm_btn", onClick: function () { setCfgPlan(null); } }, t("cloudCfgCancel"))
+                    )
+                    : h("button", { type: "button", className: "__sm_btn", onClick: function () { restoreConfig(name, false); }, disabled: cfgBusy }, t("cloudCfgRestore"))
+                ),
+                plan ? h("p", { className: "__sm_hint", style: { margin: "0 0 4px" } }, plan.text) : null
+              );
+            })))
           : null
       );
     }

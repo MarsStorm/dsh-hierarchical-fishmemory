@@ -60,7 +60,16 @@ import {
 import { resolveConfig, buildSchema, CONFIG_SPEC } from '../core/config.mjs';
 import { registerShallow, SHALLOW_FILE } from '../core/shallow.mjs';
 import { summarizeBackup, writeBackupFile, backupFileName, buildRegisteredBackup, restoreViaRegistered } from '../core/backup.mjs';
-import { explainWebdavError, listRemoteBackups, normalizeWebdavConfig, pushBackupToCloud, testConnection } from '../core/webdav.mjs';
+import {
+  downloadRemoteText,
+  explainWebdavError,
+  listRemoteBackups,
+  listRemoteConfigs,
+  normalizeWebdavConfig,
+  pushBackupToCloud,
+  testConnection,
+  uploadBackupText,
+} from '../core/webdav.mjs';
 
 /** Cordis 插件身份。模块上只有这四个属性会被读取。 */
 export const name = 'dsh-hierarchical-fishmemory';
@@ -917,6 +926,17 @@ export function apply(ctx, rawConfig) {
   //  · 配置每次现读（`cfgNow`）—— 用户在设置页改完密码不用重启。
 
   const cfgNow = () => resolveConfig(rawConfig);
+  // ── 配置备份 / 恢复（只装配置，不装四本账） ─────────────────────────────
+  //
+  // 用户要的是「换台设备时别把 WebDAV 地址、保留份数、预算这些重新填一遍」。
+  // 所以这份 JSON 很小，只放本 entry 的配置项；四本账走 fish_backup / cloud 那条。
+  const CONFIG_BACKUP_FORMAT = 'dsh-hierarchical-fishmemory/config';
+  const CONFIG_BACKUP_VERSION = 1;
+  const configFileName = (now = new Date()) => {
+    const p = (n) => String(n).padStart(2, '0');
+    return `配置-${now.getUTCFullYear()}${p(now.getUTCMonth() + 1)}${p(now.getUTCDate())}-${p(now.getUTCHours())}${p(now.getUTCMinutes())}${p(now.getUTCSeconds())}.json`;
+  };
+
   const cloudState = {
     lastAt: 0,
     lastFile: '',
@@ -2359,6 +2379,117 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
           },
         },
         {
+            // 配置备份：GET 列出云端有哪些 `配置-*.json`；POST 把当前配置传上去。
+            //
+            // 为什么只装配置：四本账有 fish_backup / /cloud 那条路，这里只解决
+            // 「换设备不用重填一遍 WebDAV 账号、保留份数、预算」这种小麻烦。
+            kind: 'exact',
+            path: `${PANEL_BASE}/cloud/config-backup`,
+            handler: async (req, res) => {
+              if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
+              const wd = normalizeWebdavConfig(cfgNow());
+              if (req.method === 'GET') {
+                if (!wd.configured) return panelReply(res, 200, { ok: true, configured: false, files: [] });
+                try {
+                  const files = await listRemoteConfigs(wd);
+                  return panelReply(res, 200, { ok: true, configured: true, files });
+                } catch (err) {
+                  return panelReply(res, 400, { ok: false, error: explainWebdavError(err) });
+                }
+              }
+              if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
+              try {
+                if (!wd.configured) throw new Error('WebDAV 还没配置：先把服务器地址、账号、密码填上');
+                const payload = {
+                  format: CONFIG_BACKUP_FORMAT,
+                  version: CONFIG_BACKUP_VERSION,
+                  exportedAt: new Date().toISOString(),
+                  entryId: PLUGIN_ENTRY_ID,
+                  config: { ...cfgNow() },
+                };
+                const fileName = configFileName();
+                const text = `${JSON.stringify(payload, null, 2)}\n`;
+                const uploaded = await uploadBackupText(wd, { text, fileName });
+                log(`配置已传到云端：${uploaded.fileName}（${uploaded.bytes} 字节）`);
+                return panelReply(res, 200, { ok: true, ...uploaded });
+              } catch (err) {
+                const message = explainWebdavError(err);
+                warn(`配置上传失败：${message}`);
+                return panelReply(res, 400, { ok: false, error: message });
+              }
+            },
+          },
+          {
+            // 从云端恢复配置：默认 dry-run，只报「哪几项会变」；confirm 才写回 settings。
+            kind: 'exact',
+            path: `${PANEL_BASE}/cloud/config-restore`,
+            handler: async (req, res) => {
+              if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
+              if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
+              try {
+                const text = await readPanelTextBody(req, { limit: 256 * 1024 });
+                const body = JSON.parse(text || '{}');
+                const fileName = String(body.file ?? '').split(/[\\/]/).pop() ?? '';
+                if (!fileName.startsWith('配置-')) throw new Error('请选一个 `配置-…json` 文件');
+                const wd = normalizeWebdavConfig(cfgNow());
+                if (!wd.configured) throw new Error('WebDAV 还没配置，恢复不了');
+                const got = await downloadRemoteText(wd, fileName);
+                let payload;
+                try {
+                  payload = JSON.parse(got.text);
+                } catch {
+                  throw new Error('这份文件不是 JSON，可能不是配置备份');
+                }
+                if (payload?.format !== CONFIG_BACKUP_FORMAT) throw new Error('这份文件不是本插件的配置备份');
+                const raw = payload?.config && typeof payload.config === 'object' ? payload.config : {};
+                const known = CONFIG_SPEC.map((item) => item.key);
+                const picked = {};
+                for (const key of known) {
+                  if (raw[key] !== undefined) picked[key] = raw[key];
+                }
+                const current = cfgNow();
+                const changes = {};
+                for (const [key, value] of Object.entries(picked)) {
+                  if (key === 'webdavPassword') {
+                    if (String(value ?? '') !== String(current[key] ?? '')) changes[key] = ['（已保存的密码）', '（备份里的密码）'];
+                    continue;
+                  }
+                  const before = current[key];
+                  if (JSON.stringify(before) !== JSON.stringify(value)) {
+                    changes[key] = [before, value];
+                  }
+                }
+                const result = {
+                  ok: true,
+                  file: fileName,
+                  exportedAt: payload.exportedAt ?? '',
+                  keys: Object.keys(picked).length,
+                  changes,
+                  passwordIncluded: typeof picked.webdavPassword === 'string' && picked.webdavPassword !== '',
+                };
+                if (body.confirm !== true) return panelReply(res, 200, { ...result, dryRun: true, applied: [] });
+                const settings = ctx.get('settings');
+                if (!settings || typeof settings.update !== 'function') throw new Error('设置服务不可用，恢复不了');
+                const next = { ...current, ...picked };
+                await settings.update(PLUGIN_ENTRY_ID, next);
+                const wd2 = normalizeWebdavConfig(cfgNow());
+                log(`配置已从云端恢复：${fileName}（${Object.keys(picked).length} 项）`);
+                return panelReply(res, 200, {
+                  ...result,
+                  dryRun: false,
+                  applied: Object.keys(picked),
+                  configured: wd2.configured,
+                  dir: wd2.dir,
+                  keep: wd2.keep,
+                });
+              } catch (err) {
+                const message = explainWebdavError(err);
+                warn(`配置恢复失败：${message}`);
+                return panelReply(res, 400, { ok: false, error: message });
+              }
+            },
+          },
+        {
           // 云端备份的配置写入：POST = 把表单内容写回 profile patch 里的本 entry。
           //
           // 为什么走服务端：配置是 cordis 的 settings 文档，写它要走
@@ -2418,7 +2549,7 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
         },
       ];
       const disposers = routes.map((r) => scope.webServer.register(r));
-      log(`面板接口已注册：${PANEL_BASE}/{state,forget,notes,export,backup,restore,cloud,cloud/config,cloud/test}`);
+      log(`面板接口已注册：${PANEL_BASE}/{state,forget,notes,export,backup,restore,cloud,cloud/config,cloud/test,cloud/config-backup,cloud/config-restore}`);
       return () => {
         for (const d of disposers.reverse()) {
           try {
