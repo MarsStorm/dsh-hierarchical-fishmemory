@@ -1,6 +1,6 @@
 # 更新日志
 
-## 5.0.0 — 2026-10-31
+## 1.1.0 — 2026-10-31
 
 - **收编**：`feiyu-memory` 4.0.2 + `dsh-shallow-memory` + `dsh-soul-md` 0.10.3 合并为单包 `dsh-hierarchical-fishmemory`，旧包从 profile 摘除。
 - **两个 cordis 入口**：`dsh-hierarchical-fishmemory`（日记引擎 / 浅层 / 人格手记 / 人格档案）与 `dsh-hierarchical-fishmemory/soul`（人设卡 + core/topics，entry id 仍为 `soul-md`）；客户端两个半边合并为 `dist/client.js`（`node tools/build-client.mjs` 生成）。

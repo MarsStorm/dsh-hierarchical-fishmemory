@@ -74,13 +74,13 @@ test("collectBackup 收齐四本账 + 人设卡", () => {
     cards: { 默认人设: "你是某个助手" },
     active: "默认人设",
     diaryDir,
-    pluginVersion: "5.0.0",
+    pluginVersion: "1.1.0",
     readText: (file) => (file.endsWith("env-ops.md") ? "环境运维正文" : readOr(file)),
   });
 
   assert.equal(backup.meta.format, BACKUP_FORMAT);
   assert.equal(backup.meta.version, BACKUP_VERSION);
-  assert.equal(backup.meta.pluginVersion, "5.0.0");
+  assert.equal(backup.meta.pluginVersion, "1.1.0");
   assert.deepEqual(backup.meta.source.memoryScopes, ["默认人设", "global"]);
   assert.equal(backup.persona.active, "默认人设");
   assert.equal(backup.persona.cards["默认人设"], "你是某个助手");
