@@ -113,8 +113,8 @@ TTL 默认 7 天，规则很短：
 ## 安装
 
 ```bash
-# 从 GitHub 装
-dsh plugin --profile web add github:<你的用户名>/dsh-hierarchical-fishmemory
+# 从 GitHub 装（这就是本仓库的正式地址，直接复制就能用）
+dsh plugin --profile web add github:MarsStorm/dsh-hierarchical-fishmemory
 
 # 或者本地开发（改完直接生效，不用重装）
 dsh plugin --profile web add link:/abs/path/to/dsh-hierarchical-fishmemory

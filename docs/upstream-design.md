@@ -135,7 +135,7 @@ salience 每天按系数衰减，掉下去的条目不再进注入区，
 **本机（这个 fork）的安装方式**——它不是 npm 包，用 `link:` 挂进 profile：
 
 ```bash
-dsh plugin --profile web add github:<owner>/dsh-hierarchical-fishmemory
+dsh plugin --profile web add github:MarsStorm/dsh-hierarchical-fishmemory
 # 若 profile 里有 @local/* 插件，add 会跑 pnpm 把它们剪掉，装完记得恢复
 ```
 
