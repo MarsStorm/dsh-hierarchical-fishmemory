@@ -1443,8 +1443,110 @@ window.__ModuleLoader__.load({
               '整包备份把四本账和人设卡收进一个 JSON，存在 ~/.dsh/backups/；换设备带它就行。',
             ),
             h(ImportBox),
+            h(CloudBox),
           ),
         ),
+      );
+    }
+
+    /* ── 云端备份（WebDAV） ── */
+    //
+    // 2026-10-31 加。本地那份 JSON 已经能带走，这个按钮是「连手都不用动」。
+    // 状态每次打开面板现读，所以设置页改完地址回来就能看到新结果。
+    function CloudBox() {
+      const [state, setState] = useState(null); // GET /cloud 的结果
+      const [busy, setBusy] = useState(false);
+      const [error, setError] = useState('');
+      const [done, setDone] = useState(null);
+
+      const read = async () => {
+        try {
+          const res = await fetch(`${API}/cloud`, { credentials: 'same-origin' });
+          const data = await res.json();
+          if (res.ok && data.ok) setState(data);
+        } catch {
+          // 读不到就保持 null，不要把面板弄坏
+        }
+      };
+
+      useEffect(() => {
+        read();
+      }, []);
+
+      const push = async () => {
+        setBusy(true);
+        setError('');
+        setDone(null);
+        try {
+          const res = await fetch(`${API}/cloud`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+          });
+          let data = {};
+          try {
+            data = await res.json();
+          } catch {
+            // 服务端没给 JSON 就按 HTTP 码报
+          }
+          if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+          setDone(data);
+          await read();
+        } catch (err) {
+          setError(err && err.message ? err.message : String(err));
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const note = { fontSize: 12, lineHeight: 1.7, color: C.text2, margin: '8px 0 0' };
+      const when = state && state.lastAt ? new Date(state.lastAt).toLocaleString() : '';
+
+      return h(
+        'div',
+        { style: { marginTop: 10, paddingTop: 10, borderTop: `1px dashed ${C.border1}` } },
+        h(
+          'p',
+          { style: { ...note, margin: 0 } },
+          !state
+            ? '云端备份：读不到状态。'
+            : !state.enabled
+              ? '云端备份已关掉（设置里的「WebDAV 总开关」）。'
+              : !state.configured
+                ? '云端备份还没接上：去插件设置里填 WebDAV 地址（服务器、账号、密码）。'
+                : `云端备份：${state.dir} · 保留 ${state.keep} 份${state.auto ? ' · 写日记后自动上传' : ''}`,
+        ),
+        when
+          ? h('p', { style: { ...note, margin: '4px 0 0' } }, `上次上传：${when}（${state.lastFile}）`)
+          : null,
+        state && state.lastError
+          ? h('p', { style: { ...note, margin: '4px 0 0', color: C.err } }, `上次失败：${state.lastError}`)
+          : null,
+        state && state.configured && state.enabled
+          ? h(
+              'button',
+              {
+                type: 'button',
+                onClick: push,
+                disabled: busy,
+                style: { ...linkStyle(C.brand), marginTop: 8 },
+              },
+              busy ? '正在上传…' : '上传到云端',
+            )
+          : null,
+        done
+          ? h(
+              'p',
+              { style: { ...note, margin: '6px 0 0', color: C.brand } },
+              `已上传：${done.fileName || done.file}（${done.bytes} 字节）${
+                done.removed && done.removed.length ? `，清掉 ${done.removed.length} 份旧的` : ''
+              }`,
+            )
+          : null,
+        error
+          ? h('p', { style: { ...note, margin: '6px 0 0', color: C.err } }, `没传上去：${error}`)
+          : null,
       );
     }
 

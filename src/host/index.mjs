@@ -60,6 +60,7 @@ import {
 import { resolveConfig, buildSchema, CONFIG_SPEC } from '../core/config.mjs';
 import { registerShallow, SHALLOW_FILE } from '../core/shallow.mjs';
 import { summarizeBackup, writeBackupFile, backupFileName, buildRegisteredBackup, restoreViaRegistered } from '../core/backup.mjs';
+import { normalizeWebdavConfig, pushBackupToCloud, listRemoteBackups } from '../core/webdav.mjs';
 
 /** Cordis 插件身份。模块上只有这四个属性会被读取。 */
 export const name = 'dsh-hierarchical-fishmemory';
@@ -870,6 +871,15 @@ export function apply(ctx, rawConfig) {
         merged.manifest.updated_at = Date.now();
         await writeArchiveDir(archiveDirectory, archiveToFiles(merged));
         await writeReadableDiary(merged);
+        // 云端备份放到下一个 tick：这里正处在 writeChain 里，
+        // 直接 await 会等自己（cloudBackupOnce 也要等 writeChain 落定）→ 死锁。
+        setTimeout(() => {
+          try {
+            maybeAutoCloud();
+          } catch (err) {
+            warn(`自动云端备份没起来：${err instanceof Error ? err.message : String(err)}`);
+          }
+        }, 0);
       })
       .catch((err) => {
         // ⚠️ **连续写盘失败要让面板看得出来。**
@@ -894,6 +904,89 @@ export function apply(ctx, rawConfig) {
         writeFailures = 0;
       });
     return writeChain;
+  }
+
+  /* ── 云端备份（WebDAV） ── */
+  //
+  // 2026-10-31 加。本地那份 JSON 已经能带走，用户要的是「连手都不用动」。
+  //
+  // 三条约束：
+  //  · **永远不能挡住聊天** —— 上传一律在写盘落定之后、fire-and-forget，
+  //    失败只 warn，绝不向上抛。
+  //  · 自动上传带 5 分钟节流：每轮写完就推一次太吵，网盘也会限流。
+  //  · 配置每次现读（`cfgNow`）—— 用户在设置页改完密码不用重启。
+
+  const cfgNow = () => resolveConfig(rawConfig);
+  const cloudState = {
+    lastAt: 0,
+    lastFile: '',
+    lastBytes: 0,
+    lastRemoved: [],
+    lastReason: '',
+    lastError: '',
+  };
+  let cloudInflight = null;
+  let lastAutoAt = 0;
+
+  async function buildAndSaveBackup(note) {
+    await loadPromise;
+    await drainPromise;
+    await writeChain;
+    const build = ctx.get('fishMemory')?.buildBackup;
+    const backup = typeof build === 'function' ? await build() : await buildRegisteredBackup();
+    backup.meta.counts = summarizeBackup(backup);
+    if (note) backup.meta.note = String(note);
+    const { file, bytes } = await writeBackupFile(backup, path.join(dshHome(), 'backups'), {
+      fileName: backupFileName(),
+    });
+    return { backup, file, bytes };
+  }
+
+  /** 生成一份新备份并推到 WebDAV。并发调用共用同一个 promise。 */
+  function cloudBackupOnce({ reason = 'manual', note } = {}) {
+    if (cloudInflight) return cloudInflight;
+    cloudInflight = (async () => {
+      const wd = normalizeWebdavConfig(cfgNow());
+      if (!wd.enabled) throw new Error('WebDAV 已关掉（设置里的「WebDAV 总开关」）');
+      if (!wd.configured) {
+        throw new Error('WebDAV 还没配置：填上服务器地址（和可选的账号密码）再试');
+      }
+      const { backup, file, bytes } = await buildAndSaveBackup(note ?? `cloud-${reason}`);
+      const text = JSON.stringify(backup, null, 2);
+      const pushed = await pushBackupToCloud(wd, {
+        text,
+        fileName: path.basename(file),
+        onLog: (msg) => log(msg),
+      });
+      cloudState.lastAt = Date.now();
+      cloudState.lastFile = pushed.fileName;
+      cloudState.lastBytes = pushed.bytes;
+      cloudState.lastRemoved = pushed.removed;
+      cloudState.lastReason = reason;
+      cloudState.lastError = '';
+      log(`云端备份完成（${reason}）：${pushed.url}（${pushed.bytes} 字节）`);
+      return { ...pushed, localFile: file, localBytes: bytes };
+    })()
+      .catch((err) => {
+        cloudState.lastError = err instanceof Error ? err.message : String(err);
+        throw err;
+      })
+      .finally(() => {
+        cloudInflight = null;
+      });
+    return cloudInflight;
+  }
+
+  /** 写完日记后的自动上传：节流 5 分钟，失败只 warn。 */
+  function maybeAutoCloud() {
+    const wd = normalizeWebdavConfig(cfgNow());
+    if (!wd.enabled || !wd.auto || !wd.configured) return;
+    const now = Date.now();
+    if (now - lastAutoAt < 5 * 60 * 1000) return;
+    lastAutoAt = now;
+    cloudBackupOnce({ reason: 'auto' }).catch((err) => {
+      warn(`自动云端备份失败：${err instanceof Error ? err.message : String(err)}`);
+    });
   }
 
   /* ── 注入 ── */
@@ -2171,9 +2264,58 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
             }
           },
         },
+        {
+          // 云端备份（WebDAV）：POST = 立刻生成一份新备份并上传；GET = 看状态。
+          //
+          // 为什么不用前端上传文件：备份必须用**磁盘上那份**现在的内容，
+          // 不能在浏览器里拼 —— 人设卡与深层记忆只有服务端读得到。
+          kind: 'exact',
+          path: `${PANEL_BASE}/cloud`,
+          handler: async (req, res) => {
+            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
+            const wd = normalizeWebdavConfig(cfgNow());
+            if (req.method === 'GET') {
+              let remote = null;
+              if (/[?&]list=1\b/.test(String(req.url ?? '')) && wd.configured && wd.enabled) {
+                try {
+                  remote = await listRemoteBackups(wd);
+                } catch (err) {
+                  remote = { error: err instanceof Error ? err.message : String(err) };
+                }
+              }
+              return panelReply(res, 200, {
+                ok: true,
+                enabled: wd.enabled,
+                configured: wd.configured,
+                dir: wd.dir,
+                auto: wd.auto,
+                keep: wd.keep,
+                username: wd.username,
+                lastAt: cloudState.lastAt,
+                lastFile: cloudState.lastFile,
+                lastBytes: cloudState.lastBytes,
+                lastRemoved: cloudState.lastRemoved,
+                lastReason: cloudState.lastReason,
+                lastError: cloudState.lastError,
+                remote: Array.isArray(remote) ? remote : remote,
+              });
+            }
+            if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
+            try {
+              await loadPromise;
+              const result = await cloudBackupOnce({ reason: 'panel' });
+              return panelReply(res, 200, { ok: true, ...result });
+            } catch (err) {
+              return panelReply(res, 400, {
+                ok: false,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          },
+        },
       ];
       const disposers = routes.map((r) => scope.webServer.register(r));
-      log(`面板接口已注册：${PANEL_BASE}/{state,forget,notes,export,backup,restore}`);
+      log(`面板接口已注册：${PANEL_BASE}/{state,forget,notes,export,backup,restore,cloud}`);
       return () => {
         for (const d of disposers.reverse()) {
           try {
@@ -2488,6 +2630,69 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
       'feiyu: recall tool',
     );
     log(`已注册工具 ${RECALL_TOOL_NAME}`);
+  });
+
+  // 云端备份工具：他一句「备份一下」，我不用等面板，直接推一份上去。
+  ctx.inject(['tools'], (scope) => {
+    scope.effect(
+      () =>
+        scope.tools.register({
+          name: 'fish_cloud_backup',
+          description:
+            '把整份记忆（人设卡、深层记忆、共度时光、情感日记、人格手记、浅层）打成一个 JSON，' +
+            '上传到设置里配置好的 WebDAV 云端，并顺手删掉超出保留份数的旧备份。' +
+            '他说「备份一下」「传到云上」「存一份到网盘」时用它。没配置会返回一句明确的错。',
+          parameters: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              note: {
+                type: 'string',
+                description: '可选备注，写进备份的 meta 里，方便日后认出来。',
+              },
+            },
+          },
+          output: {
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                ok: { type: 'boolean' },
+                url: { type: 'string' },
+                file: { type: 'string' },
+                bytes: { type: 'integer' },
+                removed: { type: 'integer' },
+              },
+            },
+            render: (_args, value) =>
+              value?.ok
+                ? [
+                    {
+                      type: 'text',
+                      text: `已传到云端：${value.file}（${value.bytes} 字节）\n${value.url}${
+                        value.removed ? `\n顺手清掉 ${value.removed} 份旧备份` : ''
+                      }`,
+                    },
+                  ]
+                : [{ type: 'text', text: '没传上去。' }],
+          },
+          async execute(args) {
+            const result = await cloudBackupOnce({
+              reason: 'tool',
+              note: typeof args?.note === 'string' ? args.note : '',
+            });
+            return {
+              ok: true,
+              url: result.url,
+              file: result.fileName,
+              bytes: result.bytes,
+              removed: result.removed.length,
+            };
+          },
+        }),
+      'fish: cloud backup tool',
+    );
+    log('已注册工具 fish_cloud_backup');
   });
 
   // 浅层记忆（带 TTL）—— 原来单独的 dsh-shallow-memory，2026-10-31 收编进来。

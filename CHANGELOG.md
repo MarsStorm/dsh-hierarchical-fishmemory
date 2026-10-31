@@ -1,5 +1,13 @@
 # 更新日志
 
+## 1.2.0 — 2026-10-31
+
+- **云端备份（WebDAV）**：新增 `fish_cloud_backup` 工具、面板「上传到云端」按钮、`POST /feiyu-diary/cloud` 路由；把整份备份推到用户自己的网盘，并按 `webdavKeep` 清理旧份。
+- **配置**：新增 `webdavUrl` / `webdavUser` / `webdavPassword` / `webdavDir` / `webdavAuto` / `webdavKeep` / `webdavEnabled` 七个键；配置每次现读，设置页改完不用重启。
+- **修**：`encodePathUrl` 原先用 URL 的 pathname setter，会把 `%` 再转义一次（`E5` → `%25E5`），中文目录 MKCOL 必然 404；改手工拼路径，只编码一层。
+- **测试**：新增 `test/webdav.test.mjs` 9 项（本地假 WebDAV：MKCOL 幂等、中文名、PROPFIND 解析、按旧到新修剪、未配置报错）；合计 25 项。
+- **实现取舍**：上传在写盘落定之后 fire-and-forget，失败只警告、不影响聊天；自动上传 5 分钟节流；MKCOL 的 405/409/301 一律当"已存在"。
+
 ## 1.1.0 — 2026-10-31
 
 - **收编**：`feiyu-memory` 4.0.2 + `dsh-shallow-memory` + `dsh-soul-md` 0.10.3 合并为单包 `dsh-hierarchical-fishmemory`，旧包从 profile 摘除。

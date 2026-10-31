@@ -38,6 +38,21 @@
         #
         # 结构化抽取不需要思考。要它思考就填 low，一般没必要。
         reasoningEffort: off
+        # ── 云端备份（WebDAV）────────────────────────────────────────────
+        # 留空 = 不开。填上服务器地址即启用（坚果云 / Nextcloud / 群晖 都行）。
+        # 备份在**服务端**生成：人设卡与深层记忆只有插件读得到，浏览器拼不出来。
+        webdavUrl: ''
+        # 账号与密码。**明文存在本机配置里**，别用主密码，尽量用应用专用密码。
+        webdavUser: ''
+        webdavPassword: ''
+        # 云端目录，不存在会逐级 MKCOL 建。中文目录名没问题。
+        webdavDir: 属于我们的回忆
+        # 写完日记顺手推一份。**默认关**：大多数人只想手动传。
+        webdavAuto: false
+        # 云端保留份数（1–200），超了删最旧的。PROPFIND 被禁则不清理。
+        webdavKeep: 10
+        # 云端总开关（先关再填地址时用）
+        webdavEnabled: true
         maxTokens: 900
         # 第三方隐私泛化：人名/号码/地址这类"别人家的事"自动模糊掉，情绪保留。
         thirdPartyRedaction: true

@@ -153,6 +153,12 @@ dsh plugin --profile web add link:/abs/path/to/dsh-hierarchical-fishmemory
 | `model` | `''` | 固化用模型，留空跟随默认。建议用便宜档 |
 | `includePersona` | `false` | 本包已有人设卡入口，再开就是两份人格同时进 prompt |
 | `minSalience` | `0.15` | 日记重要度门槛；调高会连带扔掉寒暄和试错，那些恰恰是"熟悉感"的原料 |
+| `webdavUrl` | `''` | WebDAV 服务器地址（如 `https://dav.jianguoyun.com/dav/`）；留空＝不开云端备份 |
+| `webdavUser` / `webdavPassword` | `''` | 账号与密码（或应用专用密码）；**明文存在本机配置里** |
+| `webdavDir` | `属于我们的回忆` | 云端目录名，不存在会逐级 `MKCOL` 建 |
+| `webdavAuto` | `false` | 写完日记顺手推一份；有 5 分钟节流 |
+| `webdavKeep` | `10` | 云端保留多少份（1–200），超了删最旧的 |
+| `webdavEnabled` | `true` | 总开关 |
 
 ## 工具
 
@@ -165,6 +171,7 @@ dsh plugin --profile web add link:/abs/path/to/dsh-hierarchical-fishmemory
 | `shallow_note` · `shallow_touch` · `shallow_list` · `shallow_forget` · `shallow_sweep` | 浅层记忆；再提到就自动续期 |
 | `soul_read` · `soul_update` | 读 / 改当前人设卡 |
 | `fish_backup` · `fish_restore` | 整包备份与还原 |
+| `fish_cloud_backup` | 打一份新备份并上传到 WebDAV，顺带清理超额的旧份 |
 
 ## 面板
 
@@ -175,6 +182,7 @@ dsh plugin --profile web add link:/abs/path/to/dsh-hierarchical-fishmemory
 - **整包备份（.json）**：四本账 + 人设卡打成一个文件，带去另一台设备就能接着聊
 - **导入备份（.json）**：先预览「会覆盖几个文件、合并几张卡」，确认才写；写前自动存一份
   `-before-restore.json` 快照
+- **上传到云端**：把同一份备份推到 WebDAV，面板上能看到上次上传时间与失败原因
 
 ## 备份与还原
 
@@ -188,10 +196,31 @@ fish_restore({ file: "...", confirm: true })                      # 真写
 
 备份是**纯 UTF-8 JSON**，没有插件也能用记事本打开看。文件名里的时间是 UTC。
 
+### 云端备份（WebDAV）
+
+填好 `webdavUrl` / `webdavUser` / `webdavPassword` 就能用。坚果云、Nextcloud、
+群晖、iCloud（`dav` 入口）都行 —— 走标准 WebDAV，不依赖任何 SDK。
+
+```
+fish_cloud_backup({ note: "出差前" })
+→ 已传到云端：备份-20261031-120000-出差前.json（83 KB）
+   https://dav.example.com/dav/属于我们的回忆/备份-20261031-120000-出差前.json
+```
+
+面板里也有「上传到云端」按钮，并显示上次上传时间。`webdavAuto: true` 时，每次写完日记
+顺手推一份，**5 分钟内只推一次**（网盘会限流）。
+
+三个设计取舍：
+
+- **失败不影响聊天**：上传永远在写盘落定之后、fire-and-forget，失败只写警告。
+- **备份在服务端生成**：人设卡与深层记忆只有插件读得到，浏览器拼不出来。
+- **保留份数由 `webdavKeep` 管**：靠 `PROPFIND` 列目录删最旧的；网盘禁了 `PROPFIND`
+  就退化成"不清理"，不会让上传整体失败。
+
 ## 开发
 
 ```bash
-npm test                  # 16 项：手记解析、浅层 TTL、备份/还原
+npm test                  # 25 项：手记解析、浅层 TTL、备份/还原、WebDAV
 npm run build:client      # 改了 src/client/ 或 src/soul/client.js 后必须跑
 npm run check:client      # 校验 dist/client.js 与源一致
 ```

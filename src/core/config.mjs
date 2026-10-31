@@ -177,6 +177,59 @@ export const CONFIG_SPEC = [
     default: false,
     label: '开发期调试日志',
   },
+
+  // ── WebDAV 云端备份 ────────────────────────────────────────────────────
+  //
+  // 2026-10-31 加。用户要的是「人设日记手记也上传到云端」，本地那份 JSON
+  // 已经能带走，缺的是**不用他动手**的那一步。
+  //
+  // 密码就存在配置里（profile 的 cordis.patch.yml），明文。个人自用可以接受，
+  // 但不能假装它加密了 —— 面板上那句提示写了「以明文存在本机配置里」。
+  {
+    key: 'webdavUrl',
+    type: 'string',
+    default: '',
+    label: 'WebDAV 地址（留空 = 不上传；例：https://dav.example.com/remote.php/dav/files/me）',
+  },
+  {
+    key: 'webdavUser',
+    type: 'string',
+    default: '',
+    label: 'WebDAV 用户名',
+  },
+  {
+    key: 'webdavPassword',
+    type: 'string',
+    default: '',
+    label: 'WebDAV 密码 / 应用专用密码（明文存在本机配置里）',
+  },
+  {
+    key: 'webdavDir',
+    type: 'string',
+    default: '属于我们的回忆',
+    label: '云端目录（会自动逐级创建）',
+  },
+  {
+    key: 'webdavAuto',
+    type: 'boolean',
+    default: false,
+    label: '每次写完日记自动上传一次',
+  },
+  {
+    key: 'webdavKeep',
+    type: 'number',
+    default: 10,
+    min: 1,
+    max: 200,
+    step: 1,
+    label: '云端保留最近几份（PROPFIND 可用时才修剪）',
+  },
+  {
+    key: 'webdavEnabled',
+    type: 'boolean',
+    default: true,
+    label: 'WebDAV 总开关（关掉后连手动上传也停）',
+  },
 ];
 
 
