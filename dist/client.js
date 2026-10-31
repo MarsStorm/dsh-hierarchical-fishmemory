@@ -203,7 +203,25 @@ window.__ModuleLoader__.load({
       fieldAllowTemplates: "允许人设与记忆使用提示词变量",
       fieldMemoryInjectMaxChars: "注入字符上限",
       fieldMemoryMaxBytes: "记忆文件大小上限",
-      cardNamePlaceholder: "希希芙"
+      cardNamePlaceholder: "希希芙",
+      cloudTitle: "云端备份（WebDAV）",
+      cloudHint: "把四本账和人设卡推到自己的网盘；地址留空就不上传。密码明文存在本机配置里，建议用应用专用密码。",
+      cloudUrl: "服务器地址",
+      cloudUrlHint: "坚果云：https://dav.jianguoyun.com/dav/ · Nextcloud：https://你的域名/remote.php/dav/files/用户名/",
+      cloudUser: "用户名",
+      cloudPassword: "密码 / 应用专用密码",
+      cloudPasswordHint: "留空表示不改动已保存的密码。",
+      cloudDir: "云端目录（会自动逐级创建）",
+      cloudKeep: "云端保留份数",
+      cloudEnabled: "启用 WebDAV",
+      cloudAuto: "写完日记自动上传（5 分钟内只推一次）",
+      cloudSave: "保存云端设置",
+      cloudSaved: "云端设置已保存",
+      cloudLoaded: "已读取当前设置",
+      cloudLoadFail: "读不到云端设置：{detail}",
+      cloudSaveFail: "保存失败：{detail}",
+      cloudPasswordSet: "已保存密码",
+      cloudPasswordUnset: "还没设密码"
     };
     var en = {
       nav: "Persona Card",
@@ -266,7 +284,25 @@ window.__ModuleLoader__.load({
       fieldAllowTemplates: "Allow prompt variables in persona and memory",
       fieldMemoryInjectMaxChars: "Inject char cap",
       fieldMemoryMaxBytes: "Memory file size cap",
-      cardNamePlaceholder: "Xixifu"
+      cardNamePlaceholder: "Xixifu",
+      cloudTitle: "Cloud backup (WebDAV)",
+      cloudHint: "Push the four ledgers and persona cards to your own WebDAV storage. Leave the address empty to keep it local. The password is stored in plain text on this machine — prefer an app-specific password.",
+      cloudUrl: "Server URL",
+      cloudUrlHint: "Jianguoyun: https://dav.jianguoyun.com/dav/ · Nextcloud: https://your-host/remote.php/dav/files/USERNAME/",
+      cloudUser: "Username",
+      cloudPassword: "Password / app password",
+      cloudPasswordHint: "Leave empty to keep the saved password.",
+      cloudDir: "Remote folder (created level by level)",
+      cloudKeep: "Backups to keep",
+      cloudEnabled: "Enable WebDAV",
+      cloudAuto: "Upload after each diary write (at most once per 5 min)",
+      cloudSave: "Save cloud settings",
+      cloudSaved: "Cloud settings saved",
+      cloudLoaded: "Loaded current settings",
+      cloudLoadFail: "Could not read cloud settings: {detail}",
+      cloudSaveFail: "Save failed: {detail}",
+      cloudPasswordSet: "password saved",
+      cloudPasswordUnset: "no password yet"
     };
 
     var MEMORY_FIELDS = [
@@ -281,6 +317,157 @@ window.__ModuleLoader__.load({
       { key: "maxBytes", label: "fieldMemoryMaxBytes", type: "number", hint: "memoryMaxBytesHint" }
     ];
     var MEMORY_DEFAULTS = { inject: true, layered: false, recall: "off", indexMode: "all", compactionRecall: false, recallMaxTopics: 5, recallMaxChars: 1600, injectMaxChars: 8000, maxBytes: 1048576 };
+
+    // ── cloud backup (WebDAV) ───────────────────────────────────────────────
+    //
+    // 配置归 host 半边（entry id = 包名），所以这里只走 HTTP，不碰 soul 的
+    // settings 命名空间：两个入口的配置是两个文档，写错一个界面上就会"保存了
+    // 但没生效"。密码只上行不下行 —— 读回来只有 passwordSet 一个布尔。
+    var CLOUD_API = "/feiyu-diary/cloud";
+
+    function WebdavGroup(props) {
+      var t = props.t;
+      var [state, setState] = react.useState({ status: "loading" });
+      var [draft, setDraft] = react.useState(null);
+      var [busy, setBusy] = react.useState(false);
+      var [notice, setNotice] = react.useState(null);
+      var [error, setError] = react.useState(null);
+
+      react.useEffect(function () {
+        var alive = true;
+        fetch(CLOUD_API, { credentials: "same-origin" })
+          .then(function (r) { return r.json(); })
+          .then(function (body) {
+            if (!alive) return;
+            if (!body || body.ok !== true) throw new Error((body && body.error) || "unexpected response");
+            setState({ status: "ready", value: body });
+            setDraft({
+              url: body.url || "",
+              user: body.user || "",
+              password: "",
+              dir: body.dir || "",
+              keep: String(body.keep || 10),
+              enabled: body.enabled !== false,
+              auto: Boolean(body.auto)
+            });
+          })
+          .catch(function (e) {
+            if (alive) setState({ status: "error", detail: String((e && e.message) || e) });
+          });
+        return function () { alive = false; };
+      }, []);
+
+      if (state.status === "loading") return h("p", { className: "__sm_status" }, t("loading"));
+      if (state.status === "error") {
+        return h("div", { className: "__sm_group" },
+          h("p", { className: "__sm_label", style: { margin: 0 } }, t("cloudTitle")),
+          h("p", { className: "__sm_error", role: "alert" }, messageText(t, { key: "cloudLoadFail", detail: state.detail }))
+        );
+      }
+
+      var d = draft || {};
+      function field(key, v) {
+        setDraft(function (p) { return Object.assign({}, p, { [key]: v }); });
+        setNotice(null); setError(null);
+      }
+
+      function save() {
+        if (busy) return;
+        setBusy(true); setNotice(null); setError(null);
+        var payload = {
+          webdavUrl: d.url,
+          webdavUser: d.user,
+          webdavDir: d.dir,
+          webdavKeep: Number(d.keep),
+          webdavEnabled: Boolean(d.enabled),
+          webdavAuto: Boolean(d.auto)
+        };
+        if (d.password) payload.webdavPassword = d.password;
+        fetch(CLOUD_API + "/config", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (body) {
+            setBusy(false);
+            if (!body || body.ok !== true) {
+              setError({ key: "cloudSaveFail", detail: (body && body.error) || "unexpected response" });
+              return;
+            }
+            setState({ status: "ready", value: body });
+            field("password", "");
+            setNotice({ key: "cloudSaved" });
+          })
+          .catch(function (e) {
+            setBusy(false);
+            setError({ key: "cloudSaveFail", detail: String((e && e.message) || e) });
+          });
+      }
+
+      return h("div", { className: "__sm_group" },
+        h("p", { className: "__sm_label", style: { margin: 0 } }, t("cloudTitle")),
+        h("p", { className: "__sm_hint", style: { margin: "0 0 2px" } }, t("cloudHint")),
+
+        h("label", { className: "__sm_field" },
+          h("span", { className: "__sm_label" }, t("cloudUrl")),
+          h("span", { className: "__sm_hint" }, t("cloudUrlHint")),
+          h("input", {
+            className: "__sm_input", type: "url", value: d.url || "",
+            placeholder: "https://dav.jianguoyun.com/dav/",
+            onChange: function (e) { field("url", e.target.value); }
+          })
+        ),
+        h("label", { className: "__sm_field" },
+          h("span", { className: "__sm_label" }, t("cloudUser")),
+          h("input", {
+            className: "__sm_input", type: "text", value: d.user || "", autoComplete: "username",
+            onChange: function (e) { field("user", e.target.value); }
+          })
+        ),
+        h("label", { className: "__sm_field" },
+          h("span", { className: "__sm_label" }, t("cloudPassword")),
+          h("span", { className: "__sm_hint" }, value && value.passwordSet ? t("cloudPasswordSet") + " · " + t("cloudPasswordHint") : t("cloudPasswordUnset") + " · " + t("cloudPasswordHint")),
+          h("input", {
+            className: "__sm_input", type: "password", value: d.password || "", autoComplete: "new-password",
+            onChange: function (e) { field("password", e.target.value); }
+          })
+        ),
+        h("label", { className: "__sm_field" },
+          h("span", { className: "__sm_label" }, t("cloudDir")),
+          h("input", {
+            className: "__sm_input", type: "text", value: d.dir || "",
+            onChange: function (e) { field("dir", e.target.value); }
+          })
+        ),
+        h("label", { className: "__sm_field" },
+          h("span", { className: "__sm_label" }, t("cloudKeep")),
+          h("input", {
+            className: "__sm_input", type: "number", min: 1, max: 200, step: 1, value: d.keep || "10",
+            onChange: function (e) { field("keep", e.target.value); }
+          })
+        ),
+        h("label", { className: "__sm_field" },
+          h("span", { className: "__sm_row" },
+            h("input", { className: "__sm_check", type: "checkbox", checked: Boolean(d.enabled), onChange: function (e) { field("enabled", e.target.checked); } }),
+            h("span", { className: "__sm_label" }, t("cloudEnabled"))
+          )
+        ),
+        h("label", { className: "__sm_field" },
+          h("span", { className: "__sm_row" },
+            h("input", { className: "__sm_check", type: "checkbox", checked: Boolean(d.auto), onChange: function (e) { field("auto", e.target.checked); } }),
+            h("span", { className: "__sm_label" }, t("cloudAuto"))
+          )
+        ),
+        h("div", { className: "__sm_actions" },
+          h("button", { type: "button", className: "__sm_btn __sm_btnPrimary", onClick: save, disabled: busy }, t("cloudSave")),
+          busy ? h("span", { className: "__sm_status" }, t("saving")) : null,
+          notice ? h("span", { className: "__sm_status" }, messageText(t, notice)) : null,
+          error ? h("span", { className: "__sm_error", role: "alert" }, messageText(t, error)) : null
+        )
+      );
+    }
 
     function SoulSection(props) {
       useLocale(props.locale);
@@ -574,7 +761,10 @@ window.__ModuleLoader__.load({
             busy ? h("span", { className: "__sm_status" }, t("saving")) : null,
             error ? h("span", { className: "__sm_error" }, messageText(t, error)) : null
           )
-        )
+        ),
+
+        // ── cloud backup (WebDAV) ────────────────────────────────────────
+        h(WebdavGroup, { t: t })
       );
     }
 

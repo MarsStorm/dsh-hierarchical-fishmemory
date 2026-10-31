@@ -1,5 +1,10 @@
 # 更新日志
 
+## 1.2.1 — 2026-10-31
+
+- 设置页（设置 → 属于我们的回忆）新增「云端备份（WebDAV）」表单：服务器地址、账号、密码、云端目录、保留份数、总开关、自动上传。
+- 新增 `POST /feiyu-diary/cloud/config`：表单内容经 `settings.update` 写回 profile 的插件配置；密码只上行不下行，读接口只回 `passwordSet`。
+
 ## 1.2.0 — 2026-10-31
 
 - **云端备份（WebDAV）**：新增 `fish_cloud_backup` 工具、面板「上传到云端」按钮、`POST /feiyu-diary/cloud` 路由；把整份备份推到用户自己的网盘，并按 `webdavKeep` 清理旧份。

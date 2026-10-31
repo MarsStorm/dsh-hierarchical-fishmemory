@@ -1898,6 +1898,15 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
    */
   const PANEL_BASE = '/feiyu-diary';
 
+  /**
+   * host 入口在 profile patch 里的 entry id —— 就是包名。
+   *
+   * WebDAV 的配置归这一层（不是 soul 的 `soul-md` 命名空间）：它决定"往哪儿
+   * 传"，属于日记引擎这一侧。设置页要写它只能走 `settings.update(entryId, …)`，
+   * 直接改 yaml 会踩缩进与转义的坑。
+   */
+  const PLUGIN_ENTRY_ID = 'dsh-hierarchical-fishmemory';
+
   /** 面板接口统一响应头：不缓存、不嗅探类型 */
   function panelReply(res, status, body) {
     res.statusCode = status;
@@ -2291,6 +2300,9 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
                 auto: wd.auto,
                 keep: wd.keep,
                 username: wd.username,
+                url: wd.url,
+                user: wd.username,
+                passwordSet: wd.password !== '',
                 lastAt: cloudState.lastAt,
                 lastFile: cloudState.lastFile,
                 lastBytes: cloudState.lastBytes,
@@ -2313,9 +2325,67 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
             }
           },
         },
+        {
+          // 云端备份的配置写入：POST = 把表单内容写回 profile patch 里的本 entry。
+          //
+          // 为什么走服务端：配置是 cordis 的 settings 文档，写它要走
+          // `settings.update(entryId, …)`（带 revision 与重载）；前端直接改
+          // yaml 会踩缩进与转义，还会在下次装插件时被覆盖。
+          kind: 'exact',
+          path: `${PANEL_BASE}/cloud/config`,
+          handler: async (req, res) => {
+            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
+            if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
+            try {
+              const text = await readPanelTextBody(req, { limit: 64 * 1024 });
+              const patch = JSON.parse(text || '{}');
+              const next = { ...cfgNow() };
+              const putString = (key, max) => {
+                if (patch[key] === undefined) return;
+                next[key] = String(patch[key] ?? '').trim().slice(0, max);
+              };
+              putString('webdavUrl', 512);
+              putString('webdavUser', 256);
+              putString('webdavDir', 200);
+              if (patch.webdavPassword !== undefined) {
+                // 空串 = 显式清空；前端不传这个键就保留原密码。
+                next.webdavPassword = String(patch.webdavPassword ?? '').slice(0, 512);
+              }
+              if (patch.webdavAuto !== undefined) next.webdavAuto = Boolean(patch.webdavAuto);
+              if (patch.webdavEnabled !== undefined) next.webdavEnabled = Boolean(patch.webdavEnabled);
+              if (patch.webdavKeep !== undefined) {
+                const keep = Number(patch.webdavKeep);
+                next.webdavKeep = Number.isFinite(keep) ? Math.min(200, Math.max(1, Math.round(keep))) : 10;
+              }
+              const settings = ctx.get('settings');
+              if (!settings || typeof settings.update !== 'function') {
+                throw new Error('设置服务不可用，改不了配置：可以直接改 profile 的 cordis.patch.yml');
+              }
+              await settings.update(PLUGIN_ENTRY_ID, next);
+              const wd = normalizeWebdavConfig(cfgNow());
+              log(`云端配置已保存：${wd.configured ? '已填地址' : '地址为空'}${wd.enabled ? '' : '（总开关关着）'}`);
+              return panelReply(res, 200, {
+                ok: true,
+                enabled: wd.enabled,
+                configured: wd.configured,
+                url: wd.url,
+                user: wd.username,
+                passwordSet: wd.password !== '',
+                dir: wd.dir,
+                auto: wd.auto,
+                keep: wd.keep,
+              });
+            } catch (err) {
+              return panelReply(res, 400, {
+                ok: false,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          },
+        },
       ];
       const disposers = routes.map((r) => scope.webServer.register(r));
-      log(`面板接口已注册：${PANEL_BASE}/{state,forget,notes,export,backup,restore,cloud}`);
+      log(`面板接口已注册：${PANEL_BASE}/{state,forget,notes,export,backup,restore,cloud,cloud/config}`);
       return () => {
         for (const d of disposers.reverse()) {
           try {
