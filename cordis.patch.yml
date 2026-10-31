@@ -1,0 +1,74 @@
+# dsh-hierarchical-fishmemory —— 分层记忆：经过 / 浅层 / 手记 / 人格。
+# 2026-10-31 由 feiyu-memory + dsh-shallow-memory 收编；引擎沿用肥鱼 4.0.2。
+#
+# ⚠️ 这个文件必须是**顶层 YAML 数组**，否则 loader 会直接抛错。
+#
+# `id` 同时也是设置项的命名空间（v0.2 的界面会用到），改它等于换一个插件身份。
+# `name` 必须等于 package.json 的 name。
+#
+# 所有选项都可以在这里的 `config:` 里写。留空即用默认值。
+# 注意：**patch 的 config 是整体替换、不深合并**，所以只写你想改的键是安全的
+# （只有你自己这一行会读它；但如果你在 profile 里覆写这一行，就要把想保留的键写全）。
+
+- insert:
+    - id: dsh-hierarchical-fishmemory
+      name: 'dsh-hierarchical-fishmemory'
+      config:
+        # 档案目录。留空 = ~/.dsh/feiyu-diary
+        # 想放到别处（比如同步盘）就写绝对路径。
+        dataDir: ''
+        # 总开关
+        enabled: true
+        # 把人格内核一起注入（persona.md）。**默认关**（2026-10-31 改）：
+        # 本包自带的 `dsh-hierarchical-fishmemory/soul` 入口已经负责人设卡，
+        # 这里再开就是两份人格同时进 system prompt，互相打架。
+        includePersona: false
+        # 注入预算（token）。成本封顶，与用了多久无关。
+        # 2000 是给"最近的事"留的位置 —— 日记要占大头，读起来才像日记。
+        budgetTokens: 2000
+        # 固化用模型。留空 = 跟随你当前的默认模型。
+        # 强烈建议就用便宜档：这一步是结构化抽取，用贵的反而会自由发挥、把档案写花。
+        model: ''
+        # 固化的思考档位：off / low / high / max。
+        #
+        # ⚠️ 保持 off。它**故意不跟随你聊天时选的档位** —— 这不是疏漏，是修过的 bug：
+        # 跟随的时候，你在桌面端选了 high，后台每次写日记也在疯狂思考，
+        # 900 个输出 token 全烧在推理上，正文一个字都没产出。
+        # 症状是"收到 600 个 chunk / 0 字符"，请求正常、无报错、就是不记事。
+        #
+        # 结构化抽取不需要思考。要它思考就填 low，一般没必要。
+        reasoningEffort: off
+        maxTokens: 900
+        # 第三方隐私泛化：人名/号码/地址这类"别人家的事"自动模糊掉，情绪保留。
+        thirdPartyRedaction: true
+        # 金额低于这个值就不动（"3 块钱的包子"要留着，那是生活）
+        amountThreshold: 100
+        # 日记重要度门槛，低于此值丢弃。
+        # 调高 = 记性变挑；但注意**寒暄、试错、来回改口也会一起被扔掉** ——
+        # 那些看着没信息量，却是"熟悉感"的原料。默认 0.15 是刻意留低的。
+        minSalience: 0.15
+        # 相似度超过这个值就必定提起那件旧事
+        highSim: 0.5
+        # 「最近的事」最多列几条。这一栏**不走相似度，永远在场** ——
+        # 人不需要"想起来"昨天吃了什么，你知道。设 0 就关掉这一栏。
+        recentEntries: 8
+        # 「突然想起来」每轮最多几条（0 = 不主动提旧事）
+        maxShowPerTurn: 4
+        # 完全没匹配上时"走神"随机想起一条旧事的概率。这条纯粹为了像人。
+        wanderChance: 0.08
+        # 低峰时段（峰谷分时定价的谷时）。把 deferToOffPeak 打开后，
+        # 日记会攒到这段时间才写 —— 更便宜，而且本来就更像人（睡前整理）。
+        offPeakHours: '00:30-08:30'
+        deferToOffPeak: false
+        # 开发期调试日志。默认关，且**绝不落盘日记内容**。
+        debugLog: false
+
+    # ── 人格档案（原 dsh-soul-md，2026-10-31 收编）──────────────────────
+    # 同一个包、第二个 cordis 入口：这样 config 仍由 cordis 绑到 settings
+    # 命名空间 soul-md 上，人设卡的读写与热更新行为和独立安装时完全一致。
+    # 数据不动：$DSH_HOME/soul-md/memory/{core.md,topics/}。
+    - id: soul-md
+      name: 'dsh-hierarchical-fishmemory/soul'
+      config:
+        active: ""
+        watch: true

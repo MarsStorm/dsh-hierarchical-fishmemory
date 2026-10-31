@@ -1,0 +1,774 @@
+/**
+ * 固化层 —— 把一段对话变成一条日记 + 一份关系 patch。
+ *
+ * 这一层有三件事，缺一不可：
+ *
+ *  1. **一次调用出两个产物**。分成两次调用是纯浪费。
+ *  2. **受 schema 约束的合并**，不是"让模型改写人格"。
+ *     弱模型的通病是"记性太好、什么都记"，用**约束 + 后置质量门**治，
+ *     不用换更贵的模型治。
+ *  3. **失败一律降级**：解析不出来就丢弃并记日志，绝不把半成品写进档案。
+ */
+
+import { scrub } from './privacy.mjs';
+// 这里原本还 import 了 archive.mjs 的 ensurePersonaStructure / ANCHOR_END /
+// LEARNED_HEADING —— 它们只被 appendPersonaLearnings 用。那个函数删了，
+// 这三个名字跟着一起没了（留着就是死引用）。
+
+/**
+ * 系统提示词。这是整个项目里最需要反复打磨的一段文字。
+ *
+ * 写法上刻意做了四件事：
+ *  - 明确"只输出 JSON"，并给正例反例（弱模型对反例更敏感）
+ *  - 反例里专门放"流水账"和"复述隐私"这两种最常见的坏输出
+ *  - 允许并鼓励 `skip` —— 让模型有权利说"没什么值得记的"，这是稀疏性的来源
+ *  - 强调第一人称与"像人回头想事情"，避免第三人称报告体
+ *  - 2026-10-31 起只记经过、不记心情：情绪归 `feiyu-diary/鱼的日子.md`，那是另一份文件
+ */
+/**
+ * 两条文本有多像（字符二元组的 Jaccard）。
+ *
+ * 用来判断"模型这次写的是同一件事的新版本，还是另一件事"。
+ * 中文没有空格，所以按**字符二元组**切 —— 比按词切简单，也不需要分词器。
+ *
+ * @param {string} a
+ * @param {string} b
+ * @returns {number} 0~1
+ */
+export function similarity(a, b) {
+  const grams = (t) => {
+    const s = String(t ?? '').replace(/\s/g, '');
+    const set = new Set();
+    for (let i = 0; i + 1 < s.length; i++) set.add(s.slice(i, i + 2));
+    return set;
+  };
+  const A = grams(a);
+  const B = grams(b);
+  if (A.size === 0 || B.size === 0) return 0;
+  let inter = 0;
+  for (const g of A) if (B.has(g)) inter += 1;
+  return inter / (A.size + B.size - inter);
+}
+
+export const CONSOLIDATION_SYSTEM = `你是一个日记作者。你的工作是把一段对话写成日记。
+
+**你想记什么？** 想记就写，不想记就 skip。
+
+写之前记着一件事：**读到这条的是下一个我，她没经历今天。**
+她看不到这场对话，只有你写的这几行 —— 所以这几行得自己站得住。
+别用「我们聊的那件事」指代它，把「它是什么」直接写出来。
+
+**只写发生了什么**：他说了什么、我做了什么、结果落在哪。
+不写心情，不写内心戏，不写「我手停了」「那半秒里我在想怎么圆过去」这种旁白 ——
+那不是经过，是心情。心情不归这里记，这里只留事情本身。
+
+**他叫一样东西常有好几个叫法**（那部动画、续集、原来的名字）。
+多写一个，她就多一条路摸得到。
+
+还有一类话要避开：**写成了「我找过它」，而不是「它是什么」。**
+那种话用词最全，她一定搜得到 —— 搜到之后什么也没学到，
+还把那件真事压在底下。
+
+他做了让你不爽的事，就写他做了什么、说了什么原话。
+不写你的火气，也不替他总结情绪。
+
+一条 200 字以内，用「我」写。时间不用自己写 —— 渲染时会标，
+写了会变成"昨天：他今天……"。salience 是"以后值不值得想起来"，0~1。
+
+不记可识别细节 —— 真名、地址、电话、金额都不要。
+没把握的别写。"好像""大概"可以用，编造不行。
+
+只输出 JSON 本身。不要解释，不要 markdown 围栏，不要前后缀。
+
+{
+  "skip": boolean,
+  "diary": {
+    "text": string,
+    "kind": "failure" | "win" | "chat" | "disclosure" | "grievance",
+    "salience": number,
+    "resolved": boolean | null
+  },
+  "relationship": {
+    "nickname": string | null,
+    "familiarityDelta": number
+  },
+  "forget": string[]
+}
+
+familiarityDelta 范围 -0.05 ~ 0.05。resolved 只对 kind=failure 有意义，其余给 null。
+
+正例 ——
+输入：用户说"不对，我说的是 Python，你怎么上来就写 Java"
+输出：{"skip":false,"diary":{"text":"他打断我：「不对，我说的是 Python，你怎么上来就写 Java」。\n\n我动手之前没问过用什么语言，直接按 Java 写了。那版作废，重写。","kind":"failure","salience":0.75,"resolved":false},"relationship":{"nickname":null,"familiarityDelta":0.01},"forget":[]}
+
+（注意这个正例写的是事实：他哪句话、我做了什么、结果怎样。
+不是心情，也不是悟出的道理 —— **别补"所以我以后要……"。**）
+
+反例一（复述隐私，绝对不要）——
+{"skip":false,"diary":{"text":"他说他女朋友叫小美，住在城东，手机号是13800000000。","kind":"disclosure","salience":0.9,"resolved":null}}
+问题：复述可识别细节。应该写成"他最近为家里的事烦，具体的事没细说"。
+
+反例二（结论体，绝对不要）——
+{"skip":false,"diary":{"text":"他让我写个东西，我没问清语言就动手了。白忙一轮。是我的错，下次先问。","kind":"failure","salience":0.75,"resolved":false}}
+问题：全是结论，一个现场都没有。「下次先问」不是日记，是检讨书。正确写法见上面那个正例。
+
+反例三（关于它的元话，绝对不要）——
+{"skip":false,"diary":{"text":"赛博朋克那条档案里真有，可它没进我的注入。我找了一圈才翻出来。","kind":"chat","salience":0.8,"resolved":null}}
+问题：写的是「我找过它」，不是「它是什么」。这条每个词都沾着那件事的名字，
+所以以后一定搜得到 —— 搜到之后什么也没学到，还把真那条压在底下。`;
+
+/**
+ * 写 summary 用的提示词。
+ *
+ * —— 为什么单独一次请求，不跟着固化一起写 ——
+ *
+ * 两个东西要的正好相反：正文要具体、有现场、别堆词；summary 要密、别名全、别带修辞。
+ * 同一个请求里写两样，会互相串味 —— 而"为了检索塞词"的痕迹一旦进正文，
+ * 正好是这一整轮在拔的那种东西。
+ *
+ * —— 为什么 summary 必须是"人话"，不是关键词堆 ——
+ *
+ * 关键词堆只能靠字面重合来挑，那就退化成 BM25 了。
+ * summary 要装的是"意思" —— 因为挑它的是模型，不是倒排表。
+ *
+ * —— summary 永远不进鱼的上下文 ——
+ *
+ * 它只给"挑"那一步看。鱼看到的永远只有正文。
+ */
+export const SUMMARY_SYSTEM = `你在给日记写索引。不是摘要，是"以后靠什么词能摸到这一条"。
+
+给你几条日记正文，每条前面有 id。给每一条写一句总结，十几二十字。
+
+- 写他平时怎么叫那件东西。有别的叫法（简称、原作名、梗称）就都写上
+- 写事件里最硬的那几个词：人名、作品名、地名、数字、专有名词
+- 不带修辞，不写"我"，不写心情，不写"关于某某的讨论"
+- 正文里没有的东西别编
+
+只输出 JSON，不要解释，不要围栏：
+
+{"items":[{"id":"d_20261028_1","summary":"边缘行者2·赛博朋克续集·导演换五十岚海·他嫌洗白"}]}`;
+
+/**
+ * 组装「写 summary」的请求。
+ *
+ * @param {Array<{id: string, text: string}>} entries
+ * @returns {{system: string, user: string}}
+ */
+export function buildSummaryInput(entries = []) {
+  const lines = (Array.isArray(entries) ? entries : [])
+    .filter((e) => e && typeof e.id === 'string' && typeof e.text === 'string')
+    .map((e) => `${e.id}\n${e.text}`);
+  return { system: SUMMARY_SYSTEM, user: lines.join('\n\n') };
+}
+
+/**
+ * 解析 summary 的返回。坏的一条丢掉，不连坐。
+ *
+ * @param {string} raw
+ * @returns {Map<string, string>} id → summary
+ */
+export function parseSummaryResult(raw) {
+  const out = new Map();
+  const s = String(raw ?? '');
+  const a = s.indexOf('{');
+  const b = s.lastIndexOf('}');
+  if (a < 0 || b <= a) return out;
+  let parsed;
+  try {
+    parsed = JSON.parse(s.slice(a, b + 1));
+  } catch {
+    return out;
+  }
+  const items = Array.isArray(parsed?.items) ? parsed.items : [];
+  for (const it of items) {
+    if (!it || typeof it.id !== 'string' || typeof it.summary !== 'string') continue;
+    const id = it.id.trim();
+    const summary = it.summary.replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (id !== '' && summary !== '') out.set(id, summary);
+  }
+  return out;
+}
+
+/**
+ * 把写好的 summary 写进档案。纯函数，不改入参。
+ *
+ * @param {object} archive
+ * @param {Map<string, string>} map id → summary
+ * @param {number} [now]
+ */
+export function applySummaries(archive, map, now = Date.now()) {
+  if (!(map instanceof Map) || map.size === 0) return archive;
+  let changed = false;
+  const diary = archive.diary.map((e) => {
+    const s = map.get(e.id);
+    if (typeof s !== 'string' || s === '' || e.summary === s) return e;
+    changed = true;
+    return { ...e, summary: s };
+  });
+  if (!changed) return archive;
+  return { ...archive, diary, manifest: { ...archive.manifest, updated_at: now } };
+}
+
+/** 固化相关的默认参数（都是 🔧 可调） */export const DEFAULT_CONSOLIDATION = Object.freeze({
+  /**
+   * 低于这个 salience 的日记直接丢弃（后置质量门）。
+   *
+   * 从 0.3 降到 0.15 —— 原来那档把寒暄、试错、改口、没接住的梗全滤掉了，
+   * 而那些恰恰是"熟悉感"的原料。日记要像日记，不能只留"值得记载的大事"。
+   */
+  minSalience: 0.15,
+  /** tags 为空时是否丢弃。默认 false —— 丢掉真实记忆比缺个标签更糟 */
+  requireTags: false,
+  /** tags 为空时的兜底标签 */
+  fallbackTag: '琐事',
+  /** 单次会话最多产出多少条日记。门槛降了，上限得跟着抬，否则一开闸就记满 */
+  maxPerSession: 12,
+  /**
+   * 续写同一条日记时，正文最多多少字。到了这个数就不再续，另起一条。
+   *
+   * 为什么需要：固化每次看的是"最后 12 条消息"，越往后素材越全 —— 同一条日记
+   * 会被续着写长。实测一组 422 → 561 → 707 字，讲的全是同一件事，
+   * 在「最近的事」窗口里占了 3 个位。
+   *
+   * 续写让"一件事 = 一条日记"；上限让它不会长成一篇。
+   */
+  appendMaxChars: 400,
+  /**
+   * 续写兜底：新旧两条的相似度到这个数，就当成"同一件事的加长版"，
+   * 用新的替换旧的（而不是新建一条）。
+   *
+   * 为什么需要它：prompt 里明说"只写 diary.append"，模型实测不照做 ——
+   * 它照旧每次写完整的 text，于是同一件事被写成两条一模一样的。
+   * 不靠它听话，自己判。
+   */
+  appendSimilarity: 0.5,
+  /** 单个 trait 的 confidence 上限，避免某条偏好被无限强化 */
+  maxTraitConfidence: 20,
+  /** 每天衰减系数 */
+  decayRate: 0.9,
+  /**
+   * 衰减的**地板**。
+   *
+   * 原来没有底：salience = 0.9^天数 × 原值，一路乘到 1e-5。
+   * 中位 0.70 那条**大约 17 天**就跌破召回门槛（0.15），30 天 0.03，90 天 0.00008。
+   *
+   * 那不是"淡了"，那是"死了"——只是还占着磁盘。
+   *
+   * 人会淡，但不会归零：十年前的事偶尔还会自己冒出来。**那正是"完整的一生"要的部分。**
+   *
+   * 取 0.16 —— 略高于召回门槛（0.15），所以老条目**永远留在随机池里**，
+   * 只是抽中的概率越来越低（随机池按 salience 加权）。
+   *
+   * **它只管往事和印象，管不到账。** 账不参与衰减（见 decayArchive 里的说明）。
+   * 原来这里写着「必须低于翻篇线，否则旧账永远平不掉」—— 那是在给赖账打掩护。
+   */
+  salienceFloor: 0.16,
+  // ⚠️ **原来的 grievanceDecay / grievanceForgiveBelow 已删除，别加回来。**
+  //
+  // 它们做的事：账每天 ×0.97，掉到 0.2 以下就 resolved = true。
+  // 0.9 那笔 50 天平、0.6 那笔 37 天平 —— **没人管 = 算平了。**
+  //
+  // 那不是遗忘，是替用户赖账。现在账根本不衰减，
+  // resolved 只认「我做到了」或「他明说算了」，没有第三个来源。
+});
+
+/**
+ * 组装这一次固化的输入。
+ *
+ * @param {object} input
+ * @param {string} input.transcript        本轮的对话文本（带角色前缀）
+ * @param {string} [input.persona]         人格内核，给模型一点语气参考
+ * @param {object} [input.relationship]    当前关系状态，避免重复记账
+ * @param {string} [input.recentDiary]     最近几条日记，避免写重
+ * @returns {{system: string, user: string}}
+ */
+export function buildConsolidationInput(input = {}) {
+  const chunks = [];
+
+  // 2026-10-27：不再把「已经知道的偏好」喂回给固化 ——
+  // 那份「偏好」是 traits，而 traits 已经不再产出。喂回去只会让模型
+  // 继续沿用旧结论，等于把砍掉的东西从后门放回来。
+  // 这条可能还没写完 —— 上一轮刚记过同一件事
+  if (input.extend && typeof input.extend.text === 'string' && input.extend.text.trim() !== '') {
+    chunks.push(
+      [
+        '【这条已经记过了，可能是同一件事的延续】',
+        `「${input.extend.text.trim()}」`,
+        '',
+        '如果这一轮是上面那件事的后续或补充：**不要重写全文**，只把"多出来的那部分"' +
+          '写进 "diary.append"（一两句就够）。',
+        '如果这一轮是另一件事：照常写 "diary.text"，append 留空。',
+      ].join('\n'),
+    );
+  }
+
+  if (typeof input.recentDiary === 'string' && input.recentDiary.trim() !== '') {
+    chunks.push(`【最近记过的】（不要写重复的）\n${input.recentDiary.trim()}`);
+  }
+
+  chunks.push(`【这次的对话】\n${String(input.transcript ?? '').trim()}`);
+  chunks.push('只输出 JSON。');
+
+  return { system: CONSOLIDATION_SYSTEM, user: chunks.join('\n\n') };
+}
+
+/* ───────────────────────── 解析 ───────────────────────── */
+
+export class ConsolidationParseError extends Error {
+  /** @param {string} message */
+  constructor(message) {
+    super(message);
+    this.name = 'ConsolidationParseError';
+  }
+}
+
+/**
+ * 从模型输出里抠出 JSON。弱模型会包 markdown 围栏、加前后缀、漏尾括号 ——
+ * 这些都要能救回来。但**救不回来就报错**，不猜内容。
+ *
+ * @param {string} raw
+ * @returns {object}
+ */
+export function parseConsolidation(raw) {
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    throw new ConsolidationParseError('模型没有输出任何内容');
+  }
+
+  let text = raw.trim();
+
+  // 剥 markdown 围栏
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced) text = fenced[1].trim();
+
+  // 抓第一个平衡的 { ... }（跳过字符串内的花括号）
+  const start = text.indexOf('{');
+  if (start < 0) throw new ConsolidationParseError('输出里找不到 JSON 对象');
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let end = -1;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  if (end < 0) throw new ConsolidationParseError('JSON 花括号不闭合');
+
+  const slice = text.slice(start, end + 1);
+
+  let parsed;
+  try {
+    parsed = JSON.parse(slice);
+  } catch (err) {
+    // 最后救一次：去掉尾随逗号
+    try {
+      parsed = JSON.parse(slice.replace(/,\s*([}\]])/g, '$1'));
+    } catch {
+      throw new ConsolidationParseError(
+        `JSON 解析失败：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new ConsolidationParseError('JSON 顶层不是对象');
+  }
+  return parsed;
+}
+
+/* ───────────────────────── 合并 ───────────────────────── */
+
+const VALID_KINDS = new Set(['failure', 'win', 'chat', 'disclosure', 'grievance']);
+
+function clamp(v, lo, hi, fallback) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(hi, Math.max(lo, n));
+}
+
+/** 生成一个不容易撞的日记 id */
+export function makeDiaryId(now, existing) {
+  const d = new Date(now);
+  const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+  const base = `d_${ymd}_`;
+  const used = new Set((existing ?? []).map((e) => e.id));
+  for (let n = 1; n < 1000; n++) {
+    const id = `${base}${String(n).padStart(2, '0')}`;
+    if (!used.has(id)) return id;
+  }
+  return `${base}${Date.now().toString(36)}`;
+}
+
+/**
+ * 把一次固化的结果并进档案。
+ *
+ * 纯函数：返回新档案，不改入参。
+ *
+ * @param {object} archive
+ * @param {object} parsed            parseConsolidation 的结果
+ * @param {object} [context]
+ * @param {number} [context.now]
+ * @param {string} [context.session]
+ * @param {number} [context.sessionDiaryCount]  本次会话已记了几条
+ * @param {object} [options]
+ * @returns {{archive: object, notes: string[], accepted: boolean, reason?: string}}
+ */
+/**
+ * 把模型产出的每一条文本都过一遍 `scrub()`，然后再落盘。
+ *
+ * ⚠️ **这是隐私防线的最后一道，不是第一道。**
+ *
+ * 社区报告（2026-10-24）指出的漏洞：固化**输入**是洗过的（发给模型的
+ * transcript 干净），但**输出没洗** —— 模型会照抄输入里的敏感片段，
+ * 写进 `traits.evidence` / `diary.text`。
+ * 那次是一串 13 位号码躺进了 relationship.json，而我这条鱼压根不知道它进去了。
+ *
+ * **"我写不写"只是最前面一道闸。档案里大部分内容是模型生成的，
+ * 那条路原来一条闸都没有。**
+ */
+function scrubParsed(parsed, options) {
+  if (parsed === null || typeof parsed !== 'object') return parsed;
+  const opts = {
+    thirdParty: options.thirdPartyRedaction !== false,
+    amountThreshold: options.amountThreshold,
+  };
+  const wash = (v) => (typeof v === 'string' ? scrub(v, opts).text : v);
+
+  const out = { ...parsed };
+
+  if (out.diary !== null && typeof out.diary === 'object') {
+    const d = { ...out.diary };
+    if (typeof d.text === 'string') d.text = wash(d.text);
+    if (typeof d.append === 'string') d.append = wash(d.append);
+    if (Array.isArray(d.tags)) d.tags = d.tags.map(wash);
+    out.diary = d;
+  }
+
+  const rel = out.relationship;
+  if (rel !== null && typeof rel === 'object') {
+    const r = { ...rel };
+    if (Array.isArray(r.traits)) {
+      r.traits = r.traits.map((t) => {
+        if (t === null || typeof t !== 'object') return t;
+        return {
+          ...t,
+          ...(typeof t.value === 'string' ? { value: wash(t.value) } : {}),
+          ...(typeof t.evidence === 'string' ? { evidence: wash(t.evidence) } : {}),
+          ...(typeof t.key === 'string' ? { key: wash(t.key) } : {}),
+        };
+      });
+    }
+    if (typeof r.nickname === 'string') r.nickname = wash(r.nickname);
+    out.relationship = r;
+  }
+
+  if (Array.isArray(out.lexicon)) out.lexicon = out.lexicon.map(wash);
+
+  return out;
+}
+
+export function applyConsolidation(archive, rawParsed, context = {}, options = {}) {
+  // 先洗再落 —— 模型会照抄输入，输入干净不等于输出干净
+  const parsed = scrubParsed(rawParsed, options);
+  const opts = { ...DEFAULT_CONSOLIDATION, ...options };
+  const now = Number.isFinite(context.now) ? context.now : Date.now();
+  /** @type {string[]} */
+  const notes = [];
+
+  const next = {
+    ...archive,
+    manifest: { ...archive.manifest },
+    relationship: {
+      ...archive.relationship,
+      traits: [...(archive.relationship?.traits ?? [])],
+    },
+    lexicon: { items: [...(archive.lexicon?.items ?? [])] },
+    diary: [...(archive.diary ?? [])],
+  };
+
+  if (parsed?.skip === true) {
+    return { archive: next, notes: ['模型认为没什么值得记的'], accepted: false, reason: 'skip' };
+  }
+
+  // —— 日记 ——
+  const rawDiary = parsed?.diary;
+  let accepted = false;
+  let appended = false;
+  // "太像但不更长" —— 意图是丢弃，得让它真的别走到新建那条路
+  let skipNew = false;
+
+  // —— 续写：把补充内容拼到已有那条后面，不新建条目 ——
+  //
+  // 为什么不新建：固化每次看最后 12 条消息，越往后素材越全。同一段对话
+  // 被续着写三次，就是"同一件事的三张快照"（138 / 232 / 309 字），
+  // 读起来像拍了三张照片，而且占掉三个窗口位。
+  const appendText = typeof rawDiary?.append === 'string' ? rawDiary.append.trim() : '';
+  // extendId 从 context 来（"续哪条"是调用方知道的），也收 options 里给的（方便直接测）
+  const extendId = typeof context?.extendId === 'string' ? context.extendId : opts.extendId;
+  const appendMax = Number.isFinite(opts.appendMaxChars)
+    ? opts.appendMaxChars
+    : DEFAULT_CONSOLIDATION.appendMaxChars;
+  if (appendText !== '' && typeof extendId === 'string') {
+    const i = next.diary.findIndex((e) => e.id === extendId);
+    if (i < 0) {
+      notes.push('要续写的那条找不到了，丢弃');
+    } else if (next.diary[i].text.length + 1 + appendText.length > appendMax) {
+      notes.push(`续写后超过 ${appendMax} 字，丢弃`);
+    } else {
+      const sal = clamp(rawDiary.salience, 0, 1, 0.5);
+      const merged = next.diary[i].text + '\n' + appendText;
+      next.diary[i] = {
+        ...next.diary[i],
+        text: merged,
+        salience: Math.max(next.diary[i].salience ?? 0, sal),
+        updated_at: now,
+      };
+      notes.push('续写到已有那条');
+      accepted = true;
+      appended = true;
+    }
+  }
+
+  // ── 兜底：模型没按"只写 append"来，而是又给了完整的新版本 ──
+  //
+  // 这是实测出来的：prompt 里说得很清楚"不要重写全文、只写 diary.append"，
+  // 模型照旧每次都写完整的 text。于是同一件事被写成两条几乎一样的条目。
+  //
+  // 所以不靠它听话：自己判断"这是不是同一件事的加长版"。
+  // 判据用 char-bigram 的 Jaccard —— 同一件事换个说法会很高，"换了一件事"会很低。
+  if (!accepted && typeof extendId === 'string' && typeof rawDiary?.text === 'string') {
+    const i = next.diary.findIndex((e) => e.id === extendId);
+    const fresh = rawDiary.text.trim();
+    if (i >= 0 && fresh !== '') {
+      const sim = similarity(next.diary[i].text, fresh);
+      if (sim >= opts.appendSimilarity && fresh.length > next.diary[i].text.length) {
+        const sal = clamp(rawDiary.salience, 0, 1, 0.5);
+        next.diary[i] = {
+          ...next.diary[i],
+          text: fresh.slice(0, appendMax),
+          salience: Math.max(next.diary[i].salience ?? 0, sal),
+          updated_at: now,
+        };
+        notes.push(`模型写了完整版（相似度 ${sim.toFixed(2)}），按续写处理，替换原条目`);
+        accepted = true;
+        appended = true;
+      } else if (sim >= opts.appendSimilarity) {
+        notes.push(`和上一条太像（相似度 ${sim.toFixed(2)}）但不更长，丢弃`);
+        skipNew = true;
+      }
+    }
+  }
+
+  if (!accepted && !skipNew && rawDiary && typeof rawDiary.text === 'string' && rawDiary.text.trim() !== '') {
+    const salience = clamp(rawDiary.salience, 0, 1, 0.5);
+    const tags = Array.isArray(rawDiary.tags)
+      ? rawDiary.tags.filter((t) => typeof t === 'string' && t.trim() !== '').slice(0, 8)
+      : [];
+
+    const already = context.sessionDiaryCount ?? 0;
+    if (already >= opts.maxPerSession) {
+      notes.push(`本次会话已记满 ${opts.maxPerSession} 条，这条丢弃`);
+    } else if (salience < opts.minSalience) {
+      notes.push(`salience ${salience.toFixed(2)} 低于门槛，丢弃`);
+    } else if (tags.length === 0 && opts.requireTags) {
+      notes.push('没有标签，按配置丢弃');
+    } else {
+      const text = rawDiary.text.trim();
+      const kind = VALID_KINDS.has(rawDiary.kind) ? rawDiary.kind : 'chat';
+      next.diary.push({
+        id: makeDiaryId(now, next.diary),
+        date: new Date(now).toISOString().slice(0, 10),
+        text,
+        // summary 由**另一次请求**写（见 SUMMARY_SYSTEM），这里只占位。
+        // 为什么不在这里一起写：正文要"具体、不堆词"，summary 要"密、别名全"，
+        // 两个目标相反，同一个请求里会互相污染。
+        summary: typeof rawDiary.summary === 'string' ? rawDiary.summary.trim().slice(0, 80) : '',
+        // tags（给这条日记贴分类）**2026-10-27 停止产出** ——
+        // 「这事属于哪一类」是判断，不是记录。字段留着（老数据还在），只写空数组。
+        tags: [],
+        kind,
+        salience,
+        ...(kind === 'failure' ? { resolved: rawDiary.resolved === true } : {}),
+        ...(typeof context.session === 'string' ? { session: context.session } : {}),
+        // 轮次：下一轮靠它判断"这是不是同一件事还没写完"
+        ...(Number.isFinite(context.sessionTurn) ? { turn: context.sessionTurn } : {}),
+        created_at: now,
+      });
+      accepted = true;
+      next.manifest.session_count = next.manifest.session_count ?? 0;
+      // 200 字是**提示词里的要求**，这里不截断 —— 截断会把话切成断头句。
+      // 但要看得见它守不守：超了就记一笔，跑几天就知道这个要求管不管用。
+      if (text.length > 200) {
+        notes.push(`超过 200 字（${text.length} 字），没截，留给下一轮看`);
+      }
+    }
+  } else if (rawDiary !== undefined && rawDiary !== null) {
+    notes.push('日记字段不完整，丢弃');
+  }
+
+  // —— 关系：昵称 ——
+  const rel = parsed?.relationship;
+  if (rel && typeof rel.nickname === 'string' && rel.nickname.trim() !== '') {
+    next.relationship.nickname = rel.nickname.trim().slice(0, 24);
+  }
+
+  // —— 关系：熟悉度 ——
+  if (rel) {
+    const delta = clamp(rel.familiarityDelta, -0.05, 0.05, 0);
+    next.relationship.familiarity = Math.min(
+      1,
+      Math.max(0, (next.relationship.familiarity ?? 0) + delta),
+    );
+  }
+
+  // about 现在**只有 user**。
+  //
+  // 2026-10-27：`about="self"`（"我该怎么做"）整类下线 —— 注入里那一栏（「上一棒
+  // 留下的」）也一起删了。理由见 persona.mjs 里那段注释：那种东西是纪律不是印象，
+  // 它在「写下」那一刻起作用，读到的时候只是一张褪色的旧告示。
+  //
+  // 所以这里**主动丢掉模型送来的一切 self**，别指望提示词一直守规矩。
+  // ── traits（「他是什么样的人」）**2026-10-27 停止产出** ──
+  //
+  // 他说得对：**日记不存在意义，它本身就是记录。意义由上下文和 agent 来搞。**
+  //
+  // 「他是什么样的人」是插件替鱼下的结论 —— 从几段对话里提炼一个人格画像。
+  // 那是判断，不是记录。鱼自己读日记就能知道，不需要插件先嚼一遍喂给它。
+  //
+  // 档案里已有的 traits **一个字没删**，只是不再新增、不再渲染。
+  // 想看就翻面板或者直接读 relationship.json。
+
+  // ⚠️ **「还欠着他的」这个功能已于 2026-10-24 整体删除，别加回来。**
+  //
+  // 删的理由不是「不好用」，是**它长出来的东西几乎全是错的**：
+  //   · 口径太宽 —— 把「我今天做错的事」当成「我欠他的一件事」
+  //   · 只进不出 —— 没有销账的路，只有模型明说 resolved 才平，而它几乎不说
+  //   · 还会重复记账 —— 同一件事换个说法就成两笔
+  // 结果一天记了 21 笔、27 笔未平，占注入预算 10%，而且会让人在无关话题上
+  // 突然「想起」自己欠着什么，做出莫名其妙的反应。
+  //
+  // 如果哪天真要「承诺跨会话」，得先解决出口、口径、去重三件事 —— 不能换个名字再塞一遍。
+
+  // —— 词汇与梗：**2026-10-27 停止产出** ——
+  //
+  // 把几句常说的话提炼成"我的口头禅"摆进注入，那是替鱼下结论（意义），
+  // 不是记录。跟 traits 是同一刀。
+  //
+  // 早期版本还有个更糙的：拿对话里的高频关键词往词汇表里塞，端到端一跑就露馅 ——
+  // 它把 java / python / 文件 当成"我最近常说的"。
+  //
+  // 已有的词表**一个字没删**，不再新增、不再渲染。
+
+  // —— 遗忘 ——
+  if (Array.isArray(parsed?.forget) && parsed.forget.length > 0) {
+    const drop = new Set(parsed.forget.filter((x) => typeof x === 'string'));
+    const before = next.diary.length;
+    next.diary = next.diary.filter((e) => !drop.has(e.id));
+    const removed = before - next.diary.length;
+    if (removed > 0) notes.push(`按模型要求忘掉 ${removed} 条`);
+  }
+
+  next.manifest.updated_at = now;
+  next.manifest.diary_count = next.diary.length;
+
+  return { archive: next, notes, accepted, appended };
+}
+
+/* ───────────────── 这里原本有 appendPersonaLearnings，删了 ───────────────── */
+
+/**
+ * ⚠️ **别把它加回来。** 删掉是有意的决定，不是疏漏。
+ *
+ * 它做的事：把"学到的认知"追加到 `persona.md` 的 `## 我后来想明白的` 后面，
+ * 带锚点保护和每日限流。代码写完了、五项测试也有了 ——
+ * **但 `src/` 里从来没有任何地方调用过它。**
+ *
+ * 结果就是那位读者看到的样子：`## 我后来想明白的` 一直空着，
+ * 而它本该装的那种东西（`feiyu_note` 写出来的判断）被当成事件
+ * 塞在「最近的事」里，格式跟流水账一模一样。
+ *
+ * ── 为什么是删而不是接上 ──
+ *
+ * 接上它 = 同一类东西存两处（`persona.md` 一份、`kind:"note"` 一份）= **双真相源**。
+ * 这项目已经因为双写栽过两次（索引落盘、时间词），不栽第三次。
+ *
+ * 现在的分工，一头一份：
+ *
+ *   判断 → `kind: "note"` 的日记条目 → 渲染成「我自己想的」
+ *   事件 → 其他 kind          → 渲染成「最近的事」/「突然想起来」
+ *
+ * `persona.md` 里那个标题**保留**，但它现在是一个**人手写的地方**
+ * （跟 `手记.md` 一个性质），插件永不自动写它。
+ */
+/* ───────────────────────── 衰减 ───────────────────────── */
+
+/**
+ * 按天衰减。幂等：同一天重复调用不重复衰减。
+ *
+ * 遗忘是**降级**不是删除：salience 掉下去的条目不再进注入区，
+ * 但关键词索引还在，强相关时照样能命中 —— 这才是人的遗忘。
+ *
+ * @param {object} archive
+ * @param {object} [options]
+ * @param {number} [options.now]
+ * @param {number} [options.decayRate]
+ * @returns {{archive: object, days: number, changed: boolean}}
+ */
+export function decayArchive(archive, options = {}) {
+  const opts = { ...DEFAULT_CONSOLIDATION, ...options };
+  const now = Number.isFinite(options.now) ? options.now : Date.now();
+  const lastAt = Number(archive?.manifest?.last_decay_at) || Number(archive?.manifest?.updated_at) || now;
+  const days = Math.floor((now - lastAt) / 86400000);
+
+  if (days < 1) {
+    return { archive: { ...archive, manifest: { ...archive.manifest, last_decay_at: lastAt } }, days: 0, changed: false };
+  }
+
+  const memFactor = Math.pow(opts.decayRate, days);
+
+  const diary = (archive.diary ?? []).map((e) => ({
+    ...e,
+    salience: Math.max(opts.salienceFloor, (Number.isFinite(e.salience) ? e.salience : 0.5) * memFactor),
+  }));
+
+  const items = (archive.lexicon?.items ?? []).map((i) => ({
+    ...i,
+    salience: Math.max(opts.salienceFloor, (Number.isFinite(i.salience) ? i.salience : 0.5) * memFactor),
+  }));
+
+  const traits = (archive.relationship?.traits ?? []).map((t) => ({
+    ...t,
+    // 偏好衰减得更慢：性格比事件稳定
+    salience: Math.max(opts.salienceFloor, (Number.isFinite(t.salience) ? t.salience : 0.5) * Math.pow(0.97, days)),
+  }));
+
+  // 账（relationship.grievances）整个功能已删 —— 这里不再需要特殊处理。
+  // 删的理由见 applyConsolidation 里那段注释。
+
+  return {
+    archive: {
+      ...archive,
+      manifest: { ...archive.manifest, last_decay_at: now, updated_at: now },
+      diary,
+      lexicon: { items },
+      relationship: { ...archive.relationship, traits },
+    },
+    days,
+    changed: true,
+  };
+}
+

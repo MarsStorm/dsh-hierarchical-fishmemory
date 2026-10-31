@@ -1,0 +1,7 @@
+node_modules/
+*.log
+.DS_Store
+# 本地备份/测试产物，不要进仓库
+backups/
+.nyc_output/
+coverage/
