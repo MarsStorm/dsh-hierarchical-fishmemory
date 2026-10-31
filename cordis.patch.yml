@@ -71,10 +71,6 @@
         maxShowPerTurn: 4
         # 完全没匹配上时"走神"随机想起一条旧事的概率。这条纯粹为了像人。
         wanderChance: 0.08
-        # 低峰时段（峰谷分时定价的谷时）。把 deferToOffPeak 打开后，
-        # 日记会攒到这段时间才写 —— 更便宜，而且本来就更像人（睡前整理）。
-        offPeakHours: '00:30-08:30'
-        deferToOffPeak: false
         # 开发期调试日志。默认关，且**绝不落盘日记内容**。
         debugLog: false
 

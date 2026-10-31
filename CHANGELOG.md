@@ -1,5 +1,14 @@
 # 更新日志
 
+## 1.2.6 — 2026-10-31
+
+体检与清理，行为不变：
+
+- 删掉 4 个从未被调用的导出：`archive.mjs` 的 `MIGRATIONS`（迁移表，代码里只告警不查表）、`backup.mjs` 的 `hasBackupBuilder` / `listBackups`、`config.mjs` 的 `isOffPeak`。
+- 删掉**从未真正生效过**的 off-peak 配置：`offPeakHours`、`deferToOffPeak` 只被读进配置对象、没有任何消费者；同步删掉 patch 默认值、README 里那句「安排在低峰时段跑」。
+- 删掉 4 个未使用的界面文案键（`cloudLoaded` / `nav` / `noActive` / `wsName`），中英两份字典现在各 100 键、完全对齐。
+- 文件名常量收拢到 `src/core/files.mjs`（`日记.md` / `鱼的日子.md`），与既有的 `HANDNOTE_FILE` / `SHALLOW_FILE` 一起用，避免同一名字在多个文件里各写一遍。
+
 ## 1.2.5 — 2026-10-31
 
 - 新增「从云端恢复记忆备份」：设置页列出云端 `备份-*.json`，先预览「会覆盖 N 个文件、合并 M 张人设卡」，确认后才拉下来还原；还原前照旧自动存一份 `-before-restore.json`。

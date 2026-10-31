@@ -18,6 +18,9 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { DIARY_MD, FEELINGS_MD } from "./files.mjs";
+import { HANDNOTE_FILE } from "./handnote.mjs";
+import { SHALLOW_FILE } from "./shallow.mjs";
 
 /** 备份文件的格式标签，写在 `backup.meta.format` 里。 */
 export const BACKUP_FORMAT = "dsh-hierarchical-fishmemory/backup";
@@ -108,7 +111,7 @@ export function collectBackup(options = {}) {
     if (text !== null) diaryJsonl[name] = text;
   }
 
-  const shallowRaw = diaryDir ? readJsonDefault(join(diaryDir, "shallow.json")) : null;
+  const shallowRaw = diaryDir ? readJsonDefault(join(diaryDir, SHALLOW_FILE)) : null;
 
   return {
     meta: {
@@ -130,10 +133,10 @@ export function collectBackup(options = {}) {
     deep,
     diary: {
       jsonl: diaryJsonl,
-      rendered: diaryDir ? readText(join(diaryDir, "日记.md")) ?? "" : "",
+      rendered: diaryDir ? readText(join(diaryDir, DIARY_MD)) ?? "" : "",
     },
-    feelings: diaryDir ? readText(join(diaryDir, "鱼的日子.md")) ?? "" : "",
-    handnote: diaryDir ? readText(join(diaryDir, "手记.md")) ?? "" : "",
+    feelings: diaryDir ? readText(join(diaryDir, FEELINGS_MD)) ?? "" : "",
+    handnote: diaryDir ? readText(join(diaryDir, HANDNOTE_FILE)) ?? "" : "",
     shallow: shallowRaw ?? { version: 1, entries: [], expired: [] },
     archive: {
       relationship: diaryDir ? readJsonDefault(join(diaryDir, "relationship.json")) : null,
@@ -167,11 +170,6 @@ export function registerBackupBuilder(build) {
   const store = builders();
   store.add(build);
   return () => store.delete(build);
-}
-
-/** 有没有人挂过收集器（面板据此给 503 而不是傻等）。 */
-export function hasBackupBuilder() {
-  return builders().size > 0;
 }
 
 /** 跑第一个已注册的收集器；没有就抛。 */
@@ -275,13 +273,13 @@ export function planRestore(backup, { memoryLayout, diaryDir } = {}) {
     writes.push({ kind: "diary", file: join(diaryDir, "diary", name), content: String(text ?? "") });
   }
   if (typeof backup?.feelings === "string" && backup.feelings !== "") {
-    writes.push({ kind: "feelings", file: join(diaryDir, "鱼的日子.md"), content: backup.feelings });
+    writes.push({ kind: "feelings", file: join(diaryDir, FEELINGS_MD), content: backup.feelings });
   }
   if (typeof backup?.handnote === "string" && backup.handnote !== "") {
-    writes.push({ kind: "handnote", file: join(diaryDir, "手记.md"), content: backup.handnote });
+    writes.push({ kind: "handnote", file: join(diaryDir, HANDNOTE_FILE), content: backup.handnote });
   }
   if (backup?.shallow && Array.isArray(backup.shallow.entries)) {
-    writes.push({ kind: "shallow", file: join(diaryDir, "shallow.json"), content: `${JSON.stringify(backup.shallow, null, 2)}\n` });
+    writes.push({ kind: "shallow", file: join(diaryDir, SHALLOW_FILE), content: `${JSON.stringify(backup.shallow, null, 2)}\n` });
   }
   if (backup?.archive?.relationship) {
     writes.push({ kind: "relationship", file: join(diaryDir, "relationship.json"), content: `${JSON.stringify(backup.archive.relationship, null, 2)}\n` });
@@ -304,14 +302,3 @@ export async function applyRestore(plan, { writeFileImpl = writeFile, mkdirImpl 
   return written;
 }
 
-/** 备份目录里已有的文件（新的在前），给「该用哪个」做参考。 */
-export function listBackups(dir, { readdir = readdirSync } = {}) {
-  try {
-    return readdir(dir)
-      .filter((name) => name.startsWith("备份-") && name.endsWith(".json"))
-      .sort()
-      .reverse();
-  } catch {
-    return [];
-  }
-}

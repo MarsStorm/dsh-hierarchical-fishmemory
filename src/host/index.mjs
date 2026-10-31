@@ -44,6 +44,7 @@ import { scrub } from '../core/privacy.mjs';
 import { renderMemoryBlock } from '../core/persona.mjs';
 import { calendarDaysBetween, stripTimeWords, softWhen } from '../core/timeline.mjs';
 import { renderDiaryFile } from '../core/render-diary.mjs';
+import { DIARY_MD, FEELINGS_MD } from '../core/files.mjs';
 import { buildJudgeInput, parseVerdict, JUDGE_MAX_TOKENS } from '../core/judge.mjs';
 import { selectHandNotes, HANDNOTE_FILE, HANDNOTE_TEMPLATE } from '../core/handnote.mjs';
 import {
@@ -771,7 +772,7 @@ export function apply(ctx, rawConfig) {
    */
   async function writeReadableDiary(snapshot) {
     try {
-      const file = path.join(archiveDirectory, '日记.md');
+      const file = path.join(archiveDirectory, DIARY_MD);
       await writeFileAtomic(file, renderDiaryFile(snapshot, { now: Date.now() }));
     } catch (err) {
       warn(`写人读版日记失败（不影响记忆本身）：${err instanceof Error ? err.message : String(err)}`);
@@ -2100,7 +2101,7 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
   const LOCAL_NOTES = [
     {
       key: 'day',
-      file: '鱼的日子.md',
+      file: FEELINGS_MD,
       label: '情感日记',
       hint: '我自己的感受 · 不设上限 · 插件不碰',
     },

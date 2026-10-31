@@ -160,18 +160,6 @@ export const CONFIG_SPEC = [
     label: '续写窗口（同会话里隔几轮内写到同一件事就并进上一条，0 = 关掉）',
   },
   {
-    key: 'offPeakHours',
-    type: 'string',
-    default: '00:30-08:30',
-    label: '低峰时段（HH:MM-HH:MM）',
-  },
-  {
-    key: 'deferToOffPeak',
-    type: 'boolean',
-    default: false,
-    label: '把固化推迟到低峰时段',
-  },
-  {
     key: 'debugLog',
     type: 'boolean',
     default: false,
@@ -251,7 +239,7 @@ export const CONFIG_SPEC = [
  *                       表现像失忆，而且全程无报错。
  *       model         → 不存在的模型名，**固化那次调用根本发不出去**，
  *                       只剩 feiyu_note 能写进去。
- *       reasoningEffort / offPeakHours → 同样失效。
+ *       reasoningEffort / dataDir → 同样失效。
  *   · **number / boolean** 静默回落默认值（Number(ref) 是 NaN、布尔比不上），
  *     用户改不动 budgetTokens / minSalience，也没有任何提示。
  *
@@ -261,7 +249,7 @@ export const CONFIG_SPEC = [
  *
  * 报这个 bug 的朋友把机制定位到了 cosmokit 的那一行，还贴了只读探针的输出。
  * 我原来那个"只认绝对路径"的补丁只是治标：它拦住了 [object Object] 当路径，
- * 但 model / offPeakHours 照样坏，数字布尔照样静默回落。
+ * 但 model / reasoningEffort 照样坏，数字布尔照样静默回落。
  */
 const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write');
 
@@ -344,24 +332,4 @@ export function buildSchema(z) {
   return z.object(shape);
 }
 
-/**
- * 判断"现在是不是低峰时段"。配置成 `HH:MM-HH:MM`；跨午夜也支持。
- *
- * @param {string} spec
- * @param {Date} [now]
- * @returns {boolean} 配置不合法时返回 true（即"随时可以跑"，不让坏配置卡死功能）
- */
-export function isOffPeak(spec, now = new Date()) {
-  if (typeof spec !== 'string') return true;
-  const m = spec.match(/^\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*$/);
-  if (m === null) return true;
-
-  const [, sh, sm, eh, em] = m;
-  const start = Number(sh) * 60 + Number(sm);
-  const end = Number(eh) * 60 + Number(em);
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return true;
-
-  const cur = now.getHours() * 60 + now.getMinutes();
-  return start <= end ? cur >= start && cur < end : cur >= start || cur < end;
-}
 

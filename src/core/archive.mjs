@@ -397,21 +397,6 @@ export function unpackArchive(bytes, options = {}) {
   return { archive, warnings, ok: true };
 }
 
-/* ───────────────────────── 迁移 ───────────────────────── */
-
-/**
- * 迁移表：键是**目标版本**，值是把上一版升到该版的函数。
- *
- * 目前只有 v1，所以是空的。以后加 v2 就在这里写 `2: (archive) => {...}`，
- * 并**同时**补一个测试。迁移必须是纯函数、幂等。
- *
- * @type {Record<number, (archive: any) => any>}
- */
-export const MIGRATIONS = {
-  // 2: (archive) => ({ ...archive, manifest: { ...archive.manifest, schema_version: 2 } }),
-};
-
-
 /**
  * 两个档案的合并策略：把 incoming 的条目并进 base，按 id 去重，base 优先。
  *

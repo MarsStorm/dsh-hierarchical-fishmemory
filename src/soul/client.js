@@ -139,7 +139,6 @@ window.__ModuleLoader__.load({
       });
     }
     var zh = {
-      nav: "人设卡",
       settingsNav: "属于我们的回忆",
       confirmDelete: '删除人设卡“{name}”？',
       invalidCardName: "请输入人设卡名称",
@@ -158,7 +157,6 @@ window.__ModuleLoader__.load({
       setDefault: "设为默认",
       defaultBadge: "默认",
       emptyCards: "还没有人设卡——先在上面保存一张吧。",
-      noActive: "（未设置默认卡，人设未启用）",
       activeHint: "没有会话级选择时使用的人设卡；选「不启用」则默认关闭人设。",
       noneOption: "不启用",
       autoOption: "自动（跟随默认卡）",
@@ -192,7 +190,6 @@ window.__ModuleLoader__.load({
       wsHint: "给每个工作区指定人设卡：该工作区的会话默认使用这张卡（会话级切换仍然优先）。",
       wsFollow: "跟随默认卡",
       wsEmpty: "还没有工作区记录——在会话页新建/选择一个工作区后，这里会出现它的设置。",
-      wsName: "工作区",
       fieldMemoryInject: "注入为 soul:memory 提示词段落",
       fieldMemoryLayered: "启用分层记忆（core + topics 索引）",
       fieldSkipSubagents: "子代理会话跳过人设与记忆注入",
@@ -238,14 +235,12 @@ window.__ModuleLoader__.load({
       cloudMemSame: "和现在一样，没东西要改。",
       cloudMemRestored: "已从云端恢复：写 {n} 个文件。日记和手记要重启后才重新加载。",
       cloudMemFail: "云端恢复失败：{detail}",
-      cloudLoaded: "已读取当前设置",
       cloudLoadFail: "读不到云端设置：{detail}",
       cloudSaveFail: "保存失败：{detail}",
       cloudPasswordSet: "已保存密码",
       cloudPasswordUnset: "还没设密码"
     };
     var en = {
-      nav: "Persona Card",
       settingsNav: "Memories That Belong to Us",
       confirmDelete: 'Delete persona card "{name}"?',
       invalidCardName: "Enter a persona card name",
@@ -264,7 +259,6 @@ window.__ModuleLoader__.load({
       setDefault: "Set default",
       defaultBadge: "default",
       emptyCards: "No persona cards yet — save one above first.",
-      noActive: "(no default card; persona disabled)",
       activeHint: "The card used when a session has no explicit choice; pick \"disabled\" to turn the persona off by default.",
       noneOption: "Disabled",
       autoOption: "Auto (follow default)",
@@ -298,7 +292,6 @@ window.__ModuleLoader__.load({
       wsHint: "Assign a persona card per workspace: sessions of that workspace use it by default (session-level switching still wins).",
       wsFollow: "Follow default",
       wsEmpty: "No workspace records yet — create/select a workspace in the session page and its setting appears here.",
-      wsName: "Workspace",
       fieldMemoryInject: "Inject as soul:memory prompt section",
       fieldMemoryLayered: "Enable layered memory (core + topic index)",
       fieldSkipSubagents: "Skip persona + memory in subagent sessions",
@@ -344,7 +337,6 @@ window.__ModuleLoader__.load({
       cloudMemSame: "Identical to what you have — nothing to change.",
       cloudMemRestored: "Restored {n} files from the cloud. Diaries reload after a restart.",
       cloudMemFail: "Cloud restore failed: {detail}",
-      cloudLoaded: "Loaded current settings",
       cloudLoadFail: "Could not read cloud settings: {detail}",
       cloudSaveFail: "Save failed: {detail}",
       cloudPasswordSet: "password saved",
