@@ -228,6 +228,16 @@ window.__ModuleLoader__.load({
       cloudCfgCancel: "算了",
       cloudCfgApplied: "已恢复 {n} 项配置",
       cloudCfgFail: "配置操作失败：{detail}",
+      cloudMemHint: "从云端找回整包记忆——日记、情感日记、人格手记、深层记忆、人设卡都在一个 JSON 里。",
+      cloudMemList: "看看云端有哪些记忆备份",
+      cloudMemEmpty: "云端还没有记忆备份。先点上面的「上传到云端」。",
+      cloudMemPreview: "看看会改什么",
+      cloudMemConfirm: "确认恢复",
+      cloudMemCancel: "算了",
+      cloudMemPlan: "会覆盖 {n} 个文件、合并 {c} 张人设卡；动手之前插件会先存一份「还原前」快照。",
+      cloudMemSame: "和现在一样，没东西要改。",
+      cloudMemRestored: "已从云端恢复：写 {n} 个文件。日记和手记要重启后才重新加载。",
+      cloudMemFail: "云端恢复失败：{detail}",
       cloudLoaded: "已读取当前设置",
       cloudLoadFail: "读不到云端设置：{detail}",
       cloudSaveFail: "保存失败：{detail}",
@@ -324,6 +334,16 @@ window.__ModuleLoader__.load({
       cloudCfgCancel: "Cancel",
       cloudCfgApplied: "Restored {n} settings",
       cloudCfgFail: "Config operation failed: {detail}",
+      cloudMemHint: "Pull a whole memory backup back from the cloud — diaries, feelings, handnotes, deep memory and persona cards all live in one JSON.",
+      cloudMemList: "List cloud memory backups",
+      cloudMemEmpty: "No memory backup in the cloud yet. Use \"Upload to cloud\" first.",
+      cloudMemPreview: "Preview",
+      cloudMemConfirm: "Restore",
+      cloudMemCancel: "Cancel",
+      cloudMemPlan: "This overwrites {n} files and merges {c} persona card(s); a pre-restore snapshot is taken first.",
+      cloudMemSame: "Identical to what you have — nothing to change.",
+      cloudMemRestored: "Restored {n} files from the cloud. Diaries reload after a restart.",
+      cloudMemFail: "Cloud restore failed: {detail}",
       cloudLoaded: "Loaded current settings",
       cloudLoadFail: "Could not read cloud settings: {detail}",
       cloudSaveFail: "Save failed: {detail}",
@@ -390,6 +410,11 @@ window.__ModuleLoader__.load({
       var [cfgError, setCfgError] = react.useState(null);
       var [cfgFiles, setCfgFiles] = react.useState(null);
       var [cfgPlan, setCfgPlan] = react.useState(null);
+      var [memBusy, setMemBusy] = react.useState(false);
+      var [memNotice, setMemNotice] = react.useState(null);
+      var [memError, setMemError] = react.useState(null);
+      var [memFiles, setMemFiles] = react.useState(null);
+      var [memPlan, setMemPlan] = react.useState(null);
 
       react.useEffect(function () {
         var alive = true;
@@ -550,6 +575,65 @@ window.__ModuleLoader__.load({
           });
       }
 
+      function listMemBackups() {
+        if (memBusy) return;
+        setMemBusy(true); setMemNotice(null); setMemError(null); setMemPlan(null);
+        fetch(CLOUD_API + "/backups", { credentials: "same-origin" })
+          .then(function (r) { return r.json(); })
+          .then(function (body) {
+            setMemBusy(false);
+            if (!body || body.ok !== true) {
+              setMemError(t("cloudMemFail", { detail: (body && body.error) || "unexpected response" }));
+              return;
+            }
+            if (body.configured === false) {
+              setMemError(t("cloudMemFail", { detail: t("cloudCfgHint") }));
+              return;
+            }
+            setMemFiles(Array.isArray(body.files) ? body.files : []);
+          })
+          .catch(function (e) {
+            setMemBusy(false);
+            setMemError(t("cloudMemFail", { detail: String((e && e.message) || e) }));
+          });
+      }
+
+      function restoreMem(name, confirm) {
+        if (memBusy) return;
+        setMemBusy(true); setMemNotice(null); setMemError(null);
+        if (confirm) setMemPlan(null);
+        fetch(CLOUD_API + "/restore", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ file: name, confirm: Boolean(confirm) })
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (body) {
+            setMemBusy(false);
+            if (!body || body.ok !== true) {
+              setMemError(t("cloudMemFail", { detail: (body && body.error) || "unexpected response" }));
+              return;
+            }
+            if (body.dryRun === true) {
+              var writes = Number(body.writes || 0);
+              var cards = Number(body.cards || 0);
+              setMemPlan({
+                file: name,
+                text: writes === 0 && cards === 0
+                  ? name + "：" + t("cloudMemSame")
+                  : name + "：" + t("cloudMemPlan", { n: writes, c: cards })
+              });
+              return;
+            }
+            setMemNotice(t("cloudMemRestored", { n: Number(body.writes || 0) }));
+          })
+          .catch(function (e) {
+            setMemBusy(false);
+            setMemError(t("cloudMemFail", { detail: String((e && e.message) || e) }));
+          });
+      }
+
       function save() {
         if (busy) return;
         setBusy(true); setNotice(null); setError(null);
@@ -648,6 +732,33 @@ window.__ModuleLoader__.load({
         ),
         testResult
           ? h("p", { className: testResult.error ? "__sm_error" : "__sm_status", role: testResult.error ? "alert" : undefined }, testResult.text)
+          : null,
+
+        h("p", { className: "__sm_hint", style: { margin: "8px 0 2px" } }, t("cloudMemHint")),
+        h("div", { className: "__sm_actions" },
+          h("button", { type: "button", className: "__sm_btn __sm_btnPrimary", onClick: listMemBackups, disabled: memBusy }, t("cloudMemList")),
+          memBusy ? h("span", { className: "__sm_status" }, t("saving")) : null,
+          memNotice ? h("span", { className: "__sm_status" }, memNotice) : null,
+          memError ? h("span", { className: "__sm_error", role: "alert" }, memError) : null
+        ),
+        memFiles
+          ? (memFiles.length === 0
+            ? h("p", { className: "__sm_hint" }, t("cloudMemEmpty"))
+            : h("div", { className: "__sm_group" }, memFiles.slice().reverse().map(function (name) {
+              var plan = memPlan && memPlan.file === name ? memPlan : null;
+              return h("div", { key: name },
+                h("div", { className: "__sm_row" },
+                  h("span", { className: "__sm_hint", style: { flex: "1 1 auto", wordBreak: "break-all" } }, name),
+                  plan
+                    ? h("span", {},
+                      h("button", { type: "button", className: "__sm_btn __sm_btnPrimary", onClick: function () { restoreMem(name, true); } }, t("cloudMemConfirm")),
+                      h("button", { type: "button", className: "__sm_btn", onClick: function () { setMemPlan(null); } }, t("cloudMemCancel"))
+                    )
+                    : h("button", { type: "button", className: "__sm_btn", onClick: function () { restoreMem(name, false); }, disabled: memBusy }, t("cloudMemPreview"))
+                ),
+                plan ? h("p", { className: "__sm_hint", style: { margin: "0 0 4px" } }, plan.text) : null
+              );
+            })))
           : null,
 
         h("p", { className: "__sm_hint", style: { margin: "8px 0 2px" } }, t("cloudCfgHint")),

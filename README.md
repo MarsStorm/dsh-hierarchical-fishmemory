@@ -183,6 +183,8 @@ dsh plugin --profile web add link:/abs/path/to/dsh-hierarchical-fishmemory
 - **导入备份（.json）**：先预览「会覆盖几个文件、合并几张卡」，确认才写；写前自动存一份
   `-before-restore.json` 快照
 - **上传到云端**：把同一份备份推到 WebDAV，面板上能看到上次上传时间与失败原因
+- **从云端恢复**：列出网盘上的 `备份-*.json`，先预览「会覆盖几个文件、合并几张卡」，
+  确认后才下载并还原（同样先存 `-before-restore.json`）
 
 ## 备份与还原
 
@@ -209,6 +211,10 @@ fish_cloud_backup({ note: "出差前" })
 
 面板里也有「上传到云端」按钮，并显示上次上传时间。`webdavAuto: true` 时，每次写完日记
 顺手推一份，**5 分钟内只推一次**（网盘会限流）。
+
+恢复走另一条路：面板「看看云端有哪些记忆备份」→ 选一份 → 预览 → 确认。接口是
+`GET /feiyu-diary/cloud/backups` 与 `POST /feiyu-diary/cloud/restore`（只认 `备份-` 前缀；
+不带 `confirm` 就只报告不动手）。
 
 三个设计取舍：
 

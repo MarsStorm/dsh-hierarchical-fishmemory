@@ -1,5 +1,11 @@
 # 更新日志
 
+## 1.2.5 — 2026-10-31
+
+- 新增「从云端恢复记忆备份」：设置页列出云端 `备份-*.json`，先预览「会覆盖 N 个文件、合并 M 张人设卡」，确认后才拉下来还原；还原前照旧自动存一份 `-before-restore.json`。
+- 服务端新增 `GET /feiyu-diary/cloud/backups`（列云端备份）与 `POST /feiyu-diary/cloud/restore`（{file, confirm}，只认 `备份-` 前缀）。
+- 设置页里原来那两个「配置」按钮加了说明：它们只管插件设置，四本账走整包备份。
+
 ## 1.2.4 — 2026-10-31
 
 - 手动把**配置**备份到云端 / 从云端恢复配置（`POST|GET /feiyu-diary/cloud/config-backup`、`POST /feiyu-diary/cloud/config-restore`）。
@@ -42,6 +48,12 @@
 - **清理**：删掉 11 个死导出（约 125 行）、4 个未使用 import；`includePersona` 默认改 `false`（避免与 soul 入口双份人格）；`package.json` 脚本改为 `build:client` / `check:client`；新增 `node --test` 用例。
 
 ﻿# 更新日志
+
+## 1.2.5 — 2026-10-31
+
+- 新增「从云端恢复记忆备份」：设置页列出云端 `备份-*.json`，先预览「会覆盖 N 个文件、合并 M 张人设卡」，确认后才拉下来还原；还原前照旧自动存一份 `-before-restore.json`。
+- 服务端新增 `GET /feiyu-diary/cloud/backups`（列云端备份）与 `POST /feiyu-diary/cloud/restore`（{file, confirm}，只认 `备份-` 前缀）。
+- 设置页里原来那两个「配置」按钮加了说明：它们只管插件设置，四本账走整包备份。
 
 ## v4.0.2 — 2026-10-29
 

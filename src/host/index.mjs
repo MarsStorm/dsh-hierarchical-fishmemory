@@ -2490,6 +2490,56 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
             },
           },
         {
+          // 云端记忆备份：GET = 列云端 备份-*.json；POST = 从云端拉一份回来还原。
+          //
+          // 和本地「导入备份」只差上游：这里从 WebDAV 下载整包 JSON，之后的
+          // dry-run / confirm / 还原前快照全都走同一条 restoreFromText，不另开一套。
+          kind: 'exact',
+          path: `${PANEL_BASE}/cloud/backups`,
+          handler: async (req, res) => {
+            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
+            if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: 'method' });
+            const wd = normalizeWebdavConfig(cfgNow());
+            if (!wd.configured) return panelReply(res, 200, { ok: true, configured: false, files: [] });
+            try {
+              const files = await listRemoteBackups(wd);
+              return panelReply(res, 200, { ok: true, configured: true, dir: wd.dir, files });
+            } catch (err) {
+              return panelReply(res, 400, { ok: false, error: explainWebdavError(err) });
+            }
+          },
+        },
+        {
+          kind: 'exact',
+          path: `${PANEL_BASE}/cloud/restore`,
+          handler: async (req, res) => {
+            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
+            if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
+            const confirm = /[?&]confirm=(?:1|true|yes)\b/i.test(String(req.url ?? ''));
+            try {
+              const text = await readPanelTextBody(req, { limit: 256 * 1024 });
+              const body = JSON.parse(text || '{}');
+              const fileName = String(body.file ?? '').split(/[\\/]/).pop() ?? '';
+              if (!/^备份-.+\.json$/.test(fileName)) throw new Error('请选一个 `备份-…json` 文件');
+              const wd = normalizeWebdavConfig(cfgNow());
+              if (!wd.configured) throw new Error('WebDAV 还没配置，恢复不了');
+              const got = await downloadRemoteText(wd, fileName);
+              await loadPromise;
+              await drainPromise;
+              await writeChain;
+              const restore = ctx.get('fishMemory')?.restoreBackup;
+              const input = { text: got.text, confirm, sourceLabel: `云端 ${fileName}` };
+              const result = typeof restore === 'function'
+                ? await restore(input)
+                : await restoreViaRegistered(input);
+              log(`云端备份${confirm ? '已还原' : '（dry-run）'}：${fileName} · ${result.writes} 个文件、${result.cards} 张人设卡`);
+              return panelReply(res, 200, { ok: true, file: fileName, ...result });
+            } catch (err) {
+              return panelReply(res, 400, { ok: false, error: explainWebdavError(err) });
+            }
+          },
+        },
+        {
           // 云端备份的配置写入：POST = 把表单内容写回 profile patch 里的本 entry。
           //
           // 为什么走服务端：配置是 cordis 的 settings 文档，写它要走
@@ -2549,7 +2599,7 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
         },
       ];
       const disposers = routes.map((r) => scope.webServer.register(r));
-      log(`面板接口已注册：${PANEL_BASE}/{state,forget,notes,export,backup,restore,cloud,cloud/config,cloud/test,cloud/config-backup,cloud/config-restore}`);
+      log(`面板接口已注册：${PANEL_BASE}/{state,forget,notes,export,backup,restore,cloud,cloud/config,cloud/test,cloud/config-backup,cloud/config-restore,cloud/backups,cloud/restore}`);
       return () => {
         for (const d of disposers.reverse()) {
           try {
