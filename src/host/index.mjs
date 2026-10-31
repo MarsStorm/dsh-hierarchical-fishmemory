@@ -60,7 +60,7 @@ import {
 import { resolveConfig, buildSchema, CONFIG_SPEC } from '../core/config.mjs';
 import { registerShallow, SHALLOW_FILE } from '../core/shallow.mjs';
 import { summarizeBackup, writeBackupFile, backupFileName, buildRegisteredBackup, restoreViaRegistered } from '../core/backup.mjs';
-import { normalizeWebdavConfig, pushBackupToCloud, listRemoteBackups } from '../core/webdav.mjs';
+import { explainWebdavError, listRemoteBackups, normalizeWebdavConfig, pushBackupToCloud, testConnection } from '../core/webdav.mjs';
 
 /** Cordis 插件身份。模块上只有这四个属性会被读取。 */
 export const name = 'dsh-hierarchical-fishmemory';
@@ -2326,6 +2326,39 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
           },
         },
         {
+          // 测 WebDAV 连不连得上：POST 试一次「建目录 + 列目录」，不上传、不改数据。
+          //
+          // 接受表单里的**草稿**（url/user/password/dir），所以能在保存之前先试；
+          // 密码留空表示沿用已保存的那个（界面上从不回显密码）。
+          kind: 'exact',
+          path: `${PANEL_BASE}/cloud/test`,
+          handler: async (req, res) => {
+            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
+            if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
+            try {
+              const text = await readPanelTextBody(req, { limit: 64 * 1024 });
+              const patch = JSON.parse(text || '{}');
+              const raw = { ...cfgNow() };
+              const take = (key, max) => {
+                if (patch[key] === undefined) return;
+                raw[key] = String(patch[key] ?? '').trim().slice(0, max);
+              };
+              take('webdavUrl', 512);
+              take('webdavUser', 256);
+              take('webdavDir', 200);
+              if (patch.webdavPassword) raw.webdavPassword = String(patch.webdavPassword).slice(0, 512);
+              const wd = normalizeWebdavConfig(raw);
+              const result = await testConnection(wd);
+              log(`云端连接测试通过：${result.url}（${result.elapsedMs} ms${result.listed ? `，云端 ${result.remoteCount} 份备份` : ''}）`);
+              return panelReply(res, 200, { ...result, dirWritable: true });
+            } catch (err) {
+              const message = explainWebdavError(err);
+              warn(`云端连接测试失败：${message}`);
+              return panelReply(res, 400, { ok: false, error: message });
+            }
+          },
+        },
+        {
           // 云端备份的配置写入：POST = 把表单内容写回 profile patch 里的本 entry。
           //
           // 为什么走服务端：配置是 cordis 的 settings 文档，写它要走
@@ -2385,7 +2418,7 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
         },
       ];
       const disposers = routes.map((r) => scope.webServer.register(r));
-      log(`面板接口已注册：${PANEL_BASE}/{state,forget,notes,export,backup,restore,cloud,cloud/config}`);
+      log(`面板接口已注册：${PANEL_BASE}/{state,forget,notes,export,backup,restore,cloud,cloud/config,cloud/test}`);
       return () => {
         for (const d of disposers.reverse()) {
           try {

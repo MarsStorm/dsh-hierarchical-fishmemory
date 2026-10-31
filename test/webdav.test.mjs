@@ -24,6 +24,8 @@ import {
   pruneRemoteBackups,
   pushBackupToCloud,
   uploadBackupText,
+  testConnection,
+  explainWebdavError,
 } from '../src/core/webdav.mjs';
 
 /** 一个够用的假 WebDAV：内存里存目录和文件。 */
@@ -221,4 +223,55 @@ test('pushBackupToCloud：上传 + 修剪一条龙', async () => {
   } finally {
     await fake.close();
   }
+});
+
+test('testConnection：建目录 + 列目录，返回用时和份数', async () => {
+  const fake = await startFakeServer();
+  try {
+    fake.files.set('/dav/属于我们的回忆/备份-20261031-101500.json', '{}');
+    const cfg = normalizeWebdavConfig({ webdavUrl: fake.url, webdavDir: '属于我们的回忆' });
+    const result = await testConnection(cfg);
+    assert.equal(result.ok, true);
+    assert.equal(result.dir, '属于我们的回忆');
+    assert.equal(result.remoteCount, 1);
+    assert.equal(result.listed, true);
+    assert.ok(fake.dirs.has('/dav/属于我们的回忆'));
+    assert.ok(result.elapsedMs >= 0);
+  } finally {
+    await fake.close();
+  }
+});
+
+test('testConnection：没填地址直接给一句人话，不发请求', async () => {
+  await assert.rejects(() => testConnection(normalizeWebdavConfig({})), /WebDAV 地址/);
+});
+
+test('testConnection：网盘禁了 PROPFIND 也算连上（listed:false）', async () => {
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    const pathname = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+    seen.push(req.method);
+    if (req.method === 'MKCOL') return res.writeHead(405).end();
+    if (req.method === 'PROPFIND') return res.writeHead(403).end();
+    res.writeHead(405).end();
+  });
+  await new Promise((done) => server.listen(0, '127.0.0.1', done));
+  const { port } = server.address();
+  try {
+    const cfg = normalizeWebdavConfig({ webdavUrl: `http://127.0.0.1:${port}/dav`, webdavDir: '回忆' });
+    const result = await testConnection(cfg);
+    assert.equal(result.ok, true);
+    assert.equal(result.listed, false);
+    assert.deepEqual(seen, ['MKCOL', 'PROPFIND']);
+  } finally {
+    await new Promise((done) => server.close(done));
+  }
+});
+
+test('explainWebdavError：401/403/404/域名解析都给中文提示', () => {
+  assert.match(explainWebdavError(new Error('WebDAV 返回 401（PROPFIND http://x）')), /应用专用密码/);
+  assert.match(explainWebdavError(new Error('WebDAV 返回 403（MKCOL http://x）')), /没权限/);
+  assert.match(explainWebdavError(new Error('WebDAV 返回 404（MKCOL http://x）')), /地址路径不对/);
+  assert.match(explainWebdavError(new Error('fetch failed ENOTFOUND')), /域名解析/);
+  assert.equal(explainWebdavError(new Error('别的错')), '别的错');
 });

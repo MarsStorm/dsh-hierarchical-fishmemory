@@ -186,7 +186,10 @@ export async function listRemoteBackups(cfg, options = {}) {
       timeoutMs: options.timeoutMs,
     });
     text = res.text;
-  } catch {
+  } catch (err) {
+    // 默认宽容（列表拿不到就当空，上传照做）。strict 时把错误抛给调用方 ——
+    // 「测试连接」要能区分「目录空的」和「这个网盘不让列目录」。
+    if (options.strict) throw err;
     return [];
   }
   const names = [];
@@ -246,4 +249,50 @@ export async function pushBackupToCloud(cfg, input) {
     // 修剪失败不影响上传成功
   }
   return { ...uploaded, removed };
+}
+
+/**
+ * 试一次 WebDAV 连接：建目录（等于验写权限）+ 列一次目录，不上传任何文件。
+ *
+ * 用户按「测试连接」时走这条；它也能拿**还没保存**的草稿配置来试，所以
+ * 参数就是一个普通的 normalize 结果，不读磁盘、不碰本地备份。
+ *
+ * @returns {Promise<{ok:true,url:string,dir:string,elapsedMs:number,remoteCount:number}>}
+ */
+export async function testConnection(cfg, options = {}) {
+  if (!cfg || !cfg.configured) throw new Error('还没填 WebDAV 地址（要 http:// 或 https:// 开头）');
+  const started = Date.now();
+  await ensureRemoteDir(cfg, options);
+  let remote = [];
+  let listed = true;
+  try {
+    remote = await listRemoteBackups(cfg, { ...options, strict: true });
+  } catch {
+    // 有的网盘把 PROPFIND 关了。目录建得起来，就算连接正常。
+    listed = false;
+  }
+  return {
+    ok: true,
+    url: cfg.url,
+    dir: cfg.dir || '',
+    elapsedMs: Date.now() - started,
+    remoteCount: remote.length,
+    listed,
+  };
+}
+
+/**
+ * 把常见的状态码翻译成人能看懂的一句话。
+ *
+ * 401 是「账号或应用密码不对」——坚果云/Nextcloud 都要求用应用专用密码，
+ * 用登录密码会稳定 401，光看状态码很难猜到。
+ */
+export function explainWebdavError(err) {
+  const message = err instanceof Error ? err.message : String(err);
+  if (/\b401\b/.test(message)) return `${message} —— 账号或应用专用密码不对（多数网盘不让用登录密码）`;
+  if (/\b403\b/.test(message)) return `${message} —— 账号没权限写这个目录`;
+  if (/\b404\b/.test(message)) return `${message} —— 地址路径不对，检查是否需要写到 /dav/ 或 /remote.php/dav/files/用户名/`;
+  if (/ENOTFOUND|EAI_AGAIN|fetch failed|getaddrinfo/i.test(message)) return `${message} —— 域名解析不了，检查地址有没有写错`;
+  if (/timeout|aborted/i.test(message)) return `${message} —— 超时，可能这台机器连不上这个网盘`;
+  return message;
 }

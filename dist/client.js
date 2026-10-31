@@ -217,6 +217,11 @@ window.__ModuleLoader__.load({
       cloudAuto: "写完日记自动上传（5 分钟内只推一次）",
       cloudSave: "保存云端设置",
       cloudSaved: "云端设置已保存",
+      cloudTest: "测试连接",
+      cloudTesting: "正在试…",
+      cloudTestOk: "连接正常",
+      cloudTestNoList: "（这个网盘不让列目录，但目录建得起来）",
+      cloudRemote: "云端已有",
       cloudLoaded: "已读取当前设置",
       cloudLoadFail: "读不到云端设置：{detail}",
       cloudSaveFail: "保存失败：{detail}",
@@ -298,6 +303,11 @@ window.__ModuleLoader__.load({
       cloudAuto: "Upload after each diary write (at most once per 5 min)",
       cloudSave: "Save cloud settings",
       cloudSaved: "Cloud settings saved",
+      cloudTest: "Test connection",
+      cloudTesting: "Testing…",
+      cloudTestOk: "Connected",
+      cloudTestNoList: " (this server does not allow listing, but the folder was created)",
+      cloudRemote: "on the server:",
       cloudLoaded: "Loaded current settings",
       cloudLoadFail: "Could not read cloud settings: {detail}",
       cloudSaveFail: "Save failed: {detail}",
@@ -357,6 +367,8 @@ window.__ModuleLoader__.load({
       var [busy, setBusy] = react.useState(false);
       var [notice, setNotice] = react.useState(null);
       var [error, setError] = react.useState(null);
+      var [testBusy, setTestBusy] = react.useState(false);
+      var [testResult, setTestResult] = react.useState(null);
 
       react.useEffect(function () {
         var alive = true;
@@ -395,6 +407,35 @@ window.__ModuleLoader__.load({
       function field(key, v) {
         setDraft(function (p) { return Object.assign({}, p, { [key]: v }); });
         setNotice(null); setError(null);
+      }
+
+      function testConn() {
+        if (testBusy) return;
+        setTestBusy(true); setTestResult(null);
+        var payload = { webdavUrl: d.url, webdavUser: d.user, webdavDir: d.dir };
+        if (d.password) payload.webdavPassword = d.password;
+        fetch(CLOUD_API + "/test", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (body) {
+            setTestBusy(false);
+            if (!body || body.ok !== true) {
+              setTestResult({ error: true, text: (body && body.error) || "unexpected response" });
+              return;
+            }
+            var parts = [t("cloudTestOk") + " · " + body.elapsedMs + " ms"];
+            if (body.listed) parts.push(t("cloudRemote") + " " + body.remoteCount);
+            else parts.push(t("cloudTestNoList"));
+            setTestResult({ error: false, text: parts.join(" · ") });
+          })
+          .catch(function (e) {
+            setTestBusy(false);
+            setTestResult({ error: true, text: String((e && e.message) || e) });
+          });
       }
 
       function save() {
@@ -488,10 +529,14 @@ window.__ModuleLoader__.load({
         ),
         h("div", { className: "__sm_actions" },
           h("button", { type: "button", className: "__sm_btn __sm_btnPrimary", onClick: save, disabled: busy }, t("cloudSave")),
+          h("button", { type: "button", className: "__sm_btn", onClick: testConn, disabled: testBusy }, testBusy ? t("cloudTesting") : t("cloudTest")),
           busy ? h("span", { className: "__sm_status" }, t("saving")) : null,
           notice ? h("span", { className: "__sm_status" }, messageText(t, notice)) : null,
           error ? h("span", { className: "__sm_error", role: "alert" }, messageText(t, error)) : null
-        )
+        ),
+        testResult
+          ? h("p", { className: testResult.error ? "__sm_error" : "__sm_status", role: testResult.error ? "alert" : undefined }, testResult.text)
+          : null
       );
     }
 
