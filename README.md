@@ -105,7 +105,7 @@ TTL 默认 7 天，规则很短：
 2026-10-31 收编自三个插件，行为不变、代码合一：
 
 - [feiyu-memory](https://github.com/AirPineApplea/feiyu-memory) 4.0.2 —— 日记引擎（固化、召回、衰减、面板）
-- `dsh-shallow-memory` —— 带 TTL 的浅层记忆
+- [dsh-shallow-memory](https://github.com/MarsStorm/dsh-shallow-memory) —— 带 TTL 的浅层记忆
 - `dsh-soul-md` 0.10.3 —— 人设卡与分层深层记忆
 
 现在只剩一个包、一个数据目录、一份注入预算。
