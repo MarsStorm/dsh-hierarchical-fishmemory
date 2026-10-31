@@ -321,6 +321,31 @@ window.__ModuleLoader__.load({
     // 但没生效"。密码只上行不下行 —— 读回来只有 passwordSet 一个布尔。
     var CLOUD_API = "/feiyu-diary/cloud";
 
+    /**
+     * 云端表单的兜底边界。
+     *
+     * 2026-10-31 这里出过一次事故：组件里引用了一个没定义的变量，渲染时抛
+     * ReferenceError，整张设置页一起白屏 —— 一个人设卡表单的毛病，不该有
+     * 能力带走整页。边界只包这块，出错时显示一行错，其余照常。
+     */
+    class CloudBoundary extends react.Component {
+      constructor(props) {
+        super(props);
+        this.state = { error: null };
+      }
+      static getDerivedStateFromError(error) {
+        return { error: error };
+      }
+      render() {
+        if (this.state && this.state.error) {
+          var t = this.props.t;
+          var detail = String((this.state.error && this.state.error.message) || this.state.error);
+          return h("p", { className: "__sm_error", role: "alert" }, messageText(t, { key: "cloudLoadFail", detail: detail }));
+        }
+        return this.props.children;
+      }
+    }
+
     function WebdavGroup(props) {
       var t = props.t;
       var [state, setState] = react.useState({ status: "loading" });
@@ -361,6 +386,7 @@ window.__ModuleLoader__.load({
         );
       }
 
+      var value = state.value || {};
       var d = draft || {};
       function field(key, v) {
         setDraft(function (p) { return Object.assign({}, p, { [key]: v }); });
@@ -760,7 +786,7 @@ window.__ModuleLoader__.load({
         ),
 
         // ── cloud backup (WebDAV) ────────────────────────────────────────
-        h(WebdavGroup, { t: t })
+        h(CloudBoundary, { t: t }, h(WebdavGroup, { t: t }))
       );
     }
 
