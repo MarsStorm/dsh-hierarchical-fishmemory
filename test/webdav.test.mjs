@@ -13,6 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { gunzipSync } from 'node:zlib';
 
 import {
   authHeader,
@@ -36,11 +37,13 @@ function startFakeServer() {
   const files = new Map();
   const seen = [];
   const server = http.createServer((req, res) => {
-    let body = '';
+    // 收 Buffer 而不是字符串：上传现在可能是 gzip 二进制，按 utf8 拼会坏字。
+    const chunks = [];
     req.on('data', (chunk) => {
-      body += chunk;
+      chunks.push(chunk);
     });
     req.on('end', () => {
+      const body = Buffer.concat(chunks);
       const pathname = decodeURIComponent(new URL(req.url, 'http://x').pathname);
       seen.push(`${req.method} ${pathname}`);
       if (req.method === 'MKCOL') {
@@ -163,10 +166,17 @@ test('uploadBackupText：PUT 到目录下，返回字节数', async () => {
     const cfg = normalizeWebdavConfig({ webdavUrl: fake.url, webdavDir: '属于我们的回忆' });
     const text = JSON.stringify({ hello: '世界' });
     const result = await uploadBackupText(cfg, { text, fileName: '备份-20261031-120000.json' });
+    assert.equal(result.compressed, true);
+    assert.equal(result.fileName, '备份-20261031-120000.json.gz');
     assert.equal(result.status, 201);
-    assert.equal(result.bytes, Buffer.byteLength(text, 'utf8'));
-    assert.equal(fake.files.get('/dav/属于我们的回忆/备份-20261031-120000.json'), text);
-    assert.ok(result.url.endsWith('/属于我们的回忆/备份-20261031-120000.json'));
+    // bytes 现在是压缩后的大小，原文长度看 rawBytes。
+    // 短文本 gzip 会略微变大（头部开销），所以这里只校验两个数都在。
+    assert.equal(result.rawBytes, Buffer.byteLength(text, 'utf8'));
+    assert.ok(result.bytes > 0);
+    // 传上去的是 gzip 字节；解回来要等于原文。
+    const stored = fake.files.get('/dav/属于我们的回忆/备份-20261031-120000.json.gz');
+    assert.equal(gunzipSync(stored).toString('utf8'), text);
+    assert.ok(result.url.endsWith('/属于我们的回忆/备份-20261031-120000.json.gz'));
   } finally {
     await fake.close();
   }
@@ -177,12 +187,12 @@ test('listRemoteBackups：解析中文名，只认 备份-*.json 并按时间排
   try {
     const cfg = normalizeWebdavConfig({ webdavUrl: fake.url, webdavDir: '属于我们的回忆' });
     fake.dirs.add('/dav/属于我们的回忆');
-    fake.files.set('/dav/属于我们的回忆/备份-20261031-120000.json', '{}');
-    fake.files.set('/dav/属于我们的回忆/备份-20261031-130000.json', '{}');
+    fake.files.set('/dav/属于我们的回忆/备份-20261031-120000.json.gz', '{}');
+    fake.files.set('/dav/属于我们的回忆/备份-20261031-130000.json.gz', '{}');
     fake.files.set('/dav/属于我们的回忆/别的文件.json', '{}');
     fake.files.set('/dav/属于我们的回忆/说明.md', '#');
     const names = await listRemoteBackups(cfg);
-    assert.deepEqual(names, ['备份-20261031-120000.json', '备份-20261031-130000.json']);
+    assert.deepEqual(names, ['备份-20261031-120000.json.gz', '备份-20261031-130000.json.gz']);
   } finally {
     await fake.close();
   }
@@ -194,10 +204,10 @@ test('pruneRemoteBackups：超出 keep 时删最旧的', async () => {
     const cfg = normalizeWebdavConfig({ webdavUrl: fake.url, webdavDir: '属于我们的回忆', webdavKeep: 2 });
     fake.dirs.add('/dav/属于我们的回忆');
     for (const stamp of ['100000', '110000', '120000', '130000']) {
-      fake.files.set(`/dav/属于我们的回忆/备份-20261031-${stamp}.json`, '{}');
+      fake.files.set(`/dav/属于我们的回忆/备份-20261031-${stamp}.json.gz`, '{}');
     }
     const result = await pruneRemoteBackups(cfg);
-    assert.deepEqual(result.removed, ['备份-20261031-100000.json', '备份-20261031-110000.json']);
+    assert.deepEqual(result.removed, ['备份-20261031-100000.json.gz', '备份-20261031-110000.json.gz']);
     assert.equal(fake.files.size, 2);
   } finally {
     await fake.close();
@@ -227,9 +237,9 @@ test('pushBackupToCloud：上传 + 修剪一条龙', async () => {
       text: '{"n":2}',
       fileName: '备份-20261031-110000.json',
     });
-    assert.equal(result.fileName, '备份-20261031-110000.json');
-    assert.deepEqual(result.removed, ['备份-20261031-100000.json']);
-    assert.deepEqual([...fake.files.keys()].sort(), ['/dav/属于我们的回忆/备份-20261031-110000.json']);
+    assert.equal(result.fileName, '备份-20261031-110000.json.gz');
+    assert.deepEqual(result.removed, ['备份-20261031-100000.json.gz']);
+    assert.deepEqual([...fake.files.keys()].sort(), ['/dav/属于我们的回忆/备份-20261031-110000.json.gz']);
   } finally {
     await fake.close();
   }
@@ -238,7 +248,7 @@ test('pushBackupToCloud：上传 + 修剪一条龙', async () => {
 test('testConnection：建目录 + 列目录，返回用时和份数', async () => {
   const fake = await startFakeServer();
   try {
-    fake.files.set('/dav/属于我们的回忆/备份-20261031-101500.json', '{}');
+    fake.files.set('/dav/属于我们的回忆/备份-20261031-101500.json.gz', '{}');
     const cfg = normalizeWebdavConfig({ webdavUrl: fake.url, webdavDir: '属于我们的回忆' });
     const result = await testConnection(cfg);
     assert.equal(result.ok, true);
@@ -295,8 +305,9 @@ test('listRemoteConfigs：只认 `配置-*.json`，和记忆备份分得开', as
     await uploadBackupText(cfg, { text: '{"format":"x"}', fileName: '配置-20261031-120500.json' });
     const configs = await listRemoteConfigs(cfg);
     const backups = await listRemoteBackups(cfg);
-    assert.deepEqual(configs, ['配置-20261031-120500.json']);
-    assert.deepEqual(backups, ['备份-20261031-120000.json']);
+    // 2026-10-31 起上传默认 gzip，文件名带 .gz；列目录要认这个后缀。
+    assert.deepEqual(configs, ['配置-20261031-120500.json.gz']);
+    assert.deepEqual(backups, ['备份-20261031-120000.json.gz']);
   } finally {
     await fake.close();
   }
@@ -306,11 +317,29 @@ test('downloadRemoteText：取回正文，文件名里的分隔符会被压平',
   const fake = await startFakeServer();
   try {
     const cfg = normalizeWebdavConfig({ webdavUrl: fake.url, webdavDir: '属于我们的回忆' });
-    await uploadBackupText(cfg, { text: '{"hello":"世界"}', fileName: '配置-20261031-120500.json' });
-    const got = await downloadRemoteText(cfg, '配置-20261031-120500.json');
+    const uploaded = await uploadBackupText(cfg, { text: '{"hello":"世界"}', fileName: '配置-20261031-120500.json' });
+    // 上传默认压成 .json.gz，下载要能透明解回来。
+    assert.equal(uploaded.fileName, '配置-20261031-120500.json.gz');
+    const got = await downloadRemoteText(cfg, uploaded.fileName);
     assert.equal(got.text, '{"hello":"世界"}');
-    assert.equal(got.fileName, '配置-20261031-120500.json');
+    assert.equal(got.fileName, '配置-20261031-120500.json.gz');
+    assert.equal(got.gzipped, true);
     assert.equal(got.status, 200);
+  } finally {
+    await fake.close();
+  }
+});
+
+test('gzip：长文本压到一半以下，取回仍是原文', async () => {
+  const fake = await startFakeServer();
+  try {
+    const cfg = normalizeWebdavConfig({ webdavUrl: fake.url, webdavDir: '属于我们的回忆' });
+    const text = JSON.stringify({ notes: Array.from({ length: 200 }, (_, i) => `第 ${i} 条：今天干了点什么`) });
+    const result = await uploadBackupText(cfg, { text, fileName: '备份-20261031-140000.json' });
+    assert.ok(result.bytes * 2 < result.rawBytes, `压缩率不够：${result.bytes} vs ${result.rawBytes}`);
+    const got = await downloadRemoteText(cfg, result.fileName);
+    assert.equal(got.text, text);
+    assert.equal(got.gzipped, true);
   } finally {
     await fake.close();
   }

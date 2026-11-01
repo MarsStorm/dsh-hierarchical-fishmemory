@@ -27,6 +27,8 @@
 
 ## 最近更新
 
+- **1.3.0**：云端备份默认 gzip（`备份-….json.gz`，九万多字节压到三万八）；面板加「记忆体检」与「回顾最近七天」；人设卡每次改动自动留一版，新增 `fish_card_history` / `fish_card_restore`。
+
 **1.2.x（2026-10-31）—— 云端备份与搬家**
 
 - **WebDAV 云端备份**：把整份备份推到自己的网盘（坚果云 / Nextcloud / 群晖 / iCloud 都行），按保留份数自动清理旧份；有面板按钮、`fish_cloud_backup` 工具和可选的自动上传。
@@ -185,6 +187,8 @@ dsh plugin --profile web add link:/abs/path/to/dsh-hierarchical-fishmemory
 | `soul_read` · `soul_update` | 读 / 改当前人设卡 |
 | `fish_backup` · `fish_restore` | 整包备份与还原 |
 | `fish_cloud_backup` | 打一份新备份并上传到 WebDAV，顺带清理超额的旧份 |
+| `fish_card_history` | 列出当前人设卡保存过的版本（每次改动前自动留一份） |
+| `fish_card_restore` | 从某一版还原人设卡；默认 dry-run，确认后写回，还原前再留一份 |
 
 ## 面板
 

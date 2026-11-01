@@ -30,7 +30,7 @@
  * validating; on first run the plugin imports the old `path` card and the
  * old memory file into the managed store.
  */
-import { readFileSync, statSync, watch } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync, watch, writeFileSync } from "node:fs";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join, dirname } from "node:path";
 import z from "@deepseek-ai/schemastery";
@@ -823,8 +823,137 @@ function apply(ctx, config) {
       const settings = ctx.get("settings");
       if (!settings) throw new Error("soul_update: settings service unavailable");
       const nextCards = { ...(c.cards ?? {}), [card.name]: content };
+      // 改之前先把旧的留一版 —— 人设卡改坏了没法手写回原样，这是唯一的后悔药。
+      if (card.text && card.text !== content) saveCardSnapshot(card.name, card.text);
       await settings.update(NS, { ...c, cards: nextCards });
       return { bytes, persona: card.name };
+    },
+  }));
+
+  // ── 人设卡版本历史 ───────────────────────────────────────────────────────
+  //
+  // 2026-10-31 加。之前人设卡只有「现在的样子」，改坏了只能凭记忆重写。
+  // 每次 soul_update 覆盖前把旧文本存一份，按文件名的 UTC 时间戳排序。
+  // 放在 backups/cards/ 下：跟整包备份同一层，删起来也方便。
+
+  const cardDir = () => join(backupDir(), "cards");
+
+  function saveCardSnapshot(name, text) {
+    try {
+      mkdirSync(cardDir(), { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const safeName = String(name).replace(/[\\/:*?"<>|]/g, "-");
+      writeFileSync(join(cardDir(), `${stamp}-${safeName}.md`), text, "utf8");
+      return join(cardDir(), `${stamp}-${safeName}.md`);
+    } catch {
+      return null;
+    }
+  }
+
+  function listCardSnapshots(name) {
+    try {
+      return readdirSync(cardDir())
+        .filter((file) => file.endsWith(".md") && file.includes(`-${String(name).replace(/[\\/:*?"<>|]/g, "-")}.md`))
+        .sort()
+        .reverse()
+        .map((file) => {
+          const full = join(cardDir(), file);
+          let bytes = 0;
+          try {
+            bytes = readFileSync(full, "utf8").length;
+          } catch {
+            bytes = 0;
+          }
+          return { file, path: full, chars: bytes };
+        });
+    } catch {
+      return [];
+    }
+  }
+
+  ctx.tools.register(defineTool({
+    name: "fish_card_history",
+    description:
+      "List saved versions of the ACTIVE persona card, newest first. Each entry is a snapshot written right before a soul_update overwrote it. Use it when the user asks what the card used to say, or to pick a version back.",
+    parameters: {},
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          persona: { type: "string" },
+          versions: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                file: { type: "string" },
+                chars: { type: "integer" },
+              },
+            },
+          },
+        },
+      },
+      render: (_args, value) =>
+        [{ type: "text", text: value.versions.length
+          ? `Persona card "${value.persona}" has ${value.versions.length} saved version(s):\n${value.versions.map((v) => `- ${v.file} (${v.chars} chars)`).join("\n")}`
+          : `Persona card "${value.persona}" has no saved versions yet.` }],
+    },
+    isConcurrencySafe: () => true,
+    async execute(_args, exec) {
+      const card = resolveCard(agentOf(exec));
+      return { persona: card.name ?? "none", versions: card.name ? listCardSnapshots(card.name) : [] };
+    },
+  }));
+
+  ctx.tools.register(defineTool({
+    name: "fish_card_restore",
+    description:
+      "Restore the ACTIVE persona card from one saved version (file name from fish_card_history). DRY-RUN BY DEFAULT: without `confirm: true` it only reports what would change. A restore also snapshots the current text first, so it is reversible.",
+    parameters: {
+      file: { type: "string", required: true, description: "Snapshot file name from fish_card_history." },
+      confirm: { type: "boolean", description: "Pass true to actually write. Anything else = dry-run." },
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          persona: { type: "string" },
+          file: { type: "string" },
+          chars: { type: "integer" },
+          dryRun: { type: "boolean" },
+          snapshot: { type: "string" },
+        },
+      },
+      render: (_args, value) => [
+        { type: "text", text: value.dryRun
+          ? `Dry run: would restore persona card "${value.persona}" from ${value.file} (${value.chars} chars). Pass confirm:true to apply.`
+          : `Persona card "${value.persona}" restored from ${value.file} (${value.chars} chars). Previous version kept at ${value.snapshot}.` },
+      ],
+    },
+    isConcurrencySafe: () => false,
+    async execute(args, exec) {
+      const name = String(args.file ?? "").trim();
+      if (!name) throw new Error("fish_card_restore: `file` is required");
+      const card = resolveCard(agentOf(exec));
+      if (!card.name) throw new Error("fish_card_restore: no persona card is active for this session");
+      const versions = listCardSnapshots(card.name);
+      const target = versions.find((item) => item.file === name || item.path === name);
+      if (!target) throw new Error(`fish_card_restore: no snapshot named ${name} for card "${card.name}"`);
+      const content = readFileSync(target.path, "utf8");
+      const confirm = args.confirm === true;
+      if (!confirm) {
+        return { persona: card.name, file: target.file, chars: content.length, dryRun: true, snapshot: "" };
+      }
+      const settings = ctx.get("settings");
+      if (!settings) throw new Error("fish_card_restore: settings service unavailable");
+      const c = cfg();
+      const current = card.text ?? "";
+      const snapshot = current && current !== content ? saveCardSnapshot(card.name, current) ?? "" : "";
+      await settings.update(NS, { ...c, cards: { ...(c.cards ?? {}), [card.name]: content } });
+      return { persona: card.name, file: target.file, chars: content.length, dryRun: false, snapshot };
     },
   }));
 

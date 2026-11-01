@@ -1616,6 +1616,150 @@ window.__ModuleLoader__.load({
      * 多少东西」摆给人看；确认了再带 `?confirm=1` 真写。记忆这种东西，
      * 误覆盖比漏备份危险得多 —— 所以任何一步都别偷偷替人决定。
      */
+    /* ── 记忆体检 ── */
+    //
+    // 2026-10-31 加。四本账有没有在悄悄丢东西，光看面板是看不出来的：
+    // 浅层被挤掉、手记被截断、core 与手记写重了，全都不报错。
+    // 这里只读 /stats，不做任何写操作。
+    function HealthBox() {
+      const [state, setState] = useState(null);
+      const [error, setError] = useState('');
+      const [busy, setBusy] = useState(false);
+
+      const read = async () => {
+        setBusy(true);
+        try {
+          const res = await fetch(`${API}/stats`, { credentials: 'same-origin' });
+          const data = await res.json();
+          if (res.ok && data.ok) {
+            setState(data);
+            setError('');
+          } else {
+            setError(data.error || `HTTP ${res.status}`);
+          }
+        } catch (err) {
+          setError(String(err && err.message ? err.message : err));
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      useEffect(() => { read(); }, []);
+
+      const row = (label, value) =>
+        h('div', { key: label, style: { display: 'flex', justifyContent: 'space-between', gap: 12, padding: '3px 0' } },
+          h('span', { style: { color: C.text2 } }, label),
+          h('span', { style: { fontVariantNumeric: 'tabular-nums' } }, String(value)));
+
+      if (!state && !error) {
+        return h('div', { style: { marginTop: 14, fontSize: 12, color: C.text2 } }, '正在数账…');
+      }
+      if (error) {
+        return h('div', { style: { marginTop: 14, fontSize: 12, color: C.err } }, `体检读不到：${error}`);
+      }
+
+      const d = state;
+      const blocks = [];
+      for (const scope of d.memory.scopes) {
+        blocks.push(h('div', { key: scope.scope, style: { marginTop: 8 } },
+          h('div', { style: { fontSize: 12, fontWeight: 600 } }, `深层 · ${scope.scope}`),
+          row('core', `${scope.coreChars} 字（约 ${scope.coreTokens} token）`),
+          row('topics', `${scope.topics.length} 条 / ${scope.topics.reduce((sum, t) => sum + t.chars, 0)} 字`),
+        ));
+      }
+
+      return h('div', { style: { marginTop: 14 } },
+        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+          h('div', { style: { fontSize: 13, fontWeight: 600 } }, '记忆体检'),
+          h('button', {
+            type: 'button',
+            onClick: read,
+            disabled: busy,
+            style: { fontSize: 12, padding: '3px 10px', borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: C.text2, cursor: busy ? 'default' : 'pointer' },
+          }, busy ? '数着…' : '重数'),
+        ),
+        h('div', { style: { marginTop: 6 } },
+          ...blocks,
+          h('div', { style: { marginTop: 8 } },
+            h('div', { style: { fontSize: 12, fontWeight: 600 } }, '档案'),
+            row('共度时光', `${d.diary.entries} 条 / ${d.diary.files} 个文件（近 7 天 ${d.diary.last7Days} 条）`),
+            row('情感日记', `${d.feelings.chars} 字`),
+            row('人格手记', `${d.handnote.lines} 条 / ${d.handnote.chars} 字，最长 ${d.handnote.longest} 字`),
+            d.handnote.truncated ? row('⚠ 被截断的行', `${d.handnote.truncated} 条`) : null,
+            row('浅层', `${d.shallow.live} 条（快到期 ${d.shallow.expiring}）`),
+            row('每轮注入估计', `约 ${d.estimate.injectedTokens} token`),
+          ),
+          d.memory.duplicateHints.length
+            ? h('div', { style: { marginTop: 8, fontSize: 12, color: C.warn || C.text2 } },
+                `⚠ 有 ${d.memory.duplicateHints.length} 句在深层记忆和人格手记里各写了一遍：`,
+                ...d.memory.duplicateHints.slice(0, 3).map((item, i) =>
+                  h('div', { key: i, style: { opacity: 0.8 } }, `· ${item.line.slice(0, 40)}`)))
+            : null,
+          h('p', { style: { margin: '6px 0 0', fontSize: 11, lineHeight: 1.6, color: C.text2 } }, d.estimate.note),
+        ),
+      );
+    }
+
+    /* ── 回顾 ── */
+    //
+    // 2026-10-31 加。之前想看「上周都在干什么」只能靠搜关键词，
+    // 时间线是断的。这里按天把共度时光铺开，另外单拎「7 天前的今天」。
+    function ReviewBox() {
+      const [state, setState] = useState(null);
+      const [error, setError] = useState('');
+      const [open, setOpen] = useState(false);
+
+      const read = async () => {
+        try {
+          const res = await fetch(`${API}/review?days=7&lookback=7`, { credentials: 'same-origin' });
+          const data = await res.json();
+          if (res.ok && data.ok) setState(data);
+          else setError(data.error || `HTTP ${res.status}`);
+        } catch (err) {
+          setError(String(err && err.message ? err.message : err));
+        }
+      };
+
+      useEffect(() => { if (open && !state) read(); }, [open]);
+
+      const line = (entry, key) =>
+        h('div', { key, style: { padding: '4px 0', fontSize: 12, lineHeight: 1.7 } },
+          h('span', { style: { color: C.text2, marginRight: 6 } }, String(entry.at || '').slice(11, 16)),
+          String(entry.text || '').slice(0, 160),
+        );
+
+      if (!open) {
+        return h('button', {
+          type: 'button',
+          onClick: () => setOpen(true),
+          style: { marginTop: 14, fontSize: 12, padding: '4px 10px', borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: C.text2, cursor: 'pointer' },
+        }, '回顾一下最近七天');
+      }
+
+      if (error) return h('div', { style: { marginTop: 14, fontSize: 12, color: C.err } }, `回顾读不到：${error}`);
+      if (!state) return h('div', { style: { marginTop: 14, fontSize: 12, color: C.text2 } }, '翻着…');
+
+      const back = state.lookback;
+      return h('div', { style: { marginTop: 14 } },
+        h('div', { style: { fontSize: 13, fontWeight: 600 } }, '回顾'),
+        back.entries.length
+          ? h('div', { style: { marginTop: 6 } },
+              h('div', { style: { fontSize: 12, color: C.text2 } }, `${back.date}（七天前的今天）`),
+              ...back.entries.slice(0, 4).map((entry, i) => line(entry, `b${i}`)))
+          : h('p', { style: { margin: '6px 0 0', fontSize: 12, color: C.text2 } }, `${back.date} 那天没有记录。`),
+        ...state.recent.map((day) =>
+          h('div', { key: day.date, style: { marginTop: 8 } },
+            h('div', { style: { fontSize: 12, color: C.text2 } }, `${day.date} · ${day.entries.length} 条`),
+            ...day.entries.slice(0, 3).map((entry, i) => line(entry, `${day.date}-${i}`)))),
+        h('div', { style: { marginTop: 8 } },
+          h('button', {
+            type: 'button',
+            onClick: () => { setOpen(false); setState(null); },
+            style: { fontSize: 12, padding: '3px 10px', borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: C.text2, cursor: 'pointer' },
+          }, '收起')),
+      );
+    }
+
     function ImportBox() {
       const [phase, setPhase] = useState('idle'); // idle | preview | writing | done | error
       const [report, setReport] = useState(null);
@@ -1950,6 +2094,8 @@ window.__ModuleLoader__.load({
               { style: { margin: '6px 0 0', fontSize: 12, lineHeight: 1.7, color: C.text2 } },
               '整包备份把四本账和人设卡收进一个 JSON，存在 ~/.dsh/backups/；换设备带它就行。',
             ),
+            h(HealthBox),
+            h(ReviewBox),
             h(ImportBox),
             h(CloudBox),
           ),

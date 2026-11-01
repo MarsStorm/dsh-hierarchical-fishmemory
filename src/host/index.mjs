@@ -61,6 +61,7 @@ import {
 import { resolveConfig, buildSchema, CONFIG_SPEC } from '../core/config.mjs';
 import { registerShallow, SHALLOW_FILE } from '../core/shallow.mjs';
 import { summarizeBackup, writeBackupFile, backupFileName, buildRegisteredBackup, restoreViaRegistered } from '../core/backup.mjs';
+import { collectReview, collectStatsFromDisk } from '../core/stats.mjs';
 import {
   downloadRemoteText,
   explainWebdavError,
@@ -2288,6 +2289,51 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
               return panelReply(res, 200, { ok: true, ...result });
             } catch (err) {
               return panelReply(res, 400, {
+                ok: false,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          },
+        },
+        {
+          // 记忆体检：四本账条数、体积、注入估算、重复提示。
+          //
+          // 只读不写。走磁盘扫描而不是 memoryLayout —— 两个 cordis 入口的模块
+          // 实例不共享，host 这边拿不到 soul 的 layout 实例。
+          kind: 'exact',
+          path: `${PANEL_BASE}/stats`,
+          handler: async (req, res) => {
+            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
+            if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: '只支持 GET' });
+            try {
+              const memoryRoot = path.join(dshHome(), 'soul-md', 'memory');
+              const diaryDir = path.join(dshHome(), 'feiyu-diary');
+              const stats = collectStatsFromDisk({ memoryRoot, diaryDir });
+              return panelReply(res, 200, { ok: true, ...stats });
+            } catch (err) {
+              return panelReply(res, 500, {
+                ok: false,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          },
+        },
+        {
+          // 回顾：共度时光按天分组，最近 N 天 +「X 天前的今天」。
+          kind: 'exact',
+          path: `${PANEL_BASE}/review`,
+          handler: async (req, res) => {
+            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
+            if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: '只支持 GET' });
+            try {
+              const params = new URL(String(req.url ?? ''), 'http://localhost').searchParams;
+              const days = Math.min(Math.max(Number(params.get('days')) || 7, 1), 60);
+              const lookback = Math.min(Math.max(Number(params.get('lookback')) || 7, 1), 365);
+              const diaryDir = path.join(dshHome(), 'feiyu-diary');
+              const review = collectReview({ diaryDir, days, lookback });
+              return panelReply(res, 200, { ok: true, ...review });
+            } catch (err) {
+              return panelReply(res, 500, {
                 ok: false,
                 error: err instanceof Error ? err.message : String(err),
               });

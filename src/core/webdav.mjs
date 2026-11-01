@@ -15,6 +15,8 @@
  */
 
 /** 远程目录里认得出的备份文件名（和 backupFileName() 的前缀一致）。 */
+import { gunzipSync, gzipSync } from 'node:zlib';
+
 export const REMOTE_PREFIX = '备份-';
 /** 配置备份的文件前缀（只装插件配置，不装四本账）。 */
 export const CONFIG_PREFIX = '配置-';
@@ -96,16 +98,26 @@ export async function webdavRequest(cfg, method, url, options = {}) {
     throw new Error(`WebDAV 连不上（${method} ${url}）：${reason}`);
   }
   let text = '';
-  try {
-    text = await res.text();
-  } catch {
-    text = '';
+  let buffer = null;
+  if (options.responseType === 'buffer') {
+    // 压缩过的备份是二进制，不能过 text() —— UTF-8 解码会把字节弄坏。
+    try {
+      buffer = Buffer.from(await res.arrayBuffer());
+    } catch {
+      buffer = Buffer.alloc(0);
+    }
+  } else {
+    try {
+      text = await res.text();
+    } catch {
+      text = '';
+    }
   }
   if (!res.ok && res.status !== 207) {
     const brief = text.replace(/\s+/g, ' ').slice(0, 200);
     throw new Error(`WebDAV 返回 ${res.status}（${method} ${url}）${brief ? `：${brief}` : ''}`);
   }
-  return { status: res.status, ok: res.ok, text, headers: res.headers };
+  return { status: res.status, ok: res.ok, text, buffer, headers: res.headers };
 }
 
 /**
@@ -159,18 +171,29 @@ function encodePathUrl(url) {
  * @param {{ text:string, fileName:string, onLog?:(msg:string)=>void }} input
  */
 export async function uploadBackupText(cfg, input) {
-  const fileName = String(input.fileName ?? '').replace(/[\\/]+/g, '-');
+  const compress = input.compress !== false;
+  let fileName = String(input.fileName ?? '').replace(/[\\/]+/g, '-');
   if (!fileName) throw new Error('上传失败：文件名为空');
+  // 备份是纯 JSON 文本，gzip 能压到十分之一左右；名字带 .gz，别让下一个人猜。
+  if (compress && !fileName.endsWith('.gz')) fileName += '.gz';
+  const rawBytes = Buffer.byteLength(input.text, 'utf8');
+  const body = compress ? gzipSync(Buffer.from(input.text, 'utf8')) : input.text;
   await ensureRemoteDir(cfg);
   const target = joinUrl(cfg.url, cfg.dir, fileName);
   const res = await webdavRequest(cfg, 'PUT', encodePathUrl(target), {
-    headers: { 'Content-Type': 'application/json; charset=utf-8' },
-    body: input.text,
+    headers: compress
+      ? { 'Content-Type': 'application/gzip' }
+      : { 'Content-Type': 'application/json; charset=utf-8' },
+    body,
     timeoutMs: input.timeoutMs,
   });
-  const bytes = Buffer.byteLength(input.text, 'utf8');
-  input.onLog?.(`已上传 ${fileName}（${bytes} 字节，HTTP ${res.status}）`);
-  return { url: target, fileName, bytes, status: res.status };
+  const bytes = compress ? body.length : rawBytes;
+  input.onLog?.(
+    compress
+      ? `已上传 ${fileName}（压缩后 ${bytes} 字节，原 ${rawBytes} 字节，HTTP ${res.status}）`
+      : `已上传 ${fileName}（${bytes} 字节，HTTP ${res.status}）`,
+  );
+  return { url: target, fileName, bytes, rawBytes, compressed: compress, status: res.status };
 }
 
 /**
@@ -207,7 +230,7 @@ async function listRemoteFiles(cfg, prefix, options = {}) {
     } catch {
       // 解码失败就用原串
     }
-    if (name.startsWith(prefix) && name.endsWith('.json') && !names.includes(name)) names.push(name);
+    if (name.startsWith(prefix) && /\.json(\.gz)?$/.test(name) && !names.includes(name)) names.push(name);
   }
   // 文件名里带 UTC 时间戳，字典序即时间序（旧 → 新）
   return names.sort();
@@ -228,8 +251,15 @@ export async function downloadRemoteText(cfg, fileName, options = {}) {
   const name = String(fileName ?? '').replace(/[\\/]+/g, '-');
   if (!name) throw new Error('下载失败：文件名为空');
   const target = joinUrl(cfg.url, cfg.dir, name);
-  const res = await webdavRequest(cfg, 'GET', encodePathUrl(target), { timeoutMs: options.timeoutMs });
-  return { url: target, fileName: name, text: res.text, status: res.status };
+  const res = await webdavRequest(cfg, 'GET', encodePathUrl(target), {
+    timeoutMs: options.timeoutMs,
+    responseType: 'buffer',
+  });
+  const buf = res.buffer ?? Buffer.alloc(0);
+  // gzip 魔数 1f 8b；老的未压缩备份照旧按 UTF-8 读。
+  const gzipped = buf.length > 2 && buf[0] === 0x1f && buf[1] === 0x8b;
+  const text = gzipped ? gunzipSync(buf).toString('utf8') : buf.toString('utf8');
+  return { url: target, fileName: name, text, gzipped, bytes: buf.length, status: res.status };
 }
 
 /** 删掉超出 keep 的旧份（最旧的先删）。PROPFIND 不可用时静默跳过。 */
