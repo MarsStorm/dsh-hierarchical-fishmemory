@@ -130,3 +130,76 @@ export function buildBook(backup, { now = new Date() } = {}) {
 
   return `${head}\n${body}\n`;
 }
+
+/* ───────────────────────── 年册 ───────────────────────── */
+
+/** 从备份里捞出某一年的共度时光（按 date/at 的前四位判年）。 */
+function entriesOfYear(entries, year) {
+  return entries.filter((e) => String(e?.date ?? e?.at ?? '').slice(0, 4) === year);
+}
+
+/** 把情感日记按 `## YYYY-MM-DD` 切成节，只留这一年。 */
+function feelingsOfYear(text, year) {
+  const body = String(text ?? '');
+  const lines = body.split('\n');
+  const sections = [];
+  let current = null;
+  for (const line of lines) {
+    const m = /^##\s+(\d{4}-\d{2}-\d{2})\s*$/.exec(line);
+    if (m) {
+      if (current) sections.push(current);
+      current = m[1].startsWith(year) ? { day: m[1], lines: [] } : null;
+      continue;
+    }
+    if (current) current.lines.push(line);
+  }
+  if (current) sections.push(current);
+  return sections
+    .map((s) => `### ${s.day}\n\n${s.lines.join('\n').trim()}`)
+    .filter((s) => s.trim() !== `###`);
+}
+
+/**
+ * 一年的册子：共度时光按月聚起来，情感日记按天排。
+ * @param {object} backup collectBackup() 的结果
+ * @param {{year?:string|number}} [opts]
+ */
+export function buildYearBook(backup, { year } = {}) {
+  const y = String(year || new Date().getUTCFullYear());
+  const entries = entriesOfYear(parseJsonl(backup?.diary?.jsonl), y).sort((a, b) =>
+    String(a?.date ?? a?.at ?? '').localeCompare(String(b?.date ?? b?.at ?? '')),
+  );
+
+  const byMonth = new Map();
+  for (const e of entries) {
+    const day = String(e?.date ?? e?.at ?? '').slice(0, 10);
+    const month = day.slice(0, 7);
+    if (!byMonth.has(month)) byMonth.set(month, []);
+    byMonth.get(month).push({ day, text: String(e?.text ?? '').trim(), kind: e?.kind });
+  }
+
+  const months = [...byMonth.keys()].sort().map((month) => {
+    const items = byMonth.get(month).map((e) => {
+      const kind = e.kind ? `（${e.kind}）` : '';
+      return `- **${e.day.slice(5)}**${kind} ${e.text}`;
+    });
+    return `## ${month}\n\n${items.join('\n')}`;
+  });
+
+  const feelings = feelingsOfYear(backup?.feelings, y);
+
+  const head = [
+    `# 属于我们的回忆 · ${y} 年`,
+    '',
+    `> 这一年记下 ${entries.length} 条共度时光、${feelings.length} 天情感日记。`,
+    '> 从四本账里誊出来的，改它不会影响记忆本身。',
+    '',
+  ].join('\n');
+
+  const parts = [];
+  if (months.length) parts.push(months.join('\n\n'));
+  else parts.push('## 共度时光\n\n（这一年还没有条目）');
+  if (feelings.length) parts.push(`## 情感日记\n\n${feelings.join('\n\n')}`);
+
+  return `${head}\n${parts.join('\n\n')}\n`;
+}

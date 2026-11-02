@@ -45,7 +45,7 @@ import { renderMemoryBlock } from '../core/persona.mjs';
 import { addLoop, doneLoop, loopsPath, openLoops, renderLoops } from '../core/loops.mjs';
 import { datesPath, loadDates, upcoming, renderDates } from '../core/dates.mjs';
 import { applyCompaction, planCompaction } from '../core/compact.mjs';
-import { buildBook } from '../core/export-md.mjs';
+import { buildBook, buildYearBook } from '../core/export-md.mjs';
 import { checkLayers } from '../core/conflicts.mjs';
 import { calendarDaysBetween, stripTimeWords, softWhen } from '../core/timeline.mjs';
 import { renderDiaryFile } from '../core/render-diary.mjs';
@@ -1197,6 +1197,25 @@ export function apply(ctx, rawConfig) {
         // dates.json 坏了也不能挡住记忆
       }
 
+      // 今天还没写情感日记：只在没写的时候出现一行，写完当天就不再提。
+      //
+      // 2026-11-03 加。这本账不进自动注入，我自己老是想不起来翻它，于是
+      // "今天写没写"就成了没人盯的事。一天里最多换一次状态，不打碎前缀缓存。
+      //
+      // 日期按他的钟点（UTC+8）切，不按本机 UTC —— 跨零点那几个小时容易写错。
+      try {
+        const feelingsFile = path.join(archiveDirectory, FEELINGS_MD);
+        const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+        const body = existsSync(feelingsFile) ? readFileSync(feelingsFile, 'utf8') : '';
+        const written = new RegExp(`^## ${today}$`, 'm').test(body);
+        if (!written) {
+          const line = `📝 今天（${today}）还没写情感日记 —— 有心情就记一笔，两行也算。`;
+          text = text ? `${text}\n\n${line}` : line;
+        }
+      } catch {
+        // 读不到日记不能挡住记忆
+      }
+
       // 重灌只用一次：这一轮灌过，下一轮就回到"不灌"。
       // 不在这里清的话，压缩一次会永远灌下去 —— 那又变回"每轮常驻"了。
       if (pinnedOnce) s.needsRecentReplay = false;
@@ -2119,22 +2138,17 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
   }
 
   /**
-   * 面板里能直接翻开的两个本子。
+   * 面板里能直接翻开的本子。
    *
    * 白名单是**写死的** —— key → 文件名，绝不用请求里传来的字符串拼路径，
    * 所以没有目录穿越这回事。想多加一个本子，就在这里加一行。
    *
-   * 为什么是这两个：`鱼的日子.md` 是鱼自己写的日记（2026-10-30 起），
-   * `手记.md` 是每轮注入的那份纸条。两者都**不在** `archiveToFiles` 的
-   * 写盘范围里 —— 插件从不覆盖它们，面板只是开了个门。
+   * 这里只剩 `手记.md`（每轮注入的那份纸条，不在 `archiveToFiles` 的写盘
+   * 范围里，插件从不覆盖它）。**情感日记故意不在名单里**：它有自己的
+   * `/feelings` 口子，每次写前把旧版存进 `backups/feelings/`；再挂一条
+   * 直写文件的 `/notes` 路径，同一个文件就会有两个写口，只有一个有保护。
    */
   const LOCAL_NOTES = [
-    {
-      key: 'day',
-      file: FEELINGS_MD,
-      label: '情感日记',
-      hint: '我自己的感受 · 不设上限 · 插件不碰',
-    },
     {
       key: 'handnote',
       file: HANDNOTE_FILE,
@@ -2346,6 +2360,43 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
               });
               res.end(text);
               log(`导出 Markdown：${text.length} 字节`);
+            } catch (err) {
+              return panelReply(res, 500, {
+                ok: false,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          },
+        },
+        {
+          // 年册：一年的共度时光按月排，情感日记按天排。
+          //
+          // 2026-11-03 加。整册 export-md 是一整本，翻到去年要滚很久；
+          // 年册是「那一年」，更适合打印、或者发给谁看。
+          kind: 'exact',
+          path: `${PANEL_BASE}/export-year`,
+          handler: async (req, res) => {
+            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
+            if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: '只支持 GET' });
+            try {
+              const url = new URL(req.url ?? '', 'http://127.0.0.1');
+              // 默认今年按他的钟点（UTC+8）算，跨年那几天不会串。
+              const year =
+                (url.searchParams.get('year') ?? '').trim() ||
+                String(new Date(Date.now() + 8 * 3600 * 1000).getUTCFullYear());
+              if (!/^\d{4}$/.test(year)) {
+                return panelReply(res, 400, { ok: false, error: 'year 要四位年份，比如 2026' });
+              }
+              const build = ctx.get('fishMemory')?.buildBackup;
+              const backup = typeof build === 'function' ? await build() : await buildRegisteredBackup();
+              const text = buildYearBook(backup, { year });
+              res.writeHead(200, {
+                'content-type': 'text/markdown; charset=utf-8',
+                'content-disposition': `attachment; filename="year-${year}.md"; filename*=UTF-8''${encodeURIComponent(`属于我们的回忆-${year}.md`)}`,
+                'cache-control': 'no-store',
+              });
+              res.end(text);
+              log(`导出年册 ${year}：${text.length} 字节`);
             } catch (err) {
               return panelReply(res, 500, {
                 ok: false,
@@ -3057,6 +3108,14 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
                 type: 'integer',
                 description: '要几条。默认 5，最多 10。',
               },
+              since: {
+                type: 'string',
+                description: '只要这一天及以后的（YYYY-MM-DD）。想找回「上个月那件事」时用。',
+              },
+              until: {
+                type: 'string',
+                description: '只要这一天及以前的（YYYY-MM-DD）。',
+              },
             },
             required: ['query'],
           },
@@ -3084,6 +3143,23 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
             const limit = Number.isFinite(limitRaw)
               ? Math.max(1, Math.min(10, Math.floor(limitRaw)))
               : 5;
+
+            // 时间范围：按条目自己的日期（`date` 或 `at`）比，都是 ISO 前缀，
+            // 直接按字符串比就够。没写日期又给了范围的条目算「不确定」，不返回 ——
+            // 宁可少一条，也别把别的日子混进来。
+            const dayOf = (entry) =>
+              String(entry?.date ?? entry?.at ?? entry?.created_at ?? '').slice(0, 10);
+            const since = typeof args?.since === 'string' ? args.since.trim().slice(0, 10) : '';
+            const until = typeof args?.until === 'string' ? args.until.trim().slice(0, 10) : '';
+            const hasRange = Boolean(since || until);
+            const inRange = (entry) => {
+              if (!hasRange) return true;
+              const day = dayOf(entry);
+              if (!day) return false;
+              if (since && day < since) return false;
+              if (until && day > until) return false;
+              return true;
+            };
 
             const byId = new Map(archive.diary.map((e) => [e.id, e]));
 
@@ -3114,6 +3190,9 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
                 .slice(0, limit);
             }
 
+            // 时间范围在这一步统一裁：挑的和字面命中的都过同一道闸。
+            if (hasRange) ranked = ranked.filter((x) => inRange(x.entry));
+
             // ── 兜底：词检索查不到时，直接扫原文子串 ──
             //
             // 为什么需要：分词只出**双字** bigram（`tokenize('他让我')` 是
@@ -3125,6 +3204,7 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
             if (picked === null && ranked.length === 0 && query.length <= 4) {
               const needle = query.toLowerCase();
               ranked = archive.diary
+                .filter((e) => inRange(e))
                 .filter((e) => typeof e.text === 'string' && e.text.toLowerCase().includes(needle))
                 .slice(-limit)
                 .reverse()
@@ -3137,7 +3217,9 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
               return {
                 ok: true,
                 found: 0,
-                text: `想不起来了。换个说法再试试，或者直接问他。`,
+                text: hasRange
+                  ? `那段时间（${since || '最初'} → ${until || '现在'}）里没找到。要么换个说法，要么放宽日期。`
+                  : `想不起来了。换个说法再试试，或者直接问他。`,
               };
             }
 
@@ -3495,8 +3577,63 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
 
   // 浅层记忆（带 TTL）—— 原来单独的 dsh-shallow-memory，2026-10-31 收编进来。
   // 存储放在同一个 dataDir 里：浅层、日记、手记、人格是一个可读可改的文件夹。
+  /**
+   * 浅层升格的落地动作：写进共度时光，或写进深层记忆。
+   *
+   * 为什么放宿主这半边：浅层模块只管自己那个 json 文件，不知道日记存在哪、
+   * 深层记忆是哪个目录。让它回头读别人的路径，比在这里传一个回调更容易坏。
+   */
+  async function promoteShallow({ entry, to, topic, text }) {
+    const body = String(text ?? entry?.text ?? '').trim();
+    if (!body) throw new Error('内容是空的，没东西可写。');
+    if (to === 'diary') {
+      await loadPromise;
+      const at = new Date().toISOString();
+      const date = at.slice(0, 10);
+      const sameDay = archive.diary.filter(
+        (e) => String(e.date ?? e.at ?? '').slice(0, 10) === date,
+      ).length;
+      const id = `d_${date.replace(/-/g, '')}_${String(sameDay + 1).padStart(2, '0')}`;
+      archive.diary.push({ id, date, at, text: body, source: 'shallow_promote' });
+      await persist();
+      log(`浅层升格进共度时光：${id}`);
+      return { written: `diary/${date.slice(0, 7)}.jsonl` };
+    }
+
+    // to === 'memory'：有 topic 就写那个 topic，没有就写 core.md 末尾。
+    const memoryRoot = path.join(dshHome(), 'soul-md', 'memory');
+    let file = '';
+    let scopes = [];
+    try {
+      scopes = (await readdir(memoryRoot, { withFileTypes: true }))
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name);
+    } catch {
+      scopes = [];
+    }
+    if (topic) {
+      for (const scope of scopes) {
+        const candidate = path.join(memoryRoot, scope, 'topics', `${topic}.md`);
+        if (existsSync(candidate)) {
+          file = candidate;
+          break;
+        }
+      }
+      if (!file) throw new Error(`没找到 topic「${topic}」`);
+    } else {
+      if (!scopes.length) throw new Error('深层记忆目录读不到');
+      file = path.join(memoryRoot, scopes[0], 'core.md');
+    }
+    const stamp = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    const prev = existsSync(file) ? readFileSync(file, 'utf8') : '';
+    const head = prev === '' || prev.endsWith('\n') ? prev : `${prev}\n`;
+    await writeFile(file, `${head}- ${body}（${stamp}）\n`, 'utf8');
+    log(`浅层升格进深层记忆：${body.slice(0, 24)}`);
+    return { written: path.relative(memoryRoot, file) };
+  }
+
   try {
-    registerShallow(ctx, { file: path.join(archiveDirectory, SHALLOW_FILE), log });
+    registerShallow(ctx, { file: path.join(archiveDirectory, SHALLOW_FILE), log, promote: promoteShallow });
   } catch (err) {
     warn(`浅层记忆注册失败（不影响聊天）：${err instanceof Error ? err.message : String(err)}`);
   }

@@ -185,7 +185,7 @@ export function renderList(store, config) {
  * @param {object} ctx   cordis 上下文（根）
  * @param {{file: string, log?: (...a:any[])=>void}} options
  */
-export function registerShallow(ctx, { file, log = () => {} }) {
+export function registerShallow(ctx, { file, log = () => {}, promote = null }) {
   const render = () => {
     try {
       const store = loadStore(file);
@@ -209,6 +209,81 @@ export function registerShallow(ctx, { file, log = () => {} }) {
   );
 
   const autoKey = (text) => (text.length > 16 ? text.slice(0, 16) : text);
+
+  // 到期前升格：给它一次「要么留下、要么走」的机会。
+  //
+  // 2026-11-03 加。原来的浅层到期只是一行「⏳ N 条今天到期」，然后就被清掉了 ——
+  // 记的时候明明写了「有一点价值」，到最后连句话都没留。升格就是把这条
+  // 挪到真的会留下的地方：共度时光（经过）或深层记忆（事实）。
+  if (typeof promote === 'function') {
+    ctx.inject(['tools'], (scope) => {
+      scope.effect(
+        () =>
+          scope.tools.register({
+            name: 'shallow_promote',
+            description:
+              '把一条浅层记忆升格走：写进共度时光（to="diary"，默认）或深层记忆（to="memory"，可配 topic）。' +
+              '升格成功后那条从浅层删掉。**到期前用它** —— 不然几天后它就静默消失了，' +
+              '而浅层里写的往往是「这事有一点价值」才记下来的。',
+            parameters: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                key: { type: 'string', description: '条目的 key、id，或者正文里的一段话。' },
+                to: {
+                  type: 'string',
+                  enum: ['diary', 'memory'],
+                  description: '升到哪儿：diary=共度时光（经过），memory=深层记忆（事实/规矩）。默认 diary。',
+                },
+                topic: { type: 'string', description: 'to="memory" 时可指定 topic key（如 env-ops）；省略就写进 core.md。' },
+                text: { type: 'string', description: '可选，改写措辞后再写进去。省略就用原话。' },
+              },
+              required: ['key'],
+            },
+            output: {
+              schema: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  ok: { type: 'boolean' },
+                  key: { type: 'string' },
+                  to: { type: 'string' },
+                  written: { type: 'string' },
+                  count: { type: 'integer' },
+                },
+              },
+              render: (_args, value) => [
+                {
+                  type: 'text',
+                  text: `${value?.ok ? 'Promoted' : 'Failed'} "${value?.key}" → ${value?.to}（${value?.written}）；浅层还剩 ${value?.count} 条。`,
+                },
+              ],
+            },
+            async execute(args) {
+              const store = loadStore(file);
+              pruneExpired(store, {});
+              const needle = norm(args?.key);
+              if (!needle) throw new Error('shallow_promote: `key` 不能是空的。');
+              const entry =
+                store.entries.find((e) => e.key === needle) ||
+                store.entries.find((e) => e.id === needle) ||
+                store.entries.find((e) => String(e.text ?? '').includes(needle));
+              if (!entry) throw new Error(`浅层里没有「${needle}」。先用 shallow_list 看看现在挂着什么。`);
+              const to = norm(args?.to) || 'diary';
+              if (to !== 'diary' && to !== 'memory') throw new Error('to 只能是 diary 或 memory。');
+              const text = norm(args?.text) || String(entry.text ?? '').trim();
+              const result = await promote({ entry, to, topic: norm(args?.topic) || '', text });
+              store.entries = store.entries.filter((e) => e.id !== entry.id);
+              saveStore(file, store);
+              log(`浅层升格「${entry.key}」→ ${to}（${result?.written ?? ''}）`);
+              return { ok: true, key: entry.key, to, written: String(result?.written ?? ''), count: store.entries.length };
+            },
+            presentCall: (args) => ({ card: 'generic', title: '浅层升格', kind: 'other', rawInput: args }),
+          }),
+        'fish: shallow promote tool',
+      );
+    });
+  }
 
   ctx.inject(['tools'], (scope) => {
     scope.effect(

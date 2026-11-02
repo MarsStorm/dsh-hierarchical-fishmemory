@@ -2495,11 +2495,16 @@ window.__ModuleLoader__.load({
                 h(Ghost, { href: `${API}/export` }, '导出档案（.dshpack）'),
                 h(Ghost, { href: `${API}/backup` }, '整包备份（.json）'),
                 h(Ghost, { href: `${API}/export-md` }, '导出成册（.md）'),
+                h(
+                  Ghost,
+                  { href: `${API}/export-year?year=${new Date().getFullYear()}` },
+                  `年册（${new Date().getFullYear()} 年）`,
+                ),
               ),
               h(
                 'p',
                 { style: { margin: '10px 0 0', fontSize: 11.5, lineHeight: 1.7, color: C.text2 } },
-                '整包备份把四本账和人设卡收进一个 JSON，存在 ~/.dsh/backups/；换设备带它就行。想要能直接读、能打印的，用「导出成册」。',
+                '整包备份把四本账和人设卡收进一个 JSON，存在 ~/.dsh/backups/；换设备带它就行。想要能直接读、能打印的，用「导出成册」；只想翻某一年，用「年册」。',
               ),
             ),
             h(Card, { title: '从备份恢复' }, h(ImportBox)),

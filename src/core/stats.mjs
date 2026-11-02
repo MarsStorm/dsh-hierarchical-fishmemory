@@ -16,13 +16,14 @@ import { HANDNOTE_FILE, MAX_LINE_CHARS, parseHandNote } from "./handnote.mjs";
 import { listDiaryPaths, readJsonOrNull, readTextOrNull } from "./fsx.mjs";
 import { SHALLOW_FILE } from "./shallow.mjs";
 import { findDuplicates, findValueConflicts } from "./conflicts.mjs";
+import { estimateTokens } from "./tokenize.mjs";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const readTextDefault = readTextOrNull;
 const readJsonDefault = readJsonOrNull;
 
-/** 中文按 1.6 字/token 估，宁可估高一点，别让人以为还很空。 */
-const estimateTokens = (chars) => Math.ceil(chars / 1.6);
+// 估算只有一套：直接借 tokenize.mjs 那份（CJK 1 字/token、拉丁 3.5 字符/token），
+// 否则体检页的数字和注入日志里的 token 数会对不上。
 
 export function listDiaryFiles(diaryDir, options = {}) {
   return listDiaryPaths(diaryDir, options);
@@ -108,11 +109,8 @@ export function collectStatsFromDisk(options = {}) {
         .sort()
         .map((name) => {
           const key = name.replace(/\.md$/, "");
-          return {
-            key,
-            title: key,
-            chars: String(readText(join(dir, "topics", name)) ?? "").length,
-          };
+          const text = String(readText(join(dir, "topics", name)) ?? "");
+          return { key, title: key, chars: text.length, tokens: estimateTokens(text) };
         });
     } catch {
       topics = [];
@@ -122,7 +120,7 @@ export function collectStatsFromDisk(options = {}) {
     scopes.push({
       scope,
       coreChars,
-      coreTokens: estimateTokens(coreChars),
+      coreTokens: estimateTokens(core),
       topics,
       totalChars: coreChars + topics.reduce((sum, topic) => sum + topic.chars, 0),
     });
@@ -154,6 +152,7 @@ export function collectStats(options = {}) {
   const { memoryLayout, scopes = [], diaryDir, readText = readTextDefault } = options;
 
   const memoryScopes = [];
+  let injectedText = "";
   for (const scope of scopes) {
     let info = null;
     try {
@@ -162,20 +161,22 @@ export function collectStats(options = {}) {
       info = null;
     }
     if (!info || !info.exists) continue;
-    const coreChars = String(info.text ?? "").length;
+    const coreText = String(info.text ?? "");
+    injectedText += `${coreText}\n`;
+    const coreChars = coreText.length;
     const topics = (info.topics ?? []).map((topic) => {
-      let chars = 0;
+      let text = "";
       try {
-        chars = String(readText(topic.file) ?? "").length;
+        text = String(readText(topic.file) ?? "");
       } catch {
-        chars = 0;
+        text = "";
       }
-      return { key: topic.key, title: topic.title ?? topic.key, chars };
+      return { key: topic.key, title: topic.title ?? topic.key, chars: text.length, tokens: estimateTokens(text) };
     });
     memoryScopes.push({
       scope,
       coreChars,
-      coreTokens: estimateTokens(coreChars),
+      coreTokens: estimateTokens(coreText),
       topics,
       totalChars: coreChars + topics.reduce((sum, t) => sum + t.chars, 0),
     });
@@ -219,9 +220,8 @@ export function collectStats(options = {}) {
     }
   }
 
-  const injectedChars =
-    memoryScopes.reduce((sum, item) => sum + item.coreTokens * 1.6, 0) +
-    handnoteLines.join("\n").length;
+  // 注入的那一坨：各 scope 的 core + 人格手记全文。用同一套估算算它。
+  injectedText += handnoteText;
 
   return {
     generatedAt: new Date().toISOString(),
@@ -246,8 +246,8 @@ export function collectStats(options = {}) {
       expired: Array.isArray(shallow.expired) ? shallow.expired.length : 0,
     },
     estimate: {
-      injectedTokens: estimateTokens(Math.round(injectedChars)),
-      note: "按中文 1.6 字/token 粗估，含核心记忆与人格手记（不含共度时光的按需注入）",
+      injectedTokens: estimateTokens(injectedText),
+      note: "与注入预算同一套估算（CJK 1 字/token），含核心记忆与人格手记（不含共度时光的按需注入）",
     },
   };
 }

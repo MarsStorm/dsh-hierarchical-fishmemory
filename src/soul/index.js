@@ -111,7 +111,6 @@ const Config = z.object({
   /** Opt back into host prompt-variable interpolation for persona and memory text. */
   allowTemplates: z.boolean().default(false),
   watch: z.boolean().default(true),
-  debounceMs: z.number().default(300),
   /** Skip persona + memory injection in delegated child sessions (opt-in; default keeps v0.7 behavior). */
   skipSubagents: z.boolean().default(false),
   soulMaxBytes: z.number().default(64 * 1024),

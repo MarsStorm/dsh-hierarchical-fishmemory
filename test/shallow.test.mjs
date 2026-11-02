@@ -63,3 +63,62 @@ test('没有快过期的条目就不加提醒行', async () => {
   const text = renderSection(store, { ttlDays: 7, warnDays: 2 });
   assert.doesNotMatch(text, /今天到期/);
 });
+
+/* ── 到期前升格 ── */
+
+async function withShallow(promote, run) {
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { registerShallow } = await import('../src/core/shallow.mjs');
+  const dir = await mkdtemp(join(tmpdir(), 'shallow-'));
+  const tools = new Map();
+  const scope = {
+    effect: (fn) => fn(),
+    tools: { register: (tool) => { tools.set(tool.name, tool); return () => {}; } },
+  };
+  const ctx = {
+    effect: (fn) => fn(),
+    systemPrompt: { section: () => {} },
+    on: () => {},
+    inject: (_deps, fn) => fn(scope),
+  };
+  const storeFile = join(dir, 'shallow.json');
+  registerShallow(ctx, { file: storeFile, promote });
+  try {
+    return await run(tools, dir, storeFile);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+test('升格：交给宿主落地，成功后从浅层删掉', async () => {
+  const calls = [];
+  await withShallow(async (payload) => { calls.push(payload); return { written: 'diary/2026-11.jsonl' }; }, async (tools, dir, storeFile) => {
+    await tools.get('shallow_note').execute({ text: '他说过想学做饭', key: '做饭' });
+    const out = await tools.get('shallow_promote').execute({ key: '做饭' });
+    assert.equal(out.ok, true);
+    assert.equal(out.to, 'diary');
+    assert.equal(out.count, 0);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].text, '他说过想学做饭');
+    // 文件里也真的没了，不只是返回值说没了
+    const { readFile } = await import('node:fs/promises');
+    const store = JSON.parse(await readFile(storeFile, 'utf8'));
+    assert.equal(store.entries.length, 0);
+  });
+});
+
+test('升格：key 找不到时说清楚，不改动浅层', async () => {
+  await withShallow(async () => ({ written: 'x' }), async (tools) => {
+    await tools.get('shallow_note').execute({ text: '留着不动', key: '在的' });
+    await assert.rejects(() => tools.get('shallow_promote').execute({ key: '不在的' }), /浅层里没有/);
+  });
+});
+
+test('升格：to 只认 diary / memory', async () => {
+  await withShallow(async () => ({ written: 'x' }), async (tools) => {
+    await tools.get('shallow_note').execute({ text: '一句话', key: 'k' });
+    await assert.rejects(() => tools.get('shallow_promote').execute({ key: 'k', to: 'trash' }), /diary 或 memory/);
+  });
+});
