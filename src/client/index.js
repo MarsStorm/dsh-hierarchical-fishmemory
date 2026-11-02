@@ -938,6 +938,15 @@ window.__ModuleLoader__.load({
               '整包备份（.json）',
             ),
             h(
+              'a',
+              {
+                href: `${API}/export-md`,
+                download: '',
+                style: { ...linkStyle(C.brand), fontSize: 13, marginLeft: 16 },
+              },
+              '导出成册（.md）',
+            ),
+            h(
               'p',
               { style: { margin: '10px 0 0', fontSize: 12, lineHeight: 1.7, color: C.text2 } },
               '它就是一个普通文件夹，在 ~/.dsh/feiyu-diary/。可以直接打开、改、拷走。',
@@ -945,7 +954,7 @@ window.__ModuleLoader__.load({
             h(
               'p',
               { style: { margin: '6px 0 0', fontSize: 12, lineHeight: 1.7, color: C.text2 } },
-              '整包备份把四本账和人设卡收进一个 JSON，存在 ~/.dsh/backups/；换设备带它就行。',
+              '整包备份把四本账和人设卡收进一个 JSON，存在 ~/.dsh/backups/；换设备带它就行。想要能直接读、能打印的，用「导出成册」。',
             ),
             h(HealthBox),
             h(ReviewBox),

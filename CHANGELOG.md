@@ -1,5 +1,15 @@
 # 更新日志
 
+## 1.6.0 — 2026-11-03
+
+- **快到的日子**：新增 `src/core/dates.mjs`，读数据目录下的 `dates.json`（`[{name, month, day, emoji?}]`），
+  把 7 天内要到的纪念日每轮注入一行。粒度是「天」，一天最多变一次，不会打碎 prompt 前缀缓存。
+  时区固定按 UTC+8 算 —— 否则凌晨那几个小时会差一天。
+- **导出成册**：新增 `src/core/export-md.mjs` 与 `GET /feiyu-diary/export-md`，把四本账 + 人设卡
+  渲染成一册可读的 Markdown（人设卡 / 深层记忆 / 共度时光 / 情感日记 / 人格手记 / 浅层记忆）。
+  面板「档案」栏多一个「导出成册（.md）」。
+- 测试 72 → 80 项，新增 `test/dates.test.mjs`（6）与 `test/export-md.test.mjs`（2）。
+
 ## 1.5.0 — 2026-11-02
 
 - **合并还原**：`fish_restore({ mode: "merge" })`（面板 `/cloud/restore` 也认 `mode`）只把备份里的共度时光与浅层并进来，同 id 保留本地那份、冲突单独报出来；深层记忆、情感日记、人格手记在合并模式下不覆盖，列进 `skipped`。整包覆盖仍是默认（换设备用）。

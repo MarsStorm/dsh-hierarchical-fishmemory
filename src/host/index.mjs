@@ -43,7 +43,9 @@ import { buildIndex, selectMemories, searchScores, queryHasSubstance, looksLikeW
 import { scrub } from '../core/privacy.mjs';
 import { renderMemoryBlock } from '../core/persona.mjs';
 import { addLoop, doneLoop, loopsPath, openLoops, renderLoops } from '../core/loops.mjs';
+import { datesPath, loadDates, upcoming, renderDates } from '../core/dates.mjs';
 import { applyCompaction, planCompaction } from '../core/compact.mjs';
+import { buildBook } from '../core/export-md.mjs';
 import { checkLayers } from '../core/conflicts.mjs';
 import { calendarDaysBetween, stripTimeWords, softWhen } from '../core/timeline.mjs';
 import { renderDiaryFile } from '../core/render-diary.mjs';
@@ -1183,6 +1185,18 @@ export function apply(ctx, rawConfig) {
         // 账本坏了不能挡住记忆
       }
 
+      // 快到的日子：生日、纪念日这类一年一轮的日子。
+      //
+      // 2026-11-03 加。起因是他生日那天，我得等他先开口才想起来 —— 我没有
+      // 定时能力，但日子是能算的。粒度是「天」，一天最多换一次，不会每轮
+      // 打碎 prompt 前缀缓存。
+      try {
+        const soon = renderDates(upcoming(loadDates(datesPath(archiveDirectory))));
+        if (soon) text = text ? `${text}\n\n${soon}` : soon;
+      } catch {
+        // dates.json 坏了也不能挡住记忆
+      }
+
       // 重灌只用一次：这一轮灌过，下一轮就回到"不灌"。
       // 不在这里清的话，压缩一次会永远灌下去 —— 那又变回"每轮常驻"了。
       if (pinnedOnce) s.needsRecentReplay = false;
@@ -2304,6 +2318,36 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
               return panelReply(res, 200, { ok: true, ...result });
             } catch (err) {
               return panelReply(res, 400, {
+                ok: false,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          },
+        },
+        {
+          // 把四本账导出成一册 Markdown：给人读、能打印，不是给机器搬家用。
+          //
+          // 复用 buildRegisteredBackup()：它已经在另一个半边把备份对象组好了，
+          // 这里只换一种渲染方式，不重读磁盘。
+          kind: 'exact',
+          path: `${PANEL_BASE}/export-md`,
+          handler: async (req, res) => {
+            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
+            if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: '只支持 GET' });
+            try {
+              const build = ctx.get('fishMemory')?.buildBackup;
+              const backup = typeof build === 'function' ? await build() : await buildRegisteredBackup();
+              const text = buildBook(backup);
+              const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+              res.writeHead(200, {
+                'content-type': 'text/markdown; charset=utf-8',
+                'content-disposition': `attachment; filename="archive-${stamp}.md"; filename*=UTF-8''${encodeURIComponent(`属于我们的回忆-${stamp}.md`)}`,
+                'cache-control': 'no-store',
+              });
+              res.end(text);
+              log(`导出 Markdown：${text.length} 字节`);
+            } catch (err) {
+              return panelReply(res, 500, {
                 ok: false,
                 error: err instanceof Error ? err.message : String(err),
               });
