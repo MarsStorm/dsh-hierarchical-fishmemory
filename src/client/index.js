@@ -444,11 +444,121 @@ window.__ModuleLoader__.load({
     // 2026-10-31 加。四本账有没有在悄悄丢东西，光看面板是看不出来的：
     // 浅层被挤掉、手记被截断、core 与手记写重了，全都不报错。
     // 这里只读 /stats，不做任何写操作。
+    // 2026-11-03 加：情感日记原先只有我能落笔，面板只读。
+    // 现在给他一个编辑框 —— 这本账是我们两个人的，凭什么我只能一个人写。
+    function FeelingsBox() {
+      const [text, setText] = useState('');
+      const [original, setOriginal] = useState('');
+      const [busy, setBusy] = useState(false);
+      const [msg, setMsg] = useState('');
+      const [err, setErr] = useState('');
+
+      const load = async () => {
+        setBusy(true);
+        try {
+          const res = await fetch(`${API}/feelings`, { credentials: 'same-origin' });
+          const data = await res.json();
+          if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+          setText(data.text || '');
+          setOriginal(data.text || '');
+          setErr('');
+          setMsg('');
+        } catch (e) {
+          setErr(String(e && e.message ? e.message : e));
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      useEffect(() => {
+        load();
+      }, []);
+
+      const save = async () => {
+        setBusy(true);
+        setMsg('');
+        setErr('');
+        try {
+          const res = await fetch(`${API}/feelings`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text }),
+          });
+          const data = await res.json();
+          if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+          setOriginal(text);
+          setMsg(
+            data.unchanged
+              ? '和刚才一样，没动。'
+              : `已保存（${data.chars} 字符）${data.snapshot ? `· 旧版备份在 ${data.snapshot}` : ''}`,
+          );
+        } catch (e) {
+          setErr(String(e && e.message ? e.message : e));
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const delta = [...text].length - [...original].length;
+      return h('div', { style: { marginTop: 16 } },
+        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+          h('div', { style: { fontSize: 13, fontWeight: 600 } }, '情感日记'),
+          h('button', {
+            type: 'button',
+            onClick: load,
+            disabled: busy,
+            style: { fontSize: 12, padding: '3px 10px', borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: C.text2, cursor: busy ? 'default' : 'pointer' },
+          }, '重新读'),
+        ),
+        h('p', { style: { margin: '4px 0 6px', fontSize: 11, lineHeight: 1.6, color: C.text2 } },
+          '这本不设上限、不衰减，保存前会把旧版存一份到 backups/feelings/。'),
+        h('textarea', {
+          value: text,
+          onChange: (e) => setText(e.target.value),
+          rows: 14,
+          spellCheck: false,
+          style: { width: '100%', fontFamily: 'ui-monospace,Consolas,monospace', fontSize: 12, lineHeight: 1.7, padding: 8, borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: 'inherit', resize: 'vertical' },
+        }),
+        h('div', { style: { marginTop: 6, display: 'flex', gap: 10, alignItems: 'center', fontSize: 11, color: C.text2 } },
+          h('button', {
+            type: 'button',
+            onClick: save,
+            disabled: busy || text === original,
+            style: { fontSize: 12, padding: '3px 12px', borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: text === original ? C.text2 : 'inherit', cursor: busy || text === original ? 'default' : 'pointer' },
+          }, busy ? '保存中…' : '保存'),
+          h('span', null, `现在 ${[...text].length} 字符${delta ? `（比读入时 ${delta > 0 ? '+' : ''}${delta}）` : ''}`),
+          msg ? h('span', null, msg) : null,
+          err ? h('span', { style: { color: C.err } }, err) : null,
+        ),
+      );
+    }
+
     function HealthBox() {
       const [state, setState] = useState(null);
       const [error, setError] = useState('');
       const [busy, setBusy] = useState(false);
       const [noteMsg, setNoteMsg] = useState('');
+
+      // 2026-11-03 加：重复句不再只能删手记那一份 —— 哪层都能删。
+      // 服务端按 target 找文件，仍然只认整行精确匹配。
+      const removeLine = async (target, line) => {
+        setNoteMsg('');
+        try {
+          const res = await fetch(`${API}/layer/remove`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target, line }),
+          });
+          const data = await res.json();
+          if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+          setNoteMsg(`已删掉 ${data.removed} 行（${data.target}）`);
+          await read();
+        } catch (err) {
+          setNoteMsg(String(err && err.message ? err.message : err));
+        }
+      };
 
       // 2026-11-02 加：体检页原先只报「这句深层记忆里也有」，看得见但动不了。
       // 现在每条旁边一颗按钮，按整行匹配删掉手记里那一份（手记是现读磁盘的，
@@ -465,6 +575,31 @@ window.__ModuleLoader__.load({
           const data = await res.json();
           if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
           setNoteMsg(`已从人格手记删掉 ${data.removed} 行`);
+          await read();
+        } catch (err) {
+          setNoteMsg(String(err && err.message ? err.message : err));
+        }
+      };
+
+      // 2026-11-03 加：冲突不再只是报警，可以一句话统一成某个值。
+      // 只改「出现过那个值」的行，别的字一个不碰。
+      const unifyValue = async (conflict, value) => {
+        setNoteMsg('');
+        let changed = 0;
+        try {
+          for (const line of conflict.lines) {
+            if (line.value === value) continue;
+            if (!line.target || line.target.startsWith('shallow:')) continue;
+            const res = await fetch(`${API}/layer/value`, {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ target: line.target, from: line.value, to: value }),
+            });
+            const data = await res.json();
+            if (res.ok && data.ok) changed += data.changed || 0;
+          }
+          setNoteMsg(changed ? `统一成「${value}」，改了 ${changed} 行` : `没有要改的行（浅层请手动改）`);
           await read();
         } catch (err) {
           setNoteMsg(String(err && err.message ? err.message : err));
@@ -534,18 +669,46 @@ window.__ModuleLoader__.load({
             row('浅层', `${d.shallow.live} 条（快到期 ${d.shallow.expiring}）`),
             row('每轮注入估计', `约 ${d.estimate.injectedTokens} token`),
           ),
-          d.memory.duplicateHints.length
-            ? h('div', { style: { marginTop: 8, fontSize: 12, color: C.warn || C.text2 } },
-                `⚠ 有 ${d.memory.duplicateHints.length} 句在深层记忆和人格手记里各写了一遍：`,
-                ...d.memory.duplicateHints.slice(0, 3).map((item, i) =>
-                  h('div', { key: i, style: { opacity: 0.85, display: 'flex', gap: 8, alignItems: 'baseline' } },
-                    h('span', null, `· ${item.line.slice(0, 40)}`),
-                    h('button', {
-                      type: 'button',
-                      className: '__sm_btn',
-                      style: { fontSize: 11, padding: '1px 6px' },
-                      onClick: () => dropNote(item.line),
-                    }, '删掉这条'))))
+          (d.duplicates && d.duplicates.length)
+            ? h('div', { style: { marginTop: 8, fontSize: 12 } },
+                `⚠ 有 ${d.duplicates.length} 句写了两遍：`,
+                ...d.duplicates.slice(0, 4).map((item, i) =>
+                  h('div', { key: `d${i}`, style: { opacity: 0.85, display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' } },
+                    h('span', null, `· ${item.text.slice(0, 36)}`),
+                    item.againTarget
+                      ? h('button', {
+                          type: 'button',
+                          className: '__sm_btn',
+                          style: { fontSize: 11, padding: '1px 6px' },
+                          onClick: () => removeLine(item.againTarget, item.text),
+                        }, `删掉${item.again}那份`)
+                      : null,
+                    (item.firstTarget && item.firstTarget !== item.againTarget)
+                      ? h('button', {
+                          type: 'button',
+                          className: '__sm_btn',
+                          style: { fontSize: 11, padding: '1px 6px' },
+                          onClick: () => removeLine(item.firstTarget, item.text),
+                        }, `删掉${item.first}那份`)
+                      : null)))
+            : null,
+          (d.conflicts && d.conflicts.length)
+            ? h('div', { style: { marginTop: 8, fontSize: 12 } },
+                `⚠ 有 ${d.conflicts.length} 样东西被写出了不同的值：`,
+                ...d.conflicts.map((conflict, ci) =>
+                  h('div', { key: `c${ci}`, style: { marginTop: 6, paddingLeft: 8, opacity: 0.9 } },
+                    h('div', { style: { fontSize: 11, color: C.text2 } }, `${conflict.kind}：${conflict.values.join(' / ')}`),
+                    ...conflict.lines.map((line, li) =>
+                      h('div', { key: `c${ci}l${li}`, style: { display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 11 } },
+                        h('span', { style: { opacity: 0.7 } }, `${line.layer}:`),
+                        h('span', null, line.line.slice(0, 46)),
+                        h('button', {
+                          type: 'button',
+                          className: '__sm_btn',
+                          style: { fontSize: 11, padding: '1px 6px' },
+                          onClick: () => unifyValue(conflict, line.value),
+                        }, `都以「${line.value}」为准`))
+                    ))))
             : null,
           noteMsg ? h('div', { style: { marginTop: 4, fontSize: 11, color: C.text2 } }, noteMsg) : null,
           h('p', { style: { margin: '6px 0 0', fontSize: 11, lineHeight: 1.6, color: C.text2 } }, d.estimate.note),
@@ -956,6 +1119,7 @@ window.__ModuleLoader__.load({
               { style: { margin: '6px 0 0', fontSize: 12, lineHeight: 1.7, color: C.text2 } },
               '整包备份把四本账和人设卡收进一个 JSON，存在 ~/.dsh/backups/；换设备带它就行。想要能直接读、能打印的，用「导出成册」。',
             ),
+            h(FeelingsBox),
             h(HealthBox),
             h(ReviewBox),
             h(ImportBox),

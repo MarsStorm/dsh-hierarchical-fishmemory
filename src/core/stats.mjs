@@ -14,6 +14,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { FEELINGS_MD } from "./files.mjs";
 import { HANDNOTE_FILE, MAX_LINE_CHARS, parseHandNote } from "./handnote.mjs";
 import { SHALLOW_FILE } from "./shallow.mjs";
+import { findDuplicates, findValueConflicts } from "./conflicts.mjs";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const readTextDefault = (file) => {
@@ -305,4 +306,81 @@ export function collectReview(options = {}) {
     recent,
     lookback: sameDayLastTime,
   };
+}
+
+/**
+ * 层间体检的「可操作版」：跟 checkLayers 算的是同一件事，但每条都带上
+ * 这一层对应的**文件目标**（`core:<scope>` / `topic:<scope>:<key>` /
+ * `handnote` / `feelings`），好让面板上的按钮知道该改哪个文件。
+ *
+ * 只读不写。写盘的活儿在 host 的 `/layer/value` 路由里。
+ */
+export function collectLayerReport(options = {}) {
+  const { memoryRoot, diaryDir, readText = readTextDefault, readdir = readdirSync } = options;
+  const layers = [];
+  const push = (name, target, text) => {
+    const lines = String(text ?? '').split("\n").filter((l) => l.trim() !== "");
+    if (lines.length) layers.push({ name, target, lines });
+  };
+  let scopeNames = [];
+  try {
+    scopeNames = readdir(memoryRoot, { withFileTypes: true })
+      .filter((item) => item.isDirectory())
+      .map((item) => item.name)
+      .sort();
+  } catch {
+    scopeNames = [];
+  }
+  for (const scope of scopeNames) {
+    const dir = join(memoryRoot, scope);
+    push(`深层 ${scope}`, `core:${scope}`, readText(join(dir, "core.md")));
+    let names = [];
+    try {
+      names = readdir(join(dir, "topics")).filter((name) => name.endsWith(".md")).sort();
+    } catch {
+      names = [];
+    }
+    for (const name of names) {
+      const key = name.replace(/\.md$/, "");
+      push(`深层 ${scope}/${key}`, `topic:${scope}:${key}`, readText(join(dir, "topics", name)));
+    }
+  }
+  push("人格手记", "handnote", readText(join(diaryDir, HANDNOTE_FILE)));
+  push("情感日记", "feelings", readText(join(diaryDir, FEELINGS_MD)));
+  try {
+    const store = JSON.parse(String(readText(join(diaryDir, SHALLOW_FILE)) ?? "{}") || "{}");
+    for (const entry of store.entries ?? []) {
+      push(`浅层 ${entry?.key ?? ""}`.trim(), `shallow:${entry?.key ?? ""}`, entry?.text ?? "");
+    }
+  } catch {
+    /* 浅层读不出来就不参与体检 */
+  }
+  const targetOf = (name) => layers.find((l) => l.name === name)?.target ?? "";
+  const duplicates = findDuplicates(layers).map((d) => ({
+    ...d,
+    firstTarget: targetOf(d.first),
+    againTarget: targetOf(d.again),
+  }));
+  // 冲突只报「同一个文件里自己跟自己打架」的 —— 比如 core.md 一处写端口
+  // 3080、另一处写 3095。不同文件各写各的版本号（插件 v1.6.0、DSH v1.5.1）
+  // 是正常现象，一律报出来只会变成噪音，那就没人看了。
+  const conflicts = findValueConflicts(layers)
+    .map((c) => ({
+      ...c,
+      lines: c.lines.map((line) => ({ ...line, target: targetOf(line.layer) })),
+    }))
+    .map((c) => {
+      const byTarget = new Map();
+      for (const line of c.lines) {
+        if (!byTarget.has(line.target)) byTarget.set(line.target, []);
+        byTarget.get(line.target).push(line);
+      }
+      const real = [...byTarget.entries()].filter(
+        ([, list]) => new Set(list.map((l) => l.value)).size > 1,
+      );
+      if (!real.length) return null;
+      return { ...c, lines: real.flatMap(([, list]) => list) };
+    })
+    .filter(Boolean);
+  return { duplicates, conflicts };
 }

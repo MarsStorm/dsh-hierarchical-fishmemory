@@ -66,7 +66,7 @@ import {
 import { resolveConfig, buildSchema, CONFIG_SPEC } from '../core/config.mjs';
 import { registerShallow, SHALLOW_FILE } from '../core/shallow.mjs';
 import { summarizeBackup, writeBackupFile, backupFileName, buildRegisteredBackup, restoreViaRegistered } from '../core/backup.mjs';
-import { collectReview, collectStatsFromDisk } from '../core/stats.mjs';
+import { collectLayerReport, collectReview, collectStatsFromDisk } from '../core/stats.mjs';
 import {
   downloadRemoteText,
   explainWebdavError,
@@ -2355,6 +2355,154 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
           },
         },
         {
+          // 情感日记：面板里能读能改。
+          //
+          // 为什么走服务端：文件在 $DSH_HOME 下，浏览器碰不到；更要紧的是
+          // 写之前要自动存一份旧版 —— 这是整套记忆里唯一不会被别的进程
+          // 重写的一本账，覆盖了就真没了。
+          kind: 'exact',
+          path: `${PANEL_BASE}/feelings`,
+          handler: async (req, res) => {
+            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
+            const file = path.join(archiveDirectory, FEELINGS_MD);
+            if (req.method === 'GET') {
+              let text = '';
+              try {
+                text = readFileSync(file, 'utf8');
+              } catch {
+                text = '';
+              }
+              return panelReply(res, 200, {
+                ok: true,
+                text,
+                chars: [...text].length,
+                lines: text ? text.split('\n').length : 0,
+              });
+            }
+            if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: '只支持 GET / POST' });
+            try {
+              const body = JSON.parse((await readPanelTextBody(req, { limit: 1024 * 1024 })) || '{}');
+              const text = String(body.text ?? '');
+              if (!text.trim()) return panelReply(res, 400, { ok: false, error: '内容不能为空（要整篇删掉就自己去删文件）' });
+              let previous = '';
+              try {
+                previous = readFileSync(file, 'utf8');
+              } catch {
+                previous = '';
+              }
+              if (previous === text) return panelReply(res, 200, { ok: true, unchanged: true, chars: [...text].length });
+              let snapshot = '';
+              if (previous) {
+                const dir = path.join(dshHome(), 'backups', 'feelings');
+                mkdirSync(dir, { recursive: true });
+                snapshot = path.join(dir, `${new Date().toISOString().replace(/[:.]/g, '-')}.md`);
+                writeFileSync(snapshot, previous);
+              }
+              writeFileSync(file, text.endsWith('\n') ? text : `${text}\n`);
+              log(`情感日记已保存（${[...text].length} 字符）`);
+              return panelReply(res, 200, { ok: true, chars: [...text].length, snapshot });
+            } catch (err) {
+              return panelReply(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+            }
+          },
+        },
+        {
+          // 体检页「以这条为准」：把某一层里旧的值统一成新的值。
+          //
+          // 只替换「出现了这个值」的行，整行不动别的字；找不到就报错，
+          // 不做模糊匹配 —— 记忆文件里改错一个字，代价比漏改大。
+          kind: 'exact',
+          path: `${PANEL_BASE}/layer/value`,
+          handler: async (req, res) => {
+            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
+            if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: '只支持 POST' });
+            try {
+              const body = JSON.parse((await readPanelTextBody(req, { limit: 64 * 1024 })) || '{}');
+              const target = String(body.target ?? '');
+              const memoryRoot = path.join(dshHome(), 'soul-md', 'memory');
+              let file = '';
+              if (target.startsWith('core:')) {
+                file = path.join(memoryRoot, target.slice(5), 'core.md');
+              } else if (target.startsWith('topic:')) {
+                const rest = target.slice(6);
+                const idx = rest.indexOf(':');
+                if (idx > 0) file = path.join(memoryRoot, rest.slice(0, idx), 'topics', `${rest.slice(idx + 1)}.md`);
+              } else if (target === 'handnote') {
+                file = path.join(archiveDirectory, HANDNOTE_FILE);
+              } else if (target === 'feelings') {
+                file = path.join(archiveDirectory, FEELINGS_MD);
+              }
+              if (!file) return panelReply(res, 400, { ok: false, error: '不认识这一层（浅层请在面板里改）' });
+              const from = String(body.from ?? '').trim();
+              const to = String(body.to ?? '').trim();
+              if (!from || !to) return panelReply(res, 400, { ok: false, error: '缺 from / to' });
+              if (!existsSync(file)) return panelReply(res, 404, { ok: false, error: '这一层的文件不存在' });
+              const lines = readFileSync(file, 'utf8').split('\n');
+              let changed = 0;
+              const next = lines.map((line) => {
+                if (!line.includes(from)) return line;
+                changed += 1;
+                return line.split(from).join(to);
+              });
+              if (changed === 0) return panelReply(res, 404, { ok: false, error: `这一层里找不到 ${from}` });
+              writeFileSync(file, next.join('\n'));
+              log(`层间冲突统一成 ${to}（${changed} 行，${target}）`);
+              return panelReply(res, 200, { ok: true, changed, target });
+            } catch (err) {
+              return panelReply(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+            }
+          },
+        },
+        {
+          // 体检页「删掉重复的那一份」：不管重复落在哪一层都能删。
+          //
+          // 跟 `/handnote/delete` 的区别：那个只认手记，这个按 target 认
+          // 文件（`core:<scope>` / `topic:<scope>:<key>` / `handnote` /
+          // `feelings`）。仍然只做「整行精确匹配」，不做模糊删除。
+          kind: 'exact',
+          path: `${PANEL_BASE}/layer/remove`,
+          handler: async (req, res) => {
+            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
+            if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: '只支持 POST' });
+            try {
+              const body = JSON.parse((await readPanelTextBody(req, { limit: 64 * 1024 })) || '{}');
+              const target = String(body.target ?? '');
+              const memoryRoot = path.join(dshHome(), 'soul-md', 'memory');
+              let file = '';
+              if (target.startsWith('core:')) {
+                file = path.join(memoryRoot, target.slice(5), 'core.md');
+              } else if (target.startsWith('topic:')) {
+                const rest = target.slice(6);
+                const idx = rest.indexOf(':');
+                if (idx > 0) file = path.join(memoryRoot, rest.slice(0, idx), 'topics', `${rest.slice(idx + 1)}.md`);
+              } else if (target === 'handnote') {
+                file = path.join(archiveDirectory, HANDNOTE_FILE);
+              } else if (target === 'feelings') {
+                file = path.join(archiveDirectory, FEELINGS_MD);
+              }
+              if (!file) return panelReply(res, 400, { ok: false, error: '不认识这一层（浅层请用 shallow_forget）' });
+              const wanted = String(body.line ?? '').trim().replace(/^[-*+]\s+/, '');
+              if (!wanted) return panelReply(res, 400, { ok: false, error: '没给要删的那一行（line）' });
+              if (!existsSync(file)) return panelReply(res, 404, { ok: false, error: '这一层的文件不存在' });
+              const keep = [];
+              let removed = 0;
+              for (const line of readFileSync(file, 'utf8').split('\n')) {
+                if (line.trim().replace(/^[-*+]\s+/, '').trim() === wanted) {
+                  removed += 1;
+                  continue;
+                }
+                keep.push(line);
+              }
+              if (!removed) return panelReply(res, 404, { ok: false, error: '这一层里找不到那一行' });
+              writeFileSync(file, keep.join('\n'));
+              log(`删掉重复的一行（${target}），共 ${removed} 行`);
+              return panelReply(res, 200, { ok: true, removed, target });
+            } catch (err) {
+              return panelReply(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+            }
+          },
+        },
+        {
           // 记忆体检：四本账条数、体积、注入估算、重复提示。
           //
           // 只读不写。走磁盘扫描而不是 memoryLayout —— 两个 cordis 入口的模块
@@ -2368,7 +2516,8 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
               const memoryRoot = path.join(dshHome(), 'soul-md', 'memory');
               const diaryDir = path.join(dshHome(), 'feiyu-diary');
               const stats = collectStatsFromDisk({ memoryRoot, diaryDir });
-              return panelReply(res, 200, { ok: true, ...stats });
+              const layers = collectLayerReport({ memoryRoot, diaryDir });
+              return panelReply(res, 200, { ok: true, ...stats, ...layers });
             } catch (err) {
               return panelReply(res, 500, {
                 ok: false,
