@@ -2746,7 +2746,12 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
         },
       ];
       const disposers = routes.map((r) => scope.webServer.register(r));
-      log(`面板接口已注册：${PANEL_BASE}/{state,forget,notes,export,backup,restore,cloud,cloud/config,cloud/test,cloud/config-backup,cloud/config-restore,cloud/backups,cloud/restore}`);
+      // 清单从 routes 现算，别手写：手写过的那版已经漏掉一个（export-md）。
+      const routeNames = routes
+        .map((r) => String(r.path ?? '').slice(PANEL_BASE.length).replace(/^\//, ''))
+        .filter(Boolean)
+        .join(',');
+      log(`面板接口已注册：${PANEL_BASE}/{${routeNames}}`);
       return () => {
         for (const d of disposers.reverse()) {
           try {
