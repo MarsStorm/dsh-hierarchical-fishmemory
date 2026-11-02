@@ -213,7 +213,7 @@ dsh plugin --profile web add github:MarsStorm/dsh-hierarchical-fishmemory
 ### 怎么卸掉
 
 ```bash
-dsh plugin --profile web remove dsh-hierarchical-fishmemory   # 然后同样跑 .restore-local.sh
+dsh plugin --profile web remove dsh-hierarchical-fishmemory
 ```
 
 **记忆不会跟着删。** 想彻底清干净，再手动删掉 `~/.dsh/feiyu-diary/` 整个目录。

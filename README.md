@@ -135,8 +135,8 @@ dsh plugin --profile web add github:MarsStorm/dsh-hierarchical-fishmemory
 dsh plugin --profile web add link:/abs/path/to/dsh-hierarchical-fishmemory
 ```
 
-> ⚠️ 如果你的 profile 里还有 `@local/*`（本地 link 的包），`dsh plugin add` 会跑 pnpm
-> 把它们剪掉；装完记得跑你自己那份 `.restore-local.sh`（如果有）。
+> 如果你的 profile 里还有 `@local/*`（本地 link 的包）：旧版 DSHBox 的 `dsh plugin add`
+> 会跑 pnpm 把它们剪掉；DSHBox v1.5.1 起随包插件已写进 profile 的 `dependencies`，不再有这个问题。
 
 装完**重启 Harness**：服务端要重新加载，客户端 bundle 也要重新拉。档案目录会自动创建：
 
