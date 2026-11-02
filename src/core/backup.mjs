@@ -200,8 +200,8 @@ export function registerRestoreHandler(restore) {
 }
 
 /** 面板上传备份时走这条路；没人注册就抛，让面板回 503。 */
-export async function restoreViaRegistered({ text, confirm, sourceLabel } = {}) {
-  for (const restore of restorers()) return await restore({ text, confirm, sourceLabel });
+export async function restoreViaRegistered({ text, confirm, sourceLabel, mode } = {}) {
+  for (const restore of restorers()) return await restore({ text, confirm, sourceLabel, mode });
   throw new Error("还原能力未就绪：人设卡半边还没注册");
 }
 
@@ -258,10 +258,16 @@ export function parseBackup(text) {
  *
  * 这是还原的安全边界 —— 调用方可以先 dry-run 打印，再决定要不要落盘。
  */
-export function planRestore(backup, { memoryLayout, diaryDir } = {}) {
+export function planRestore(backup, { memoryLayout, diaryDir, mode = "replace", local = {} } = {}) {
+  const merge = mode === "merge";
   const writes = [];
+  const skipped = [];
   const deep = backup?.deep ?? {};
   for (const [scope, value] of Object.entries(deep)) {
+    if (merge) {
+      skipped.push({ kind: "memory-core", scope, reason: "合并模式下深层记忆以本地为准" });
+      continue;
+    }
     if (memoryLayout) {
       writes.push({ kind: "memory-core", scope, file: memoryLayout.coreFile(scope), content: String(value?.core ?? "") });
       for (const [topic, text] of Object.entries(value?.topics ?? {})) {
@@ -269,17 +275,47 @@ export function planRestore(backup, { memoryLayout, diaryDir } = {}) {
       }
     }
   }
-  for (const [name, text] of Object.entries(backup?.diary?.jsonl ?? {})) {
-    writes.push({ kind: "diary", file: join(diaryDir, "diary", name), content: String(text ?? "") });
+  let diaryReport = null;
+  if (merge) {
+    const incoming = [];
+    for (const text of Object.values(backup?.diary?.jsonl ?? {})) {
+      for (const line of String(text ?? "").split("\n")) {
+        const t = line.trim();
+        if (t === "") continue;
+        try { incoming.push(JSON.parse(t)); } catch { /* 坏行忽略 */ }
+      }
+    }
+    const result = mergeDiaryEntries(local?.diaryEntries ?? [], incoming);
+    diaryReport = { added: result.added.length, conflicts: result.conflicts.length };
+    const byMonth = new Map();
+    for (const entry of result.merged) {
+      const key = String(entry?.id ?? "").slice(2, 8) || "unknown";
+      const name = `${key.slice(0, 4)}-${key.slice(4, 6)}.jsonl`;
+      if (!byMonth.has(name)) byMonth.set(name, []);
+      byMonth.get(name).push(entry);
+    }
+    for (const [name, entries] of byMonth) {
+      const content = entries.map((e) => JSON.stringify(e)).join("\n") + "\n";
+      writes.push({ kind: "diary", file: join(diaryDir, "diary", name), content });
+    }
+  } else {
+    for (const [name, text] of Object.entries(backup?.diary?.jsonl ?? {})) {
+      writes.push({ kind: "diary", file: join(diaryDir, "diary", name), content: String(text ?? "") });
+    }
   }
-  if (typeof backup?.feelings === "string" && backup.feelings !== "") {
+  if (!merge && typeof backup?.feelings === "string" && backup.feelings !== "") {
     writes.push({ kind: "feelings", file: join(diaryDir, FEELINGS_MD), content: backup.feelings });
   }
-  if (typeof backup?.handnote === "string" && backup.handnote !== "") {
+  if (merge) skipped.push({ kind: "feelings", reason: "合并模式下情感日记以本地为准" });
+  if (!merge && typeof backup?.handnote === "string" && backup.handnote !== "") {
     writes.push({ kind: "handnote", file: join(diaryDir, HANDNOTE_FILE), content: backup.handnote });
   }
+  if (merge) skipped.push({ kind: "handnote", reason: "合并模式下人格手记以本地为准" });
   if (backup?.shallow && Array.isArray(backup.shallow.entries)) {
-    writes.push({ kind: "shallow", file: join(diaryDir, SHALLOW_FILE), content: `${JSON.stringify(backup.shallow, null, 2)}\n` });
+    const entries = merge
+      ? mergeShallowEntries(local?.shallowEntries ?? [], backup.shallow.entries)
+      : backup.shallow.entries;
+    writes.push({ kind: "shallow", file: join(diaryDir, SHALLOW_FILE), content: `${JSON.stringify({ ...backup.shallow, entries }, null, 2)}\n` });
   }
   if (backup?.archive?.relationship) {
     writes.push({ kind: "relationship", file: join(diaryDir, "relationship.json"), content: `${JSON.stringify(backup.archive.relationship, null, 2)}\n` });
@@ -287,7 +323,58 @@ export function planRestore(backup, { memoryLayout, diaryDir } = {}) {
   if (backup?.archive?.lexicon) {
     writes.push({ kind: "lexicon", file: join(diaryDir, "lexicon.json"), content: `${JSON.stringify(backup.archive.lexicon, null, 2)}\n` });
   }
-  return { writes, cards: { ...(backup?.persona?.cards ?? {}) }, active: backup?.persona?.active ?? null };
+  return {
+    writes,
+    cards: { ...(backup?.persona?.cards ?? {}) },
+    active: backup?.persona?.active ?? null,
+    mode,
+    skipped,
+    diary: diaryReport,
+  };
+}
+
+/**
+ * 按 id 合并两组日记：**本地优先**。
+ *
+ * 整包覆盖是"换设备搬家"；合并是"两台机器各写一半，想拼起来"。
+ * 同 id 但正文不同时保留本地那份 —— 本地是我手上正在用的，先别动它；
+ * 备份里那份还留在备份文件里，真要比对再手动看。
+ */
+export function mergeDiaryEntries(localEntries, incomingEntries) {
+  const byId = new Map();
+  for (const e of localEntries ?? []) {
+    if (e?.id) byId.set(String(e.id), e);
+  }
+  const added = [];
+  const conflicts = [];
+  for (const e of incomingEntries ?? []) {
+    if (!e?.id) continue;
+    const id = String(e.id);
+    const cur = byId.get(id);
+    if (cur === undefined) {
+      byId.set(id, e);
+      added.push(e);
+      continue;
+    }
+    if (String(cur.text ?? "") !== String(e.text ?? "")) conflicts.push({ id, kept: "local" });
+  }
+  const merged = [...byId.values()].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  return { merged, added, conflicts };
+}
+
+/** 浅层按 key 合并，同 key 保留 updated 更新的那份、hits 取大。 */
+export function mergeShallowEntries(localEntries, incomingEntries) {
+  const byKey = new Map();
+  const put = (e) => {
+    if (!e?.key) return;
+    const cur = byKey.get(e.key);
+    if (cur === undefined) { byKey.set(e.key, e); return; }
+    const newer = (e.updated ?? 0) > (cur.updated ?? 0) ? e : cur;
+    byKey.set(e.key, { ...newer, hits: Math.max(cur.hits ?? 0, e.hits ?? 0) });
+  };
+  for (const e of localEntries ?? []) put(e);
+  for (const e of incomingEntries ?? []) put(e);
+  return [...byKey.values()];
 }
 
 /** 执行还原（不做 dry-run 判断，由调用方决定）。 */

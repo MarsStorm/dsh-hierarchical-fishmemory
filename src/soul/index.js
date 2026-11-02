@@ -39,6 +39,8 @@ import { defineTool } from "@deepseek-ai/dsh-tools";
 import { createMemoryLayout, normalizeMemoryTopic, retainMemoryEnds } from "./memory-layout.js";
 import { diffLines } from "./card-diff.mjs";
 import { applyRestore, backupFileName, collectBackup, parseBackup, planRestore, registerBackupBuilder, registerRestoreHandler, summarizeBackup, writeBackupFile } from "../core/backup.mjs";
+import { readDiaryEntries } from "../core/stats.mjs";
+import { SHALLOW_FILE } from "../core/shallow.mjs";
 import { skipsSubagentSections } from "./subagents.js";
 import { boundedInteger, renderRecall, searchTopics } from "./memory-recall.js";
 
@@ -1070,9 +1072,22 @@ function apply(ctx, config) {
    * 一边修了另一边没修。**默认 dry-run**，`confirm === true` 才落盘，
    * 落盘前先给自己拍一份 `-before-restore.json`。
    */
-  const restoreFromText = async ({ text, confirm = false, sourceLabel = "" } = {}) => {
+  const restoreFromText = async ({ text, confirm = false, sourceLabel = "", mode = "replace" } = {}) => {
     const backup = parseBackup(String(text ?? ""));
-    const plan = planRestore(backup, { memoryLayout, diaryDir: await diaryDirOf() });
+    const diaryDir = await diaryDirOf();
+    // 合并模式需要本地的日记与浅层做底，只读，不写。
+    let local = {};
+    if (mode === "merge") {
+      try {
+        local = {
+          diaryEntries: await readDiaryEntries(diaryDir, { readText: async (f) => { try { return await readFile(f, "utf8"); } catch { return null; } } }),
+          shallowEntries: JSON.parse(await readFile(join(diaryDir, SHALLOW_FILE), "utf8")).entries ?? [],
+        };
+      } catch {
+        local = {};
+      }
+    }
+    const plan = planRestore(backup, { memoryLayout, diaryDir, mode, local });
     const kinds = {};
     for (const item of plan.writes) kinds[item.kind] = (kinds[item.kind] ?? 0) + 1;
     const base = {
@@ -1084,6 +1099,9 @@ function apply(ctx, config) {
       active: plan.active ?? "",
       kinds,
       counts: backup.meta?.counts ?? summarizeBackup(backup),
+      mode: plan.mode ?? mode,
+      skipped: plan.skipped ?? [],
+      merged: plan.diary ?? null,
     };
     if (confirm !== true) return { ...base, dryRun: true, preBackup: "", written: 0 };
 
@@ -1167,6 +1185,12 @@ function apply(ctx, config) {
     parameters: {
       file: { type: "string", required: true, description: "Absolute path to the backup JSON, or just its file name inside $DSH_HOME/backups." },
       confirm: { type: "boolean", description: "Pass true to actually write. Anything else = dry-run." },
+      mode: {
+        type: "string",
+        enum: ["replace", "merge"],
+        description:
+          "replace (default) = overwrite everything, the way moving to a new device wants it. merge = only fold the backup's 共度时光 and shallow memory into what is already here (local wins when the same id exists); deep memory, 情感日记 and 人格手记 stay untouched and are reported under `skipped`.",
+      },
     },
     output: {
       schema: {
@@ -1185,6 +1209,9 @@ function apply(ctx, config) {
           written: { type: "integer" },
           kinds: { type: "object", additionalProperties: true },
           counts: { type: "object", additionalProperties: true },
+          mode: { type: "string" },
+          skipped: { type: "array", items: { type: "object", additionalProperties: true } },
+          merged: { type: "object", additionalProperties: true },
         },
       },
       render: (_args, value) => [{
@@ -1200,7 +1227,12 @@ function apply(ctx, config) {
       if (!raw) throw new Error("fish_restore: `file` must be non-empty");
       const file = isAbsolute(raw) ? raw : join(backupDir(), raw);
       const text = await readFile(file, "utf8");
-      const result = await restoreFromText({ text, confirm: args.confirm === true, sourceLabel: file });
+      const result = await restoreFromText({
+        text,
+        confirm: args.confirm === true,
+        sourceLabel: file,
+        mode: args.mode === "merge" ? "merge" : "replace",
+      });
       return { ...result, file };
     },
   }));

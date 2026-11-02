@@ -44,6 +44,7 @@ import { scrub } from '../core/privacy.mjs';
 import { renderMemoryBlock } from '../core/persona.mjs';
 import { addLoop, doneLoop, loopsPath, openLoops, renderLoops } from '../core/loops.mjs';
 import { applyCompaction, planCompaction } from '../core/compact.mjs';
+import { checkLayers } from '../core/conflicts.mjs';
 import { calendarDaysBetween, stripTimeWords, softWhen } from '../core/timeline.mjs';
 import { renderDiaryFile } from '../core/render-diary.mjs';
 import { DIARY_MD, FEELINGS_MD } from '../core/files.mjs';
@@ -2629,7 +2630,8 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
               await drainPromise;
               await writeChain;
               const restore = ctx.get('fishMemory')?.restoreBackup;
-              const input = { text: got.text, confirm, sourceLabel: `云端 ${fileName}` };
+              const mode = String(got.mode ?? '').toLowerCase() === 'merge' ? 'merge' : 'replace';
+            const input = { text: got.text, confirm, sourceLabel: `云端 ${fileName}`, mode };
               const result = typeof restore === 'function'
                 ? await restore(input)
                 : await restoreViaRegistered(input);
@@ -3246,6 +3248,88 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
           },
         }),
       'fish: compact tool',
+    );
+
+    scope.effect(
+      () =>
+        scope.tools.register(
+          {
+            name: 'fish_layer_check',
+            description:
+              'Check whether the memory layers contradict each other: the same sentence stored twice (deep core / 人格手记 / 情感日记 / shallow), and the same thing recorded with two different values (port, version). Read-only — it only reports; deleting is your call.',
+            parameters: { type: 'object', additionalProperties: false, properties: {}, required: [] },
+            output: {
+              schema: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  checked: { type: 'integer' },
+                  duplicates: { type: 'array', items: { type: 'object', additionalProperties: true } },
+                  conflicts: { type: 'array', items: { type: 'object', additionalProperties: true } },
+                  text: { type: 'string' },
+                },
+              },
+              render: (_a, v) => [{ type: 'text', text: v?.text ?? '查完了。' }],
+            },
+            isConcurrencySafe: () => true,
+            async execute() {
+              const readText = (file) => {
+                try {
+                  return readFileSync(file, 'utf8');
+                } catch {
+                  return '';
+                }
+              };
+              const memoryRoot = path.join(dshHome(), 'soul-md', 'memory');
+              let core = '';
+              const topics = {};
+              try {
+                for (const scope of readdirSync(memoryRoot, { withFileTypes: true })) {
+                  if (!scope.isDirectory()) continue;
+                  core += readText(path.join(memoryRoot, scope.name, 'core.md'));
+                  const topicDir = path.join(memoryRoot, scope.name, 'topics');
+                  for (const topic of readdirSync(topicDir, { withFileTypes: true })) {
+                    if (!topic.isFile() || !topic.name.endsWith('.md')) continue;
+                    topics[topic.name.replace(/\.md$/, '')] = readText(path.join(topicDir, topic.name));
+                  }
+                }
+              } catch {
+                // 深层读不到就算了，剩下几层照样能查
+              }
+              let shallow = [];
+              try {
+                shallow = JSON.parse(readText(path.join(archiveDirectory, SHALLOW_FILE))).entries ?? [];
+              } catch {
+                shallow = [];
+              }
+              const report = checkLayers({
+                core,
+                topics,
+                handnote: readText(path.join(archiveDirectory, HANDNOTE_FILE)),
+                feelings: readText(path.join(archiveDirectory, FEELINGS_MD)),
+                shallow,
+              });
+              const parts = [];
+              parts.push(`查了 ${report.checked} 行`);
+              if (report.duplicates.length === 0) parts.push('没有同一句写两遍的情况');
+              else {
+                parts.push(`同一句写了两遍：${report.duplicates.length} 处`);
+                for (const hit of report.duplicates.slice(0, 5)) {
+                  parts.push(`- 「${hit.text.slice(0, 40)}」在 ${hit.first} 和 ${hit.again} 里都有`);
+                }
+              }
+              if (report.conflicts.length === 0) parts.push('没有同一样东西写了两个值');
+              else {
+                parts.push(`有 ${report.conflicts.length} 处取值打架`);
+                for (const c of report.conflicts) {
+                  parts.push(`- ${c.kind}：${c.values.join(' / ')}（${c.lines.map((l) => l.layer).join('、')}）`);
+                }
+              }
+              return { ...report, text: parts.join('\n') };
+            },
+          },
+          'fish: layer conflict check',
+        ),
     );
 
     log('已注册工具 loop_add / loop_done / loop_list / fish_compact');
