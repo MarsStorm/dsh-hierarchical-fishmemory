@@ -79,6 +79,9 @@ window.__ModuleLoader__.load({
 .dsh-flat.__sm_root .__sm_panel{display:flex;flex-direction:column;gap:14px;padding-top:4px}
 .dsh-flat.__sm_root .__sm_groupTitle{display:flex;flex-direction:column;gap:2px}
 .dsh-flat.__sm_root .__sm_groupTitle>span:first-child{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary)}
+/* 标题右边那颗「当前默认卡」：小、圆、像标签，但真的是个能点的下拉。 */
+.dsh-flat.__sm_root .__sm_pick{width:auto;min-height:0;padding:1px 26px 1px 10px;border-radius:999px;border-color:var(--dsw-alias-state-business-primary);background-position:right 7px center;font-size:11px;line-height:1.7;color:var(--dsw-alias-state-business-primary);cursor:pointer}
+.dsh-flat.__sm_root .__sm_pick:hover:not(:disabled){border-color:var(--dsw-alias-state-business-primary)}
 `;
     var tagId = "dsh-soul-md/main.css";
     if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
@@ -994,7 +997,25 @@ window.__ModuleLoader__.load({
         h("div", { className: "__sm_head" },
           h("h2", { className: "__sm_title" },
             t("pageTitle"),
-            active ? h("span", { className: "__sm_badge" }, active) : null
+            // 2026-11-03：原来这里是个只读徽章，看着能点其实点不动（未央就
+            // 伸手点了一次）。改成真的选择器，跟下面「默认卡」那个下拉写同
+            // 一处 active，随便点哪个都算数。
+            cardNames.length === 0
+              ? (active ? h("span", { className: "__sm_badge" }, active) : null)
+              : h("select", {
+                  className: "__sm_pick",
+                  value: active || "",
+                  disabled: busy,
+                  title: t("activeHint"),
+                  onChange: function (e) {
+                    var v = e.target.value;
+                    if (!v) runWrite([{ op: "unset", path: ["active"] }]);
+                    else onSetActive(v);
+                  }
+                },
+                  h("option", { value: "" }, t("noneOption")),
+                  cardNames.map(function (n) { return h("option", { key: n, value: n }, n); })
+                )
           ),
           h("p", { className: "__sm_hint" }, t("intro"))
         ),
