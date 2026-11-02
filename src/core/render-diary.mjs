@@ -69,7 +69,7 @@ export function renderDiaryMarkdown(archive, options = {}) {
   out.push('');
   out.push('> **这份文件是自动生成的，改它没用** —— 下一次对话就会被覆盖。');
   out.push('> ');
-  out.push('> · 想改人格：编辑 `persona.md`');
+  out.push('> · 想改人格：设置 → 属于我们的回忆 → 人设卡');
   out.push('> · 想删某条记忆：编辑 `diary/*.jsonl` 删掉那一行');
   out.push('> · 这里只是给**人**看的窗口，真正的数据是那些 `.jsonl`');
   out.push('');

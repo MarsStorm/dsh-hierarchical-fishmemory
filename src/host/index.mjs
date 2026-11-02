@@ -42,6 +42,8 @@ import { SUPPRESS_RE } from '../core/gate.mjs';
 import { buildIndex, selectMemories, searchScores, queryHasSubstance, looksLikeWork, parseTimeHint, DEFAULT_RECALL_OPTIONS } from '../core/recall.mjs';
 import { scrub } from '../core/privacy.mjs';
 import { renderMemoryBlock } from '../core/persona.mjs';
+import { addLoop, doneLoop, loopsPath, openLoops, renderLoops } from '../core/loops.mjs';
+import { applyCompaction, planCompaction } from '../core/compact.mjs';
 import { calendarDaysBetween, stripTimeWords, softWhen } from '../core/timeline.mjs';
 import { renderDiaryFile } from '../core/render-diary.mjs';
 import { DIARY_MD, FEELINGS_MD } from '../core/files.mjs';
@@ -1168,6 +1170,18 @@ export function apply(ctx, rawConfig) {
         now: Date.now(),
       });
       text = rendered.text;
+
+      // 还挂着的事：每轮一行，最多 8 条；账本空着就什么都不出现。
+      //
+      // 2026-11-02 加。之前答应过的事散在对话里，两天后谁也记不得。这里只负责
+      // 「摆出来」，不自动销账 —— 自动销会误杀，误杀比漏记更让人不敢信。
+      try {
+        const loops = renderLoops(openLoops(loopsPath(archiveDirectory)));
+        if (loops) text = text ? `${text}\n\n${loops}` : loops;
+      } catch {
+        // 账本坏了不能挡住记忆
+      }
+
       // 重灌只用一次：这一轮灌过，下一轮就回到"不灌"。
       // 不在这里清的话，压缩一次会永远灌下去 —— 那又变回"每轮常驻"了。
       if (pinnedOnce) s.needsRecentReplay = false;
@@ -3064,6 +3078,177 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
       'fish: cloud backup tool',
     );
     log('已注册工具 fish_cloud_backup');
+  });
+
+  // 「还挂着的事」+「压缩旧条目」：2026-11-02 加的两个大件。
+  ctx.inject(['tools'], (scope) => {
+    const loopsFile = loopsPath(archiveDirectory);
+
+    scope.effect(
+      () =>
+        scope.tools.register({
+          name: 'loop_add',
+          description:
+            '记一件「还挂着的事」——他让你回头弄的、你答应了还没做的、约好但没到的。' +
+            '每轮会有一行「还挂着 N 件事」摆出来提醒。办完立刻用 loop_done 销掉，别攒。',
+          parameters: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              text: { type: 'string', description: '一句话说清是什么事，别写「那个」。' },
+              note: { type: 'string', description: '可选：为什么挂着、卡在哪。' },
+            },
+            required: ['text'],
+          },
+          output: {
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: { ok: { type: 'boolean' }, created: { type: 'boolean' }, open: { type: 'integer' } },
+            },
+            render: (_a, v) =>
+              v?.ok
+                ? [{ type: 'text', text: `${v.created ? '记下了' : '这条已经在账上了'}，现在挂着 ${v.open} 件。` }]
+                : [{ type: 'text', text: '没记上。' }],
+          },
+          async execute(args) {
+            const { created } = addLoop(loopsFile, args?.text, { note: args?.note });
+            return { ok: true, created, open: openLoops(loopsFile).length };
+          },
+        }),
+      'fish: loop add',
+    );
+
+    scope.effect(
+      () =>
+        scope.tools.register({
+          name: 'loop_done',
+          description: '销掉一件「还挂着的事」。按 id 或文中一段话匹配，销掉后每轮的提醒里就不出现了。',
+          parameters: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              match: { type: 'string', description: 'id（l_xxx）或那句话里的一段。' },
+            },
+            required: ['match'],
+          },
+          output: {
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: { ok: { type: 'boolean' }, text: { type: 'string' }, open: { type: 'integer' } },
+            },
+            render: (_a, v) =>
+              v?.ok
+                ? [{ type: 'text', text: `销掉：${v.text}。还剩 ${v.open} 件。` }]
+                : [{ type: 'text', text: '账上没找到这一件，用 loop_list 看看现在挂着什么。' }],
+          },
+          async execute(args) {
+            const hit = doneLoop(loopsFile, args?.match);
+            return { ok: hit.done, text: hit.item?.text ?? '', open: openLoops(loopsFile).length };
+          },
+        }),
+      'fish: loop done',
+    );
+
+    scope.effect(
+      () =>
+        scope.tools.register({
+          name: 'loop_list',
+          description: '看看还挂着哪些事。注入里最多显示 8 条，这里给全部。',
+          parameters: { type: 'object', additionalProperties: false, properties: {} },
+          output: {
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                count: { type: 'integer' },
+                items: { type: 'array', items: { type: 'object' } },
+              },
+            },
+            render: (_a, v) =>
+              v?.count
+                ? [{ type: 'text', text: v.items.map((x) => `- ${x.text}`).join('\n') }]
+                : [{ type: 'text', text: '账上是空的。' }],
+          },
+          async execute() {
+            const items = openLoops(loopsFile).map((x) => ({ id: x.id, text: x.text }));
+            return { count: items.length, items };
+          },
+        }),
+      'fish: loop list',
+    );
+
+    // ── 压缩旧条目 ──
+    //
+    // 45 天前的条目折成「某月共 N 件」的摘要，原文挪进 diary/archive/。
+    // 默认 dry-run：先看会动多少，再决定写不写。
+    scope.effect(
+      () =>
+        scope.tools.register({
+          name: 'fish_compact',
+          description:
+            '把很久以前的共度时光条目折成月度摘要，原文归档到 diary/archive/，不再进注入。' +
+            '默认只算不写（dry-run）；要看真动，传 dryRun:false。' +
+            '条目多到召回开始变吵的时候用它。',
+          parameters: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              olderThanDays: { type: 'integer', description: '早于多少天算旧，默认 45。' },
+              dryRun: { type: 'boolean', description: '默认 true；传 false 才真写。' },
+            },
+          },
+          output: {
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                ok: { type: 'boolean' },
+                dryRun: { type: 'boolean' },
+                moved: { type: 'integer' },
+                digests: { type: 'array', items: { type: 'object' } },
+              },
+            },
+            render: (_a, v) => {
+              if (!v?.ok) return [{ type: 'text', text: '没折成。' }];
+              const lines = v.digests.map((d) => `- ${d.month}：${d.entries} 条 → 1 条摘要`);
+              const head = v.moved === 0
+                ? '没有该折的条目——都还新。'
+                : `${v.dryRun ? '会折' : '已折'} ${v.moved} 条，压成 ${v.digests.length} 条月度摘要。`;
+              return [{ type: 'text', text: [head, ...lines].join('\n') }];
+            },
+          },
+          async execute(args) {
+            const plan = planCompaction(Array.isArray(archive.diary) ? archive.diary : [], {
+              olderThanDays: Number.isFinite(args?.olderThanDays) ? args.olderThanDays : 45,
+            });
+            const digests = plan.groups.map((g) => ({
+              month: g.monthKey,
+              entries: g.entries.length,
+              id: g.digest.id,
+            }));
+            const dryRun = args?.dryRun !== false;
+            if (dryRun || plan.movedCount === 0) {
+              return { ok: true, dryRun, moved: plan.movedCount, digests };
+            }
+            // 原文先归档，再改内存、再落盘 —— 顺序反了就可能只删不存。
+            const archiveDir = path.join(archiveDirectory, 'diary', 'archive');
+            mkdirSync(archiveDir, { recursive: true });
+            for (const g of plan.groups) {
+              const file = path.join(archiveDir, `${g.monthKey}.jsonl`);
+              appendFileSync(file, g.entries.map((e) => JSON.stringify(e)).join('\n') + '\n');
+            }
+            archive.diary = applyCompaction(plan);
+            await persist();
+            log(`压缩共度时光：${plan.movedCount} 条 → ${plan.groups.length} 条摘要`);
+            return { ok: true, dryRun: false, moved: plan.movedCount, digests };
+          },
+        }),
+      'fish: compact tool',
+    );
+
+    log('已注册工具 loop_add / loop_done / loop_list / fish_compact');
   });
 
   // 浅层记忆（带 TTL）—— 原来单独的 dsh-shallow-memory，2026-10-31 收编进来。
