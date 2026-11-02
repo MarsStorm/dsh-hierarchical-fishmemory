@@ -19,6 +19,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { DIARY_MD, FEELINGS_MD } from "./files.mjs";
+import { listDiaryNames, readJsonOrNull, readTextOrNull } from "./fsx.mjs";
 import { HANDNOTE_FILE } from "./handnote.mjs";
 import { SHALLOW_FILE } from "./shallow.mjs";
 
@@ -29,23 +30,8 @@ export const BACKUP_VERSION = 1;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-const readTextDefault = (file) => {
-  try {
-    return readFileSync(file, "utf8");
-  } catch {
-    return null;
-  }
-};
-
-const readJsonDefault = (file) => {
-  const text = readTextDefault(file);
-  if (text === null) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-};
+const readTextDefault = readTextOrNull;
+const readJsonDefault = readJsonOrNull;
 
 const pad = (n) => String(n).padStart(2, "0");
 
@@ -54,16 +40,8 @@ export function backupFileName(now = new Date()) {
   return `备份-${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}-${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}.json`;
 }
 
-/** `diary/` 下的 jsonl 文件名（排好序）。 */
-export function listDiaryFiles(diaryDir, { readdir = readdirSync } = {}) {
-  try {
-    return readdir(join(diaryDir, "diary"))
-      .filter((name) => name.toLowerCase().endsWith(".jsonl"))
-      .sort();
-  } catch {
-    return [];
-  }
-}
+/** `diary/` 下的 jsonl 文件名（排好序）。实现在 `fsx.mjs`，这里只为对外接口保留。 */
+export const listDiaryFiles = listDiaryNames;
 
 /**
  * 收集一份完整备份。

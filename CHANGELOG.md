@@ -1,5 +1,14 @@
 # 更新日志
 
+## 1.6.3 — 2026-11-03
+
+体检第二轮，净减 116 行，行为不变：
+
+- **删掉重复的读盘工具**：`backup.mjs` 与 `stats.mjs` 各抄了一份 `readTextDefault` / `readJsonDefault`，还各写了一个 `listDiaryFiles`（一个返回文件名、一个返回路径）。现在统一在 `src/core/fsx.mjs`，对外名字保留。
+- **删掉已被覆盖的旧路由** `/handnote/delete`：它的活被 `/layer/remove`（按 target 认文件）接走了，客户端的 `dropNote` 也随之删除。
+- **删一个没用上的 import**（`loops.mjs` 的 `existsSync`）。
+- 复查过没问题的：无死导出、无未用 import、无未用函数/常量/CSS 类、20 条面板路由无重复、11 个工具名无重名、中英文案键一一对齐。
+
 ## 1.6.2 — 2026-11-03
 
 两处从「只能看」变成「能动手」：

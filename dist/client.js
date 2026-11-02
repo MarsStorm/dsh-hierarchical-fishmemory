@@ -1740,23 +1740,6 @@ window.__ModuleLoader__.load({
       // 2026-11-02 加：体检页原先只报「这句深层记忆里也有」，看得见但动不了。
       // 现在每条旁边一颗按钮，按整行匹配删掉手记里那一份（手记是现读磁盘的，
       // 删完下一轮就生效，不用重启）。
-      const dropNote = async (line) => {
-        setNoteMsg('');
-        try {
-          const res = await fetch(`${API}/handnote/delete`, {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ line }),
-          });
-          const data = await res.json();
-          if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
-          setNoteMsg(`已从人格手记删掉 ${data.removed} 行`);
-          await read();
-        } catch (err) {
-          setNoteMsg(String(err && err.message ? err.message : err));
-        }
-      };
 
       // 2026-11-03 加：冲突不再只是报警，可以一句话统一成某个值。
       // 只改「出现过那个值」的行，别的字一个不碰。

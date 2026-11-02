@@ -7,7 +7,7 @@
  * 为什么不是我自动从对话里抽：抽错了会变成噪音，抽漏了比不抽更糟。
  * 让写的一方负责，账才可信。
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 export const LOOPS_FILE = 'loops.json';

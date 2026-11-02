@@ -2456,9 +2456,9 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
         {
           // 体检页「删掉重复的那一份」：不管重复落在哪一层都能删。
           //
-          // 跟 `/handnote/delete` 的区别：那个只认手记，这个按 target 认
-          // 文件（`core:<scope>` / `topic:<scope>:<key>` / `handnote` /
-          // `feelings`）。仍然只做「整行精确匹配」，不做模糊删除。
+          // 按 target 认文件（`core:<scope>` / `topic:<scope>:<key>` /
+          // `handnote` / `feelings`）。只做「整行精确匹配」，不做模糊删除。
+          // 2026-11-03：原先只认手记的 `/handnote/delete` 已删，功能被这条覆盖。
           kind: 'exact',
           path: `${PANEL_BASE}/layer/remove`,
           handler: async (req, res) => {
@@ -2518,46 +2518,6 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
               const stats = collectStatsFromDisk({ memoryRoot, diaryDir });
               const layers = collectLayerReport({ memoryRoot, diaryDir });
               return panelReply(res, 200, { ok: true, ...stats, ...layers });
-            } catch (err) {
-              return panelReply(res, 500, {
-                ok: false,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            }
-          },
-        },
-        {
-          // 删掉人格手记里的一条（体检页「这句深层记忆里已经有了」旁边那颗按钮）。
-          //
-          // 为什么不走 soul 半边：手记是 host 这边的档案文件，而且每轮都是
-          // 现读磁盘（`selectHandNotes(readFileSync(...))`），没有缓存要清，
-          // 写完下一轮就生效。只认「整行匹配」，不做模糊删除。
-          kind: 'exact',
-          path: `${PANEL_BASE}/handnote/delete`,
-          handler: async (req, res) => {
-            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-            if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: '只支持 POST' });
-            try {
-              const body = JSON.parse((await readPanelTextBody(req, { limit: 64 * 1024 })) || '{}');
-              const target = typeof body.line === 'string' ? body.line.trim() : '';
-              if (!target) return panelReply(res, 400, { ok: false, error: '没给要删的那一行（line）' });
-              const notePath = path.join(archiveDirectory, HANDNOTE_FILE);
-              if (!existsSync(notePath)) return panelReply(res, 404, { ok: false, error: '没有手记文件' });
-              const text = readFileSync(notePath, 'utf8');
-              const keep = [];
-              let removed = 0;
-              for (const line of text.split('\n')) {
-                const trimmed = line.replace(/^[-*]\s+/, '').trim();
-                if (trimmed && trimmed === target) {
-                  removed += 1;
-                  continue;
-                }
-                keep.push(line);
-              }
-              if (!removed) return panelReply(res, 404, { ok: false, error: '这一行在人格手记里找不到了' });
-              writeFileSync(notePath, keep.join('\n'), 'utf8');
-              log(`人格手记删掉 ${removed} 行：${target.slice(0, 40)}`);
-              return panelReply(res, 200, { ok: true, removed });
             } catch (err) {
               return panelReply(res, 500, {
                 ok: false,

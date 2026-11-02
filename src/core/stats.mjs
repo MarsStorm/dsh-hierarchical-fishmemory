@@ -13,39 +13,19 @@ import { basename, join } from "node:path";
 import { readdirSync, readFileSync } from "node:fs";
 import { FEELINGS_MD } from "./files.mjs";
 import { HANDNOTE_FILE, MAX_LINE_CHARS, parseHandNote } from "./handnote.mjs";
+import { listDiaryPaths, readJsonOrNull, readTextOrNull } from "./fsx.mjs";
 import { SHALLOW_FILE } from "./shallow.mjs";
 import { findDuplicates, findValueConflicts } from "./conflicts.mjs";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const readTextDefault = (file) => {
-  try {
-    return readFileSync(file, "utf8");
-  } catch {
-    return null;
-  }
-};
-const readJsonDefault = (file) => {
-  const text = readTextDefault(file);
-  if (text === null) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-};
+const readTextDefault = readTextOrNull;
+const readJsonDefault = readJsonOrNull;
 
 /** 中文按 1.6 字/token 估，宁可估高一点，别让人以为还很空。 */
 const estimateTokens = (chars) => Math.ceil(chars / 1.6);
 
-export function listDiaryFiles(diaryDir, { readdir = readdirSync } = {}) {
-  try {
-    return readdir(join(diaryDir, "diary"))
-      .filter((name) => name.endsWith(".jsonl"))
-      .sort()
-      .map((name) => join(diaryDir, "diary", name));
-  } catch {
-    return [];
-  }
+export function listDiaryFiles(diaryDir, options = {}) {
+  return listDiaryPaths(diaryDir, options);
 }
 
 /** 一行一条 JSON，坏行跳过 —— 归档文件被手动改过也不能让整页挂掉。 */
