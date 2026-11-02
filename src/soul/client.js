@@ -70,6 +70,15 @@ window.__ModuleLoader__.load({
 @media(prefers-reduced-motion:reduce){.dsh-flat.__sm_root *,.dsh-flat.__sm_root input[type=checkbox]::before{transition:none}}
 .dsh-flat.__sm_root button{border-radius:6px;min-height:34px;padding:7px 14px;font:inherit;font-size:12px;box-shadow:none}
 .dsh-flat.__sm_root :is(h2,h3){margin:0;font-size:14px;font-weight:600}
+.dsh-flat.__sm_root .__sm_head{display:flex;flex-direction:column;gap:5px;padding-bottom:2px}
+.dsh-flat.__sm_root .__sm_title{display:flex;align-items:center;gap:8px;font-size:16px;font-weight:600;letter-spacing:-.01em}
+.dsh-flat.__sm_root .__sm_tabs{display:flex;gap:2px;border-bottom:1px solid var(--flat-border);margin-top:2px}
+.dsh-flat.__sm_root .__sm_tab{appearance:none;border:0;border-bottom:2px solid transparent;border-radius:0;background:none;box-shadow:none;min-height:0;margin-bottom:-1px;padding:8px 12px 9px;font:inherit;font-size:13px;color:var(--dsw-alias-label-tertiary);cursor:pointer}
+.dsh-flat.__sm_root .__sm_tab:hover{color:var(--dsw-alias-label-primary)}
+.dsh-flat.__sm_root .__sm_tab[aria-selected="true"]{color:var(--dsw-alias-label-primary);font-weight:600;border-bottom-color:var(--flat-accent)}
+.dsh-flat.__sm_root .__sm_panel{display:flex;flex-direction:column;gap:14px;padding-top:4px}
+.dsh-flat.__sm_root .__sm_groupTitle{display:flex;flex-direction:column;gap:2px}
+.dsh-flat.__sm_root .__sm_groupTitle>span:first-child{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary)}
 `;
     var tagId = "dsh-soul-md/main.css";
     if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
@@ -144,6 +153,12 @@ window.__ModuleLoader__.load({
       invalidCardName: "请输入人设卡名称",
       invalidCardContent: "请输入人设卡内容",
       intro: "输入人设卡名称和内容，保存后插件自动管理——文件路径、记忆存放都不用管。人设按 会话选择 → 默认卡 解析，聊天框标题栏可随时切换。",
+      pageTitle: "属于我们的回忆",
+      tabCards: "人设卡",
+      tabMemory: "长期记忆",
+      tabCloud: "云端备份",
+      writeTitle: "写一张卡",
+      writeHint: "内容和名称都可以改；保存后立刻按「会话选择 → 默认卡」生效。",
       cardListTitle: "人设卡",
       cardListHint: "卡片内容会注入系统提示词；聊天框标题栏可给每个会话单独选卡。",
       cardName: "人设卡名称",
@@ -246,6 +261,12 @@ window.__ModuleLoader__.load({
       invalidCardName: "Enter a persona card name",
       invalidCardContent: "Enter persona card content",
       intro: "Type a persona card name and content, hit save — the plugin manages everything else (files, memory locations). Persona resolves as session choice > default card; switch per chat from the conversation header.",
+      pageTitle: "Memories That Belong to Us",
+      tabCards: "Persona cards",
+      tabMemory: "Long-term memory",
+      tabCloud: "Cloud backup",
+      writeTitle: "Write a card",
+      writeHint: "Name and content are both editable; saved cards resolve as session choice > default card.",
       cardListTitle: "Persona cards",
       cardListHint: "Card content is injected into the system prompt; pick one per chat from the conversation header.",
       cardName: "Card name",
@@ -797,6 +818,7 @@ window.__ModuleLoader__.load({
       var writePending = react.useRef(false);
       var [notice, setNotice] = react.useState(null);
       var [error, setError] = react.useState(null);
+      var [tab, setTab] = react.useState("cards");
 
       react.useEffect(function () {
         // No refresh call here: the scope's public seam has no load(). Reads ride
@@ -952,133 +974,180 @@ window.__ModuleLoader__.load({
         runWrite(ops, function () { setMemDraft(function () { return {}; }); setSkipDraft(null); setTemplatesDraft(null); });
       }
 
-      return h("div", { className: "__sm_root dsh-flat" },
-        h("p", { className: "__sm_hint", style: { margin: "0 0 4px" } }, t("intro")),
+      // 页签：人设卡 / 长期记忆 / 云端备份。
+      //
+      // 三个面板**始终挂载**，只靠 display 切换。理由有两个：
+      //   1. 渲染冒烟测试里 WebdavGroup 必须首屏就在树里（React 桩不会重渲染），
+      //      条件挂载会让它整个消失；
+      //   2. 切页签时正在编辑的草稿不会丢。
+      var tabItems = [
+        { key: "cards", label: t("tabCards") },
+        { key: "memory", label: t("tabMemory") },
+        { key: "cloud", label: t("tabCloud") }
+      ];
+      var panel = function (key, children) {
+        return h("div", { className: "__sm_panel", style: key === tab ? null : { display: "none" } }, children);
+      };
 
-        // ── card form ────────────────────────────────────────────────────
-        h("div", { className: "__sm_group" },
-          h("label", { className: "__sm_field" },
-            h("span", { className: "__sm_label" }, t("cardName")),
-            h("span", { className: "__sm_hint" }, t("cardNameHint")),
-            h("input", { className: "__sm_input", type: "text", value: cardDraft.name, placeholder: t("cardNamePlaceholder"), onChange: function (e) { setCardDraft(function (p) { return Object.assign({}, p, { name: e.target.value }); }); setNotice0(); } })
+      return h("div", { className: "__sm_root dsh-flat" },
+        // ── 页头 ─────────────────────────────────────────────────────────
+        h("div", { className: "__sm_head" },
+          h("h2", { className: "__sm_title" },
+            t("pageTitle"),
+            active ? h("span", { className: "__sm_badge" }, active) : null
           ),
-          h("label", { className: "__sm_field" },
-            h("span", { className: "__sm_label" }, t("cardContent")),
-            h("span", { className: "__sm_hint" }, t("cardContentHint")),
-            h("textarea", { className: "__sm_input __sm_textarea", value: cardDraft.content, onChange: function (e) { setCardDraft(function (p) { return Object.assign({}, p, { content: e.target.value }); }); setNotice0(); } })
-          ),
-          h("div", { className: "__sm_actions" },
-            h("button", { type: "button", className: "__sm_btn __sm_btnPrimary", onClick: onSaveCard, disabled: busy }, t("saveCard")),
-            notice ? h("span", { className: "__sm_status" }, messageText(t, notice)) : null,
-            busy ? h("span", { className: "__sm_status" }, t("saving")) : null,
-            error ? h("span", { className: "__sm_error" }, messageText(t, error)) : null
-          )
+          h("p", { className: "__sm_hint" }, t("intro"))
         ),
 
-        // ── card list + default picker ───────────────────────────────────
-        h("div", { className: "__sm_group" },
-          h("p", { className: "__sm_label", style: { margin: 0 } }, t("cardListTitle")),
-          h("p", { className: "__sm_hint", style: { margin: "0 0 2px" } }, t("cardListHint")),
-          h("label", { className: "__sm_field" },
-            h("span", { className: "__sm_label" }, t("defaultBadge")),
-            h("span", { className: "__sm_hint" }, t("activeHint")),
-            h("select", { className: "__sm_input", value: active || "", disabled: busy, onChange: function (e) { var v = e.target.value; if (!v) runWrite([{ op: "unset", path: ["active"] }]); else onSetActive(v); } },
-              h("option", { value: "" }, t("noneOption")),
-              cardNames.map(function (n) { return h("option", { key: n, value: n }, n); })
+        h("div", { className: "__sm_tabs", role: "tablist" },
+          tabItems.map(function (item) {
+            return h("button", {
+              key: item.key,
+              type: "button",
+              role: "tab",
+              className: "__sm_tab",
+              "aria-selected": item.key === tab ? "true" : "false",
+              onClick: function () { setTab(item.key); }
+            }, item.label);
+          })
+        ),
+
+        // ── 人设卡 ───────────────────────────────────────────────────────
+        panel("cards",
+          h("div", { className: "__sm_group" },
+            h("div", { className: "__sm_groupTitle" },
+              h("span", null, t("writeTitle")),
+              h("span", { className: "__sm_hint" }, t("writeHint"))
+            ),
+            h("label", { className: "__sm_field" },
+              h("span", { className: "__sm_label" }, t("cardName")),
+              h("span", { className: "__sm_hint" }, t("cardNameHint")),
+              h("input", { className: "__sm_input", type: "text", value: cardDraft.name, placeholder: t("cardNamePlaceholder"), onChange: function (e) { setCardDraft(function (p) { return Object.assign({}, p, { name: e.target.value }); }); setNotice0(); } })
+            ),
+            h("label", { className: "__sm_field" },
+              h("span", { className: "__sm_label" }, t("cardContent")),
+              h("span", { className: "__sm_hint" }, t("cardContentHint")),
+              h("textarea", { className: "__sm_input __sm_textarea", value: cardDraft.content, onChange: function (e) { setCardDraft(function (p) { return Object.assign({}, p, { content: e.target.value }); }); setNotice0(); } })
+            ),
+            h("div", { className: "__sm_actions" },
+              h("button", { type: "button", className: "__sm_btn __sm_btnPrimary", onClick: onSaveCard, disabled: busy }, t("saveCard")),
+              notice ? h("span", { className: "__sm_status" }, messageText(t, notice)) : null,
+              busy ? h("span", { className: "__sm_status" }, t("saving")) : null,
+              error ? h("span", { className: "__sm_error" }, messageText(t, error)) : null
             )
           ),
-          cardNames.length === 0
-            ? h("p", { className: "__sm_hint" }, t("emptyCards"))
-            : h("div", { className: "__sm_cardList" },
-                cardNames.map(function (n) {
-                  var preview = String(cards[n] || "").split("\n").filter(Boolean)[0] || "";
-                  return h("div", { key: n, className: "__sm_cardRow" },
-                    h("span", { className: "__sm_cardName", title: n }, n),
-                    n === active ? h("span", { className: "__sm_badge" }, t("defaultBadge")) : null,
-                    h("span", { className: "__sm_cardPreview" }, preview),
-                    h("button", { type: "button", className: "__sm_btn", onClick: function () { onEditCard(n); }, disabled: busy }, t("editCard")),
-                    n === active ? null : h("button", { type: "button", className: "__sm_btn", onClick: function () { onSetActive(n); }, disabled: busy }, t("setDefault")),
-                    h("button", { type: "button", className: "__sm_btn __sm_btnDanger", onClick: function () { onDeleteCard(n); }, disabled: busy }, t("deleteCard"))
-                  );
-                })
+
+          h("div", { className: "__sm_group" },
+            h("div", { className: "__sm_groupTitle" },
+              h("span", null, t("cardListTitle")),
+              h("span", { className: "__sm_hint" }, t("cardListHint"))
+            ),
+            h("label", { className: "__sm_field" },
+              h("span", { className: "__sm_label" }, t("defaultBadge")),
+              h("span", { className: "__sm_hint" }, t("activeHint")),
+              h("select", { className: "__sm_input", value: active || "", disabled: busy, onChange: function (e) { var v = e.target.value; if (!v) runWrite([{ op: "unset", path: ["active"] }]); else onSetActive(v); } },
+                h("option", { value: "" }, t("noneOption")),
+                cardNames.map(function (n) { return h("option", { key: n, value: n }, n); })
               )
-        ),
-
-        // ── per-workspace persona mapping ────────────────────────────────
-        h("div", { className: "__sm_group" },
-          h("p", { className: "__sm_label", style: { margin: 0 } }, t("wsTitle")),
-          h("p", { className: "__sm_hint", style: { margin: "0 0 2px" } }, t("wsHint")),
-          wsList.length === 0
-            ? h("p", { className: "__sm_hint" }, t("wsEmpty"))
-            : h("div", { className: "__sm_cardList" },
-                wsList.map(function (ws) {
-                  var current = wsMap[ws.path] || "";
-                  if (current && current !== "none" && !(current in cards)) current = "";
-                  return h("label", { key: ws.path, className: "__sm_field" },
-                    h("span", { className: "__sm_label", title: ws.path }, (ws.title || ws.path)),
-                    h("select", { className: "__sm_input", value: current, disabled: busy, onChange: function (e) { onWsChange(ws.path, e.target.value); } },
-                      h("option", { value: "" }, t("wsFollow")),
-                      h("option", { value: "none" }, t("noneOption")),
-                      cardNames.map(function (n) { return h("option", { key: n, value: n }, n); })
-                    )
-                  );
-                })
-              ),
-          error ? h("span", { className: "__sm_error", role: "alert" }, messageText(t, error)) : null
-        ),
-
-        // ── memory (plugin-managed) ──────────────────────────────────────
-        h("div", { className: "__sm_group" },
-          h("p", { className: "__sm_label", style: { margin: 0 } }, t("memoryTitle")),
-          h("p", { className: "__sm_hint", style: { margin: "0 0 2px" } }, t("memoryIntro")),
-          h("label", { className: "__sm_field" },
-            h("span", { className: "__sm_row" },
-              h("input", { className: "__sm_check", type: "checkbox", checked: skipValue(), onChange: function (e) { setSkipDraft(e.target.checked); setNotice0(); } }),
-              h("span", { className: "__sm_label" }, t("fieldSkipSubagents"))
             ),
-            h("span", { className: "__sm_hint" }, t("skipSubagentsHint"))
+            cardNames.length === 0
+              ? h("p", { className: "__sm_hint" }, t("emptyCards"))
+              : h("div", { className: "__sm_cardList" },
+                  cardNames.map(function (n) {
+                    var preview = String(cards[n] || "").split("\n").filter(Boolean)[0] || "";
+                    return h("div", { key: n, className: "__sm_cardRow" },
+                      h("span", { className: "__sm_cardName", title: n }, n),
+                      n === active ? h("span", { className: "__sm_badge" }, t("defaultBadge")) : null,
+                      h("span", { className: "__sm_cardPreview" }, preview),
+                      h("button", { type: "button", className: "__sm_btn", onClick: function () { onEditCard(n); }, disabled: busy }, t("editCard")),
+                      n === active ? null : h("button", { type: "button", className: "__sm_btn", onClick: function () { onSetActive(n); }, disabled: busy }, t("setDefault")),
+                      h("button", { type: "button", className: "__sm_btn __sm_btnDanger", onClick: function () { onDeleteCard(n); }, disabled: busy }, t("deleteCard"))
+                    );
+                  })
+                )
           ),
-          h("label", { className: "__sm_field" },
-            h("span", { className: "__sm_row" },
-              h("input", { className: "__sm_check", type: "checkbox", checked: templatesValue(), onChange: function (e) { setTemplatesDraft(e.target.checked); setNotice0(); } }),
-              h("span", { className: "__sm_label" }, t("fieldAllowTemplates"))
+
+          h("div", { className: "__sm_group" },
+            h("div", { className: "__sm_groupTitle" },
+              h("span", null, t("wsTitle")),
+              h("span", { className: "__sm_hint" }, t("wsHint"))
             ),
-            h("span", { className: "__sm_hint" }, t("allowTemplatesHint"))
-          ),
-          MEMORY_FIELDS.map(function (f) {
-            if (f.type === "select") {
-              return h("label", { key: f.key, className: "__sm_field" },
-                h("span", { className: "__sm_label" }, t(f.label)),
-                h("select", { className: "__sm_input", value: memDraftValue(f), onChange: function (e) { setMemField(f, e.target.value); } },
-                  f.options.map(function (option) { return h("option", { key: option[0], value: option[0] }, t(option[1])); })),
-                f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
-              );
-            }
-            if (f.type === "checkbox") {
-              return h("label", { key: f.key, className: "__sm_field" },
-                h("span", { className: "__sm_row" },
-                  h("input", { className: "__sm_check", type: "checkbox", checked: Boolean(memDraftValue(f)), onChange: function (e) { setMemField(f, e.target.checked); } }),
-                  h("span", { className: "__sm_label" }, t(f.label))
+            wsList.length === 0
+              ? h("p", { className: "__sm_hint" }, t("wsEmpty"))
+              : h("div", { className: "__sm_cardList" },
+                  wsList.map(function (ws) {
+                    var current = wsMap[ws.path] || "";
+                    if (current && current !== "none" && !(current in cards)) current = "";
+                    return h("label", { key: ws.path, className: "__sm_field" },
+                      h("span", { className: "__sm_label", title: ws.path }, (ws.title || ws.path)),
+                      h("select", { className: "__sm_input", value: current, disabled: busy, onChange: function (e) { onWsChange(ws.path, e.target.value); } },
+                        h("option", { value: "" }, t("wsFollow")),
+                        h("option", { value: "none" }, t("noneOption")),
+                        cardNames.map(function (n) { return h("option", { key: n, value: n }, n); })
+                      )
+                    );
+                  })
                 ),
-                f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
-              );
-            }
-            return h("label", { key: f.key, className: "__sm_field" },
-              h("span", { className: "__sm_label" }, t(f.label)),
-              h("input", { className: "__sm_input", type: "number", min: 1, max: f.max, step: 1, value: memDraftValue(f), onChange: function (e) { setMemField(f, e.target.value); } }),
-              f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
-            );
-          }),
-          h("div", { className: "__sm_actions" },
-            h("button", { type: "button", className: "__sm_btn __sm_btnPrimary", onClick: onSaveMemory, disabled: busy }, t("save")),
-            notice ? h("span", { className: "__sm_status" }, messageText(t, notice)) : null,
-            busy ? h("span", { className: "__sm_status" }, t("saving")) : null,
-            error ? h("span", { className: "__sm_error" }, messageText(t, error)) : null
+            error ? h("span", { className: "__sm_error", role: "alert" }, messageText(t, error)) : null
           )
         ),
 
-        // ── cloud backup (WebDAV) ────────────────────────────────────────
-        h(CloudBoundary, { t: t }, h(WebdavGroup, { t: t }))
+        // ── 长期记忆 ─────────────────────────────────────────────────────
+        panel("memory",
+          h("div", { className: "__sm_group" },
+            h("div", { className: "__sm_groupTitle" },
+              h("span", null, t("memoryTitle")),
+              h("span", { className: "__sm_hint" }, t("memoryIntro"))
+            ),
+            h("label", { className: "__sm_field" },
+              h("span", { className: "__sm_row" },
+                h("input", { className: "__sm_check", type: "checkbox", checked: skipValue(), onChange: function (e) { setSkipDraft(e.target.checked); setNotice0(); } }),
+                h("span", { className: "__sm_label" }, t("fieldSkipSubagents"))
+              ),
+              h("span", { className: "__sm_hint" }, t("skipSubagentsHint"))
+            ),
+            h("label", { className: "__sm_field" },
+              h("span", { className: "__sm_row" },
+                h("input", { className: "__sm_check", type: "checkbox", checked: templatesValue(), onChange: function (e) { setTemplatesDraft(e.target.checked); setNotice0(); } }),
+                h("span", { className: "__sm_label" }, t("fieldAllowTemplates"))
+              ),
+              h("span", { className: "__sm_hint" }, t("allowTemplatesHint"))
+            ),
+            MEMORY_FIELDS.map(function (f) {
+              if (f.type === "select") {
+                return h("label", { key: f.key, className: "__sm_field" },
+                  h("span", { className: "__sm_label" }, t(f.label)),
+                  h("select", { className: "__sm_input", value: memDraftValue(f), onChange: function (e) { setMemField(f, e.target.value); } },
+                    f.options.map(function (option) { return h("option", { key: option[0], value: option[0] }, t(option[1])); })),
+                  f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
+                );
+              }
+              if (f.type === "checkbox") {
+                return h("label", { key: f.key, className: "__sm_field" },
+                  h("span", { className: "__sm_row" },
+                    h("input", { className: "__sm_check", type: "checkbox", checked: Boolean(memDraftValue(f)), onChange: function (e) { setMemField(f, e.target.checked); } }),
+                    h("span", { className: "__sm_label" }, t(f.label))
+                  ),
+                  f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
+                );
+              }
+              return h("label", { key: f.key, className: "__sm_field" },
+                h("span", { className: "__sm_label" }, t(f.label)),
+                h("input", { className: "__sm_input", type: "number", min: 1, max: f.max, step: 1, value: memDraftValue(f), onChange: function (e) { setMemField(f, e.target.value); } }),
+                f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
+              );
+            }),
+            h("div", { className: "__sm_actions" },
+              h("button", { type: "button", className: "__sm_btn __sm_btnPrimary", onClick: onSaveMemory, disabled: busy }, t("save")),
+              notice ? h("span", { className: "__sm_status" }, messageText(t, notice)) : null,
+              busy ? h("span", { className: "__sm_status" }, t("saving")) : null,
+              error ? h("span", { className: "__sm_error" }, messageText(t, error)) : null
+            )
+          )
+        ),
+
+        // ── 云端备份 ─────────────────────────────────────────────────────
+        panel("cloud", h(CloudBoundary, { t: t }, h(WebdavGroup, { t: t })))
       );
     }
 

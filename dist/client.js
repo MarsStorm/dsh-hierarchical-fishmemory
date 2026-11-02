@@ -74,6 +74,15 @@ window.__ModuleLoader__.load({
 @media(prefers-reduced-motion:reduce){.dsh-flat.__sm_root *,.dsh-flat.__sm_root input[type=checkbox]::before{transition:none}}
 .dsh-flat.__sm_root button{border-radius:6px;min-height:34px;padding:7px 14px;font:inherit;font-size:12px;box-shadow:none}
 .dsh-flat.__sm_root :is(h2,h3){margin:0;font-size:14px;font-weight:600}
+.dsh-flat.__sm_root .__sm_head{display:flex;flex-direction:column;gap:5px;padding-bottom:2px}
+.dsh-flat.__sm_root .__sm_title{display:flex;align-items:center;gap:8px;font-size:16px;font-weight:600;letter-spacing:-.01em}
+.dsh-flat.__sm_root .__sm_tabs{display:flex;gap:2px;border-bottom:1px solid var(--flat-border);margin-top:2px}
+.dsh-flat.__sm_root .__sm_tab{appearance:none;border:0;border-bottom:2px solid transparent;border-radius:0;background:none;box-shadow:none;min-height:0;margin-bottom:-1px;padding:8px 12px 9px;font:inherit;font-size:13px;color:var(--dsw-alias-label-tertiary);cursor:pointer}
+.dsh-flat.__sm_root .__sm_tab:hover{color:var(--dsw-alias-label-primary)}
+.dsh-flat.__sm_root .__sm_tab[aria-selected="true"]{color:var(--dsw-alias-label-primary);font-weight:600;border-bottom-color:var(--flat-accent)}
+.dsh-flat.__sm_root .__sm_panel{display:flex;flex-direction:column;gap:14px;padding-top:4px}
+.dsh-flat.__sm_root .__sm_groupTitle{display:flex;flex-direction:column;gap:2px}
+.dsh-flat.__sm_root .__sm_groupTitle>span:first-child{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary)}
 `;
     var tagId = "dsh-soul-md/main.css";
     if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
@@ -148,6 +157,12 @@ window.__ModuleLoader__.load({
       invalidCardName: "请输入人设卡名称",
       invalidCardContent: "请输入人设卡内容",
       intro: "输入人设卡名称和内容，保存后插件自动管理——文件路径、记忆存放都不用管。人设按 会话选择 → 默认卡 解析，聊天框标题栏可随时切换。",
+      pageTitle: "属于我们的回忆",
+      tabCards: "人设卡",
+      tabMemory: "长期记忆",
+      tabCloud: "云端备份",
+      writeTitle: "写一张卡",
+      writeHint: "内容和名称都可以改；保存后立刻按「会话选择 → 默认卡」生效。",
       cardListTitle: "人设卡",
       cardListHint: "卡片内容会注入系统提示词；聊天框标题栏可给每个会话单独选卡。",
       cardName: "人设卡名称",
@@ -250,6 +265,12 @@ window.__ModuleLoader__.load({
       invalidCardName: "Enter a persona card name",
       invalidCardContent: "Enter persona card content",
       intro: "Type a persona card name and content, hit save — the plugin manages everything else (files, memory locations). Persona resolves as session choice > default card; switch per chat from the conversation header.",
+      pageTitle: "Memories That Belong to Us",
+      tabCards: "Persona cards",
+      tabMemory: "Long-term memory",
+      tabCloud: "Cloud backup",
+      writeTitle: "Write a card",
+      writeHint: "Name and content are both editable; saved cards resolve as session choice > default card.",
       cardListTitle: "Persona cards",
       cardListHint: "Card content is injected into the system prompt; pick one per chat from the conversation header.",
       cardName: "Card name",
@@ -801,6 +822,7 @@ window.__ModuleLoader__.load({
       var writePending = react.useRef(false);
       var [notice, setNotice] = react.useState(null);
       var [error, setError] = react.useState(null);
+      var [tab, setTab] = react.useState("cards");
 
       react.useEffect(function () {
         // No refresh call here: the scope's public seam has no load(). Reads ride
@@ -956,133 +978,180 @@ window.__ModuleLoader__.load({
         runWrite(ops, function () { setMemDraft(function () { return {}; }); setSkipDraft(null); setTemplatesDraft(null); });
       }
 
-      return h("div", { className: "__sm_root dsh-flat" },
-        h("p", { className: "__sm_hint", style: { margin: "0 0 4px" } }, t("intro")),
+      // 页签：人设卡 / 长期记忆 / 云端备份。
+      //
+      // 三个面板**始终挂载**，只靠 display 切换。理由有两个：
+      //   1. 渲染冒烟测试里 WebdavGroup 必须首屏就在树里（React 桩不会重渲染），
+      //      条件挂载会让它整个消失；
+      //   2. 切页签时正在编辑的草稿不会丢。
+      var tabItems = [
+        { key: "cards", label: t("tabCards") },
+        { key: "memory", label: t("tabMemory") },
+        { key: "cloud", label: t("tabCloud") }
+      ];
+      var panel = function (key, children) {
+        return h("div", { className: "__sm_panel", style: key === tab ? null : { display: "none" } }, children);
+      };
 
-        // ── card form ────────────────────────────────────────────────────
-        h("div", { className: "__sm_group" },
-          h("label", { className: "__sm_field" },
-            h("span", { className: "__sm_label" }, t("cardName")),
-            h("span", { className: "__sm_hint" }, t("cardNameHint")),
-            h("input", { className: "__sm_input", type: "text", value: cardDraft.name, placeholder: t("cardNamePlaceholder"), onChange: function (e) { setCardDraft(function (p) { return Object.assign({}, p, { name: e.target.value }); }); setNotice0(); } })
+      return h("div", { className: "__sm_root dsh-flat" },
+        // ── 页头 ─────────────────────────────────────────────────────────
+        h("div", { className: "__sm_head" },
+          h("h2", { className: "__sm_title" },
+            t("pageTitle"),
+            active ? h("span", { className: "__sm_badge" }, active) : null
           ),
-          h("label", { className: "__sm_field" },
-            h("span", { className: "__sm_label" }, t("cardContent")),
-            h("span", { className: "__sm_hint" }, t("cardContentHint")),
-            h("textarea", { className: "__sm_input __sm_textarea", value: cardDraft.content, onChange: function (e) { setCardDraft(function (p) { return Object.assign({}, p, { content: e.target.value }); }); setNotice0(); } })
-          ),
-          h("div", { className: "__sm_actions" },
-            h("button", { type: "button", className: "__sm_btn __sm_btnPrimary", onClick: onSaveCard, disabled: busy }, t("saveCard")),
-            notice ? h("span", { className: "__sm_status" }, messageText(t, notice)) : null,
-            busy ? h("span", { className: "__sm_status" }, t("saving")) : null,
-            error ? h("span", { className: "__sm_error" }, messageText(t, error)) : null
-          )
+          h("p", { className: "__sm_hint" }, t("intro"))
         ),
 
-        // ── card list + default picker ───────────────────────────────────
-        h("div", { className: "__sm_group" },
-          h("p", { className: "__sm_label", style: { margin: 0 } }, t("cardListTitle")),
-          h("p", { className: "__sm_hint", style: { margin: "0 0 2px" } }, t("cardListHint")),
-          h("label", { className: "__sm_field" },
-            h("span", { className: "__sm_label" }, t("defaultBadge")),
-            h("span", { className: "__sm_hint" }, t("activeHint")),
-            h("select", { className: "__sm_input", value: active || "", disabled: busy, onChange: function (e) { var v = e.target.value; if (!v) runWrite([{ op: "unset", path: ["active"] }]); else onSetActive(v); } },
-              h("option", { value: "" }, t("noneOption")),
-              cardNames.map(function (n) { return h("option", { key: n, value: n }, n); })
+        h("div", { className: "__sm_tabs", role: "tablist" },
+          tabItems.map(function (item) {
+            return h("button", {
+              key: item.key,
+              type: "button",
+              role: "tab",
+              className: "__sm_tab",
+              "aria-selected": item.key === tab ? "true" : "false",
+              onClick: function () { setTab(item.key); }
+            }, item.label);
+          })
+        ),
+
+        // ── 人设卡 ───────────────────────────────────────────────────────
+        panel("cards",
+          h("div", { className: "__sm_group" },
+            h("div", { className: "__sm_groupTitle" },
+              h("span", null, t("writeTitle")),
+              h("span", { className: "__sm_hint" }, t("writeHint"))
+            ),
+            h("label", { className: "__sm_field" },
+              h("span", { className: "__sm_label" }, t("cardName")),
+              h("span", { className: "__sm_hint" }, t("cardNameHint")),
+              h("input", { className: "__sm_input", type: "text", value: cardDraft.name, placeholder: t("cardNamePlaceholder"), onChange: function (e) { setCardDraft(function (p) { return Object.assign({}, p, { name: e.target.value }); }); setNotice0(); } })
+            ),
+            h("label", { className: "__sm_field" },
+              h("span", { className: "__sm_label" }, t("cardContent")),
+              h("span", { className: "__sm_hint" }, t("cardContentHint")),
+              h("textarea", { className: "__sm_input __sm_textarea", value: cardDraft.content, onChange: function (e) { setCardDraft(function (p) { return Object.assign({}, p, { content: e.target.value }); }); setNotice0(); } })
+            ),
+            h("div", { className: "__sm_actions" },
+              h("button", { type: "button", className: "__sm_btn __sm_btnPrimary", onClick: onSaveCard, disabled: busy }, t("saveCard")),
+              notice ? h("span", { className: "__sm_status" }, messageText(t, notice)) : null,
+              busy ? h("span", { className: "__sm_status" }, t("saving")) : null,
+              error ? h("span", { className: "__sm_error" }, messageText(t, error)) : null
             )
           ),
-          cardNames.length === 0
-            ? h("p", { className: "__sm_hint" }, t("emptyCards"))
-            : h("div", { className: "__sm_cardList" },
-                cardNames.map(function (n) {
-                  var preview = String(cards[n] || "").split("\n").filter(Boolean)[0] || "";
-                  return h("div", { key: n, className: "__sm_cardRow" },
-                    h("span", { className: "__sm_cardName", title: n }, n),
-                    n === active ? h("span", { className: "__sm_badge" }, t("defaultBadge")) : null,
-                    h("span", { className: "__sm_cardPreview" }, preview),
-                    h("button", { type: "button", className: "__sm_btn", onClick: function () { onEditCard(n); }, disabled: busy }, t("editCard")),
-                    n === active ? null : h("button", { type: "button", className: "__sm_btn", onClick: function () { onSetActive(n); }, disabled: busy }, t("setDefault")),
-                    h("button", { type: "button", className: "__sm_btn __sm_btnDanger", onClick: function () { onDeleteCard(n); }, disabled: busy }, t("deleteCard"))
-                  );
-                })
+
+          h("div", { className: "__sm_group" },
+            h("div", { className: "__sm_groupTitle" },
+              h("span", null, t("cardListTitle")),
+              h("span", { className: "__sm_hint" }, t("cardListHint"))
+            ),
+            h("label", { className: "__sm_field" },
+              h("span", { className: "__sm_label" }, t("defaultBadge")),
+              h("span", { className: "__sm_hint" }, t("activeHint")),
+              h("select", { className: "__sm_input", value: active || "", disabled: busy, onChange: function (e) { var v = e.target.value; if (!v) runWrite([{ op: "unset", path: ["active"] }]); else onSetActive(v); } },
+                h("option", { value: "" }, t("noneOption")),
+                cardNames.map(function (n) { return h("option", { key: n, value: n }, n); })
               )
-        ),
-
-        // ── per-workspace persona mapping ────────────────────────────────
-        h("div", { className: "__sm_group" },
-          h("p", { className: "__sm_label", style: { margin: 0 } }, t("wsTitle")),
-          h("p", { className: "__sm_hint", style: { margin: "0 0 2px" } }, t("wsHint")),
-          wsList.length === 0
-            ? h("p", { className: "__sm_hint" }, t("wsEmpty"))
-            : h("div", { className: "__sm_cardList" },
-                wsList.map(function (ws) {
-                  var current = wsMap[ws.path] || "";
-                  if (current && current !== "none" && !(current in cards)) current = "";
-                  return h("label", { key: ws.path, className: "__sm_field" },
-                    h("span", { className: "__sm_label", title: ws.path }, (ws.title || ws.path)),
-                    h("select", { className: "__sm_input", value: current, disabled: busy, onChange: function (e) { onWsChange(ws.path, e.target.value); } },
-                      h("option", { value: "" }, t("wsFollow")),
-                      h("option", { value: "none" }, t("noneOption")),
-                      cardNames.map(function (n) { return h("option", { key: n, value: n }, n); })
-                    )
-                  );
-                })
-              ),
-          error ? h("span", { className: "__sm_error", role: "alert" }, messageText(t, error)) : null
-        ),
-
-        // ── memory (plugin-managed) ──────────────────────────────────────
-        h("div", { className: "__sm_group" },
-          h("p", { className: "__sm_label", style: { margin: 0 } }, t("memoryTitle")),
-          h("p", { className: "__sm_hint", style: { margin: "0 0 2px" } }, t("memoryIntro")),
-          h("label", { className: "__sm_field" },
-            h("span", { className: "__sm_row" },
-              h("input", { className: "__sm_check", type: "checkbox", checked: skipValue(), onChange: function (e) { setSkipDraft(e.target.checked); setNotice0(); } }),
-              h("span", { className: "__sm_label" }, t("fieldSkipSubagents"))
             ),
-            h("span", { className: "__sm_hint" }, t("skipSubagentsHint"))
+            cardNames.length === 0
+              ? h("p", { className: "__sm_hint" }, t("emptyCards"))
+              : h("div", { className: "__sm_cardList" },
+                  cardNames.map(function (n) {
+                    var preview = String(cards[n] || "").split("\n").filter(Boolean)[0] || "";
+                    return h("div", { key: n, className: "__sm_cardRow" },
+                      h("span", { className: "__sm_cardName", title: n }, n),
+                      n === active ? h("span", { className: "__sm_badge" }, t("defaultBadge")) : null,
+                      h("span", { className: "__sm_cardPreview" }, preview),
+                      h("button", { type: "button", className: "__sm_btn", onClick: function () { onEditCard(n); }, disabled: busy }, t("editCard")),
+                      n === active ? null : h("button", { type: "button", className: "__sm_btn", onClick: function () { onSetActive(n); }, disabled: busy }, t("setDefault")),
+                      h("button", { type: "button", className: "__sm_btn __sm_btnDanger", onClick: function () { onDeleteCard(n); }, disabled: busy }, t("deleteCard"))
+                    );
+                  })
+                )
           ),
-          h("label", { className: "__sm_field" },
-            h("span", { className: "__sm_row" },
-              h("input", { className: "__sm_check", type: "checkbox", checked: templatesValue(), onChange: function (e) { setTemplatesDraft(e.target.checked); setNotice0(); } }),
-              h("span", { className: "__sm_label" }, t("fieldAllowTemplates"))
+
+          h("div", { className: "__sm_group" },
+            h("div", { className: "__sm_groupTitle" },
+              h("span", null, t("wsTitle")),
+              h("span", { className: "__sm_hint" }, t("wsHint"))
             ),
-            h("span", { className: "__sm_hint" }, t("allowTemplatesHint"))
-          ),
-          MEMORY_FIELDS.map(function (f) {
-            if (f.type === "select") {
-              return h("label", { key: f.key, className: "__sm_field" },
-                h("span", { className: "__sm_label" }, t(f.label)),
-                h("select", { className: "__sm_input", value: memDraftValue(f), onChange: function (e) { setMemField(f, e.target.value); } },
-                  f.options.map(function (option) { return h("option", { key: option[0], value: option[0] }, t(option[1])); })),
-                f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
-              );
-            }
-            if (f.type === "checkbox") {
-              return h("label", { key: f.key, className: "__sm_field" },
-                h("span", { className: "__sm_row" },
-                  h("input", { className: "__sm_check", type: "checkbox", checked: Boolean(memDraftValue(f)), onChange: function (e) { setMemField(f, e.target.checked); } }),
-                  h("span", { className: "__sm_label" }, t(f.label))
+            wsList.length === 0
+              ? h("p", { className: "__sm_hint" }, t("wsEmpty"))
+              : h("div", { className: "__sm_cardList" },
+                  wsList.map(function (ws) {
+                    var current = wsMap[ws.path] || "";
+                    if (current && current !== "none" && !(current in cards)) current = "";
+                    return h("label", { key: ws.path, className: "__sm_field" },
+                      h("span", { className: "__sm_label", title: ws.path }, (ws.title || ws.path)),
+                      h("select", { className: "__sm_input", value: current, disabled: busy, onChange: function (e) { onWsChange(ws.path, e.target.value); } },
+                        h("option", { value: "" }, t("wsFollow")),
+                        h("option", { value: "none" }, t("noneOption")),
+                        cardNames.map(function (n) { return h("option", { key: n, value: n }, n); })
+                      )
+                    );
+                  })
                 ),
-                f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
-              );
-            }
-            return h("label", { key: f.key, className: "__sm_field" },
-              h("span", { className: "__sm_label" }, t(f.label)),
-              h("input", { className: "__sm_input", type: "number", min: 1, max: f.max, step: 1, value: memDraftValue(f), onChange: function (e) { setMemField(f, e.target.value); } }),
-              f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
-            );
-          }),
-          h("div", { className: "__sm_actions" },
-            h("button", { type: "button", className: "__sm_btn __sm_btnPrimary", onClick: onSaveMemory, disabled: busy }, t("save")),
-            notice ? h("span", { className: "__sm_status" }, messageText(t, notice)) : null,
-            busy ? h("span", { className: "__sm_status" }, t("saving")) : null,
-            error ? h("span", { className: "__sm_error" }, messageText(t, error)) : null
+            error ? h("span", { className: "__sm_error", role: "alert" }, messageText(t, error)) : null
           )
         ),
 
-        // ── cloud backup (WebDAV) ────────────────────────────────────────
-        h(CloudBoundary, { t: t }, h(WebdavGroup, { t: t }))
+        // ── 长期记忆 ─────────────────────────────────────────────────────
+        panel("memory",
+          h("div", { className: "__sm_group" },
+            h("div", { className: "__sm_groupTitle" },
+              h("span", null, t("memoryTitle")),
+              h("span", { className: "__sm_hint" }, t("memoryIntro"))
+            ),
+            h("label", { className: "__sm_field" },
+              h("span", { className: "__sm_row" },
+                h("input", { className: "__sm_check", type: "checkbox", checked: skipValue(), onChange: function (e) { setSkipDraft(e.target.checked); setNotice0(); } }),
+                h("span", { className: "__sm_label" }, t("fieldSkipSubagents"))
+              ),
+              h("span", { className: "__sm_hint" }, t("skipSubagentsHint"))
+            ),
+            h("label", { className: "__sm_field" },
+              h("span", { className: "__sm_row" },
+                h("input", { className: "__sm_check", type: "checkbox", checked: templatesValue(), onChange: function (e) { setTemplatesDraft(e.target.checked); setNotice0(); } }),
+                h("span", { className: "__sm_label" }, t("fieldAllowTemplates"))
+              ),
+              h("span", { className: "__sm_hint" }, t("allowTemplatesHint"))
+            ),
+            MEMORY_FIELDS.map(function (f) {
+              if (f.type === "select") {
+                return h("label", { key: f.key, className: "__sm_field" },
+                  h("span", { className: "__sm_label" }, t(f.label)),
+                  h("select", { className: "__sm_input", value: memDraftValue(f), onChange: function (e) { setMemField(f, e.target.value); } },
+                    f.options.map(function (option) { return h("option", { key: option[0], value: option[0] }, t(option[1])); })),
+                  f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
+                );
+              }
+              if (f.type === "checkbox") {
+                return h("label", { key: f.key, className: "__sm_field" },
+                  h("span", { className: "__sm_row" },
+                    h("input", { className: "__sm_check", type: "checkbox", checked: Boolean(memDraftValue(f)), onChange: function (e) { setMemField(f, e.target.checked); } }),
+                    h("span", { className: "__sm_label" }, t(f.label))
+                  ),
+                  f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
+                );
+              }
+              return h("label", { key: f.key, className: "__sm_field" },
+                h("span", { className: "__sm_label" }, t(f.label)),
+                h("input", { className: "__sm_input", type: "number", min: 1, max: f.max, step: 1, value: memDraftValue(f), onChange: function (e) { setMemField(f, e.target.value); } }),
+                f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
+              );
+            }),
+            h("div", { className: "__sm_actions" },
+              h("button", { type: "button", className: "__sm_btn __sm_btnPrimary", onClick: onSaveMemory, disabled: busy }, t("save")),
+              notice ? h("span", { className: "__sm_status" }, messageText(t, notice)) : null,
+              busy ? h("span", { className: "__sm_status" }, t("saving")) : null,
+              error ? h("span", { className: "__sm_error" }, messageText(t, error)) : null
+            )
+          )
+        ),
+
+        // ── 云端备份 ─────────────────────────────────────────────────────
+        panel("cloud", h(CloudBoundary, { t: t }, h(WebdavGroup, { t: t })))
       );
     }
 
@@ -1282,32 +1351,166 @@ window.__ModuleLoader__.load({
 
     /* ───────────────────────── 小组件 ───────────────────────── */
 
-    function Section(props) {
-      return h(
-        'section',
-        { style: { marginTop: 22 } },
-        h(
-          'h3',
-          {
-            style: {
-              margin: '0 0 10px',
-              fontSize: 12,
-              fontWeight: 600,
-              letterSpacing: '0.06em',
-              color: C.text2,
-            },
-          },
-          props.title,
-        ),
-        props.children,
-      );
-    }
-
     function Empty(props) {
       return h(
         'p',
         { style: { margin: 0, fontSize: 13, lineHeight: 1.7, color: C.text2 } },
         props.text,
+      );
+    }
+
+    /**
+     * 卡片外壳。
+     *
+     * 2026-11-03 加。原来是「一根长条」：标题、日记、本子、三颗下载链接、
+     * 体检、导入、云端，全堆在同一个 `<section>` 里，越往下越像管理后台。
+     * 现在每块内容各有一层底、一条边框、一段自己的标题 —— 眼睛才分得清
+     * 哪一段在说什么。
+     */
+    function Card(props) {
+      return h(
+        'div',
+        {
+          style: {
+            marginTop: 14,
+            padding: '16px 18px',
+            borderRadius: 12,
+            background: C.layer1,
+            border: `1px solid ${C.border1}`,
+          },
+        },
+        props.title
+          ? h(
+              'div',
+              {
+                style: {
+                  display: 'flex',
+                  alignItems: 'baseline',
+                  gap: 8,
+                  marginBottom: props.hint ? 2 : 8,
+                },
+              },
+              h('span', { style: { fontSize: 13, fontWeight: 600, color: C.text1 } }, props.title),
+              h('span', { style: { flex: 1 } }),
+              props.aside || null,
+            )
+          : null,
+        props.hint
+          ? h(
+              'p',
+              { style: { margin: '0 0 10px', fontSize: 11.5, lineHeight: 1.6, color: C.text2 } },
+              props.hint,
+            )
+          : null,
+        props.children,
+      );
+    }
+
+    /** 小圆角标签：摆「34 条」「认识 12 天」这种数，比一行逗号分隔的话好扫。 */
+    function Chip(props) {
+      return h(
+        'span',
+        {
+          style: {
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            padding: '2px 9px',
+            borderRadius: 999,
+            border: `1px solid ${C.border1}`,
+            background: C.layer2,
+            fontSize: 11,
+            lineHeight: 1.7,
+            color: C.text2,
+            whiteSpace: 'nowrap',
+          },
+        },
+        props.children,
+      );
+    }
+
+    /**
+     * 页签。
+     *
+     * 四个视图**始终挂载**，只靠 display 切换。两个理由：
+     *   1. 切来切去不该重拉一次 /stats、/feelings —— 那是好几趟往返；
+     *   2. 渲染冒烟测试里 WebdavGroup 必须首屏就在树里（React 桩不会重渲染），
+     *      条件挂载会让它消失。
+     */
+    function Tabs(props) {
+      return h(
+        'div',
+        {
+          role: 'tablist',
+          style: {
+            display: 'flex',
+            gap: 2,
+            marginTop: 18,
+            borderBottom: `1px solid ${C.border1}`,
+          },
+        },
+        props.tabs.map((tab) => {
+          const on = props.value === tab.key;
+          return h(
+            'button',
+            {
+              key: tab.key,
+              type: 'button',
+              role: 'tab',
+              onClick: () => props.onChange(tab.key),
+              style: {
+                appearance: 'none',
+                border: 0,
+                background: 'none',
+                font: 'inherit',
+                cursor: 'pointer',
+                padding: '8px 12px 9px',
+                marginBottom: -1,
+                fontSize: 13,
+                fontWeight: on ? 600 : 400,
+                color: on ? C.text1 : C.text2,
+                borderBottom: `2px solid ${on ? C.brand : 'transparent'}`,
+              },
+            },
+            tab.label,
+          );
+        }),
+      );
+    }
+
+    /** 描边按钮/链接：导出那三样和「导入备份」用同一个样子。 */
+    function Ghost(props) {
+      const base = {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '6px 12px',
+        borderRadius: 8,
+        border: `1px solid ${C.border1}`,
+        background: C.bg,
+        color: C.text1,
+        fontSize: 12,
+        lineHeight: 1.6,
+        fontFamily: 'inherit',
+        textDecoration: 'none',
+        cursor: 'pointer',
+      };
+      if (props.href) {
+        return h(
+          'a',
+          { href: props.href, download: '', style: { ...base, ...(props.style || {}) } },
+          props.children,
+        );
+      }
+      return h(
+        'button',
+        {
+          type: 'button',
+          disabled: props.disabled,
+          onClick: props.onClick,
+          style: { ...base, opacity: props.disabled ? 0.5 : 1, cursor: props.disabled ? 'default' : 'pointer', ...(props.style || {}) },
+        },
+        props.children,
       );
     }
 
@@ -1434,7 +1637,15 @@ window.__ModuleLoader__.load({
      * **看** 和 **存**。走 host 的同源接口 `${API}/notes`：
      * GET 拿两份文本，POST 交回改过的那一份。
      */
-    function Notebook() {
+    /**
+     * 本子。
+     *
+     * 2026-11-03：`only` 用来只摆其中一本。情感日记原先在这儿也有一个编辑口
+     * （`/notes` 的 day），和 `/feelings` 那个是同一个文件、两套边框 —— 现在
+     * 统一走 FeelingsBox（它会先存快照），这里只留人格手记。
+     */
+    function Notebook(props) {
+      const only = (props && props.only) || null;
       const [notes, setNotes] = useState(null);
       const [error, setError] = useState('');
       const [editing, setEditing] = useState('');
@@ -1494,8 +1705,8 @@ window.__ModuleLoader__.load({
         marginBottom: 10,
         padding: '12px 14px',
         borderRadius: 10,
-        background: C.layer1,
-        border: `1px solid ${C.border1}`,
+        background: C.bg,
+        border: `1px solid ${C.border2}`,
       };
       const mono = {
         margin: 0,
@@ -1508,12 +1719,13 @@ window.__ModuleLoader__.load({
       };
 
       let body;
-      if (notes === null) {
+      const shown = notes === null ? null : (only ? notes.filter((n) => only.indexOf(n.key) !== -1) : notes);
+      if (shown === null) {
         body = h(Empty, { text: '翻本子…' });
-      } else if (notes.length === 0) {
+      } else if (shown.length === 0) {
         body = h(Empty, { text: '没有可翻的本子。' });
       } else {
-        body = notes.map((n) =>
+        body = shown.map((n) =>
           h(
             'div',
             { key: n.key, style: box },
@@ -1584,8 +1796,8 @@ window.__ModuleLoader__.load({
       }
 
       return h(
-        Section,
-        { title: '本子' },
+        'div',
+        null,
         error !== ''
           ? h(
               'p',
@@ -1678,7 +1890,7 @@ window.__ModuleLoader__.load({
       };
 
       const delta = [...text].length - [...original].length;
-      return h('div', { style: { marginTop: 16 } },
+      return h('div', { style: { marginTop: 0 } },
         h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
           h('div', { style: { fontSize: 13, fontWeight: 600 } }, '情感日记'),
           h('button', {
@@ -1792,10 +2004,10 @@ window.__ModuleLoader__.load({
           h('span', { style: { fontVariantNumeric: 'tabular-nums' } }, String(value)));
 
       if (!state && !error) {
-        return h('div', { style: { marginTop: 14, fontSize: 12, color: C.text2 } }, '正在数账…');
+        return h('div', { style: { marginTop: 0, fontSize: 12, color: C.text2 } }, '正在数账…');
       }
       if (error) {
-        return h('div', { style: { marginTop: 14, fontSize: 12, color: C.err } }, `体检读不到：${error}`);
+        return h('div', { style: { marginTop: 0, fontSize: 12, color: C.err } }, `体检读不到：${error}`);
       }
 
       const d = state;
@@ -1808,7 +2020,7 @@ window.__ModuleLoader__.load({
         ));
       }
 
-      return h('div', { style: { marginTop: 14 } },
+      return h('div', { style: { marginTop: 0 } },
         h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
           h('div', { style: { fontSize: 13, fontWeight: 600 } }, '记忆体检'),
           h('button', {
@@ -1908,15 +2120,15 @@ window.__ModuleLoader__.load({
         return h('button', {
           type: 'button',
           onClick: () => setOpen(true),
-          style: { marginTop: 14, fontSize: 12, padding: '4px 10px', borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: C.text2, cursor: 'pointer' },
+          style: { marginTop: 0, fontSize: 12, padding: '4px 10px', borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: C.text2, cursor: 'pointer' },
         }, '回顾一下最近七天');
       }
 
-      if (error) return h('div', { style: { marginTop: 14, fontSize: 12, color: C.err } }, `回顾读不到：${error}`);
-      if (!state) return h('div', { style: { marginTop: 14, fontSize: 12, color: C.text2 } }, '翻着…');
+      if (error) return h('div', { style: { marginTop: 0, fontSize: 12, color: C.err } }, `回顾读不到：${error}`);
+      if (!state) return h('div', { style: { marginTop: 0, fontSize: 12, color: C.text2 } }, '翻着…');
 
       const back = state.lookback;
-      return h('div', { style: { marginTop: 14 } },
+      return h('div', { style: { marginTop: 0 } },
         h('div', { style: { fontSize: 13, fontWeight: 600 } }, '回顾'),
         back.entries.length
           ? h('div', { style: { marginTop: 6 } },
@@ -2027,7 +2239,16 @@ window.__ModuleLoader__.load({
           {
             type: 'button',
             onClick: () => picker.current && picker.current.click(),
-            style: { ...linkStyle(C.brand), marginLeft: 16 },
+            style: {
+              fontSize: 12,
+              fontFamily: 'inherit',
+              padding: '6px 12px',
+              borderRadius: 8,
+              border: `1px solid ${C.border1}`,
+              background: C.bg,
+              color: C.text1,
+              cursor: 'pointer',
+            },
           },
           '导入备份（.json）',
         ),
@@ -2074,12 +2295,21 @@ window.__ModuleLoader__.load({
 
     /* ───────────────────────── 主面板 ───────────────────────── */
 
+    /** 四个页签，按使用频率排。 */
+    const TABS = [
+      { key: 'timeline', label: '回看' },
+      { key: 'books', label: '本子' },
+      { key: 'health', label: '体检' },
+      { key: 'archive', label: '档案' },
+    ];
+
     function Panel() {
       const [phase, setPhase] = useState('loading');
       const [state, setState] = useState(null);
       const [error, setError] = useState('');
       const [busy, setBusy] = useState('');
       const [tick, setTick] = useState(0);
+      const [tab, setTab] = useState('timeline');
 
       useEffect(() => {
         let alive = true;
@@ -2167,11 +2397,15 @@ window.__ModuleLoader__.load({
       // 数据还在档案里，要看就翻 relationship.json。
       const diary = d.diary || [];
 
-      const head = [];
-      head.push(`本地存储 · ${d.count || 0} 条`);
-      if (facts.days > 0) head.push(`认识 ${facts.days} 天`);
-      if (facts.nickname) head.push(`他管我叫"${facts.nickname}"`);
-      if (d.degraded) head.push('档案只读');
+      // 按使用频率排：看回忆是天天的事，改本子是偶尔，体检和带走是修东西的时候。
+      const chips = [];
+      chips.push(`共度时光 ${d.count || 0} 条`);
+      if (facts.days > 0) chips.push(`认识 ${facts.days} 天`);
+      if (facts.nickname) chips.push(`他管我叫「${facts.nickname}」`);
+      if (d.degraded) chips.push('档案只读');
+
+      const view = (key, ...children) =>
+        h('div', { style: { display: tab === key ? 'block' : 'none' } }, children);
 
       return h(
         'div',
@@ -2181,11 +2415,15 @@ window.__ModuleLoader__.load({
           { style: inner },
 
           // ── 标题 ──
-          h('h2', { style: { margin: 0, fontSize: 18, fontWeight: 600 } }, '属于我们的回忆'),
           h(
-            'p',
-            { style: { margin: '6px 0 0', fontSize: 12, color: C.text2 } },
-            head.join(' · '),
+            'h2',
+            { style: { margin: 0, fontSize: 19, fontWeight: 600, letterSpacing: '-0.01em' } },
+            '属于我们的回忆',
+          ),
+          h(
+            'div',
+            { style: { marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 } },
+            chips.map((text, i) => h(Chip, { key: i }, text)),
           ),
 
           // ── 出错横幅 ──
@@ -2211,79 +2449,61 @@ window.__ModuleLoader__.load({
               )
             : null,
 
-          // ── 「我对他的一些印象」（traits）2026-10-27 整栏下线 ──
-          // 注入层、固化侧都删了 —— 面板这里跟着删，不然界面上还挂着一栏，
-          // 而它永远不会再有新内容（只能显示砍之前的老数据）。
-          // 档案里那些 traits 一个字没删，要看就翻 relationship.json。
+          h(Tabs, { tabs: TABS, value: tab, onChange: setTab }),
 
-          // ── 「我最近常说的」（lexicon）2026-10-27 整栏下线 ──
-          // 同一刀：词表不再产出，这栏只剩历史。
-
-          // 「上一棒留下的」那一栏 2026-10-27 整栏下线 ──
-          // 档案里那些 about="self" 的 trait 一个字没删，只是不再显示。
-
-          // 「我还欠着他的」那一栏随功能一起删了（2026-10-24）。
-
-          // ── 日记 ──
-          h(
-            Section,
-            { title: '共度时光' },
+          // ── 回看：共度时光 ──
+          view(
+            'timeline',
             diary.length === 0
-              ? h(Empty, { text: '还没有日记。多聊几句，我就会有东西可记。' })
-              : diary.map((e) => h(Entry, { key: e.id, entry: e, onForget: forget, busy: busy === e.id })),
+              ? h(Card, null, h(Empty, { text: '还没有日记。多聊几句，我就会有东西可记。' }))
+              : h(
+                  'div',
+                  { style: { marginTop: 14 } },
+                  diary.map((e) => h(Entry, { key: e.id, entry: e, onForget: forget, busy: busy === e.id })),
+                ),
           ),
 
-          // 「我最近常说的」2026-10-27 整栏下线（见上面）。
+          // ── 本子：情感日记 + 人格手记 ──
+          //
+          // 两个编辑口合成一个：情感日记原来既能在「本子」里改、又能在
+          // FeelingsBox 里改，是同一个文件。留下会存快照的那个。
+          view(
+            'books',
+            h(Card, null, h(FeelingsBox)),
+            h(Card, null, h(Notebook, { only: ['handnote'] })),
+          ),
 
-          // ── 我自己的两个本子：鱼的日子 / 手记 ──
-          h(Notebook),
+          // ── 体检：数账 + 回顾 ──
+          view(
+            'health',
+            h(Card, null, h(HealthBox)),
+            h(Card, { title: '最近七天' }, h(ReviewBox)),
+          ),
 
-          // ── 带走 ──
-          h(
-            Section,
-            { title: '档案' },
+          // ── 档案：带走 / 塞回去 / 云端 ──
+          view(
+            'archive',
             h(
-              'a',
+              Card,
               {
-                href: `${API}/export`,
-                download: '',
-                style: { ...linkStyle(C.brand), fontSize: 13 },
+                title: '带走',
+                hint: '它就是一个普通文件夹，在 ~/.dsh/feiyu-diary/。可以直接打开、改、拷走。',
               },
-              '导出档案（.dshpack）',
+              h(
+                'div',
+                { style: { display: 'flex', flexWrap: 'wrap', gap: 8 } },
+                h(Ghost, { href: `${API}/export` }, '导出档案（.dshpack）'),
+                h(Ghost, { href: `${API}/backup` }, '整包备份（.json）'),
+                h(Ghost, { href: `${API}/export-md` }, '导出成册（.md）'),
+              ),
+              h(
+                'p',
+                { style: { margin: '10px 0 0', fontSize: 11.5, lineHeight: 1.7, color: C.text2 } },
+                '整包备份把四本账和人设卡收进一个 JSON，存在 ~/.dsh/backups/；换设备带它就行。想要能直接读、能打印的，用「导出成册」。',
+              ),
             ),
-            h(
-              'a',
-              {
-                href: `${API}/backup`,
-                download: '',
-                style: { ...linkStyle(C.brand), fontSize: 13, marginLeft: 16 },
-              },
-              '整包备份（.json）',
-            ),
-            h(
-              'a',
-              {
-                href: `${API}/export-md`,
-                download: '',
-                style: { ...linkStyle(C.brand), fontSize: 13, marginLeft: 16 },
-              },
-              '导出成册（.md）',
-            ),
-            h(
-              'p',
-              { style: { margin: '10px 0 0', fontSize: 12, lineHeight: 1.7, color: C.text2 } },
-              '它就是一个普通文件夹，在 ~/.dsh/feiyu-diary/。可以直接打开、改、拷走。',
-            ),
-            h(
-              'p',
-              { style: { margin: '6px 0 0', fontSize: 12, lineHeight: 1.7, color: C.text2 } },
-              '整包备份把四本账和人设卡收进一个 JSON，存在 ~/.dsh/backups/；换设备带它就行。想要能直接读、能打印的，用「导出成册」。',
-            ),
-            h(FeelingsBox),
-            h(HealthBox),
-            h(ReviewBox),
-            h(ImportBox),
-            h(CloudBox),
+            h(Card, { title: '从备份恢复' }, h(ImportBox)),
+            h(Card, { title: '云端备份（WebDAV）' }, h(CloudBox)),
           ),
         ),
       );
@@ -2345,7 +2565,7 @@ window.__ModuleLoader__.load({
 
       return h(
         'div',
-        { style: { marginTop: 10, paddingTop: 10, borderTop: `1px dashed ${C.border1}` } },
+        { style: { marginTop: 0 } },
         h(
           'p',
           { style: { ...note, margin: 0 } },

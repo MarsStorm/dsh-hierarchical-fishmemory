@@ -29,8 +29,12 @@
  * ─────────────────────────────────────────────────────────────
  * 界面只有三件事：**看 / 删 / 带走**。
  *
- * 没有搜索、没有标签筛选、没有统计图表、没有设置项 —— 这些在 SPEC 第 0.1
- * 条就被明令砍掉了（"像鱼还是像系统"）。多一个控件就多一分"管理软件"味。
+ * 没有搜索、没有标签筛选、没有统计图表 —— 这些在 SPEC 第 0.1 条就被明令
+ * 砍掉了（"像鱼还是像系统"）。多一个控件就多一分"管理软件"味。
+ *
+ * 2026-11-03：功能长到七八块之后，一根长条已经分不清哪段在说什么，于是拆成
+ * 四个页签 —— 回看 / 本子 / 体检 / 档案（按使用频率排）。四个视图始终挂载、
+ * 只靠 display 切换：切页不重拉 /stats、/feelings，草稿也不会丢。
  *
  * 唯一不能省的是**删**：在那之前，想删一条记忆得自己去编辑 jsonl 文件。
  * 会做这件事的人不需要面板，需要面板的人不会做这件事。
@@ -105,32 +109,166 @@ window.__ModuleLoader__.load({
 
     /* ───────────────────────── 小组件 ───────────────────────── */
 
-    function Section(props) {
-      return h(
-        'section',
-        { style: { marginTop: 22 } },
-        h(
-          'h3',
-          {
-            style: {
-              margin: '0 0 10px',
-              fontSize: 12,
-              fontWeight: 600,
-              letterSpacing: '0.06em',
-              color: C.text2,
-            },
-          },
-          props.title,
-        ),
-        props.children,
-      );
-    }
-
     function Empty(props) {
       return h(
         'p',
         { style: { margin: 0, fontSize: 13, lineHeight: 1.7, color: C.text2 } },
         props.text,
+      );
+    }
+
+    /**
+     * 卡片外壳。
+     *
+     * 2026-11-03 加。原来是「一根长条」：标题、日记、本子、三颗下载链接、
+     * 体检、导入、云端，全堆在同一个 `<section>` 里，越往下越像管理后台。
+     * 现在每块内容各有一层底、一条边框、一段自己的标题 —— 眼睛才分得清
+     * 哪一段在说什么。
+     */
+    function Card(props) {
+      return h(
+        'div',
+        {
+          style: {
+            marginTop: 14,
+            padding: '16px 18px',
+            borderRadius: 12,
+            background: C.layer1,
+            border: `1px solid ${C.border1}`,
+          },
+        },
+        props.title
+          ? h(
+              'div',
+              {
+                style: {
+                  display: 'flex',
+                  alignItems: 'baseline',
+                  gap: 8,
+                  marginBottom: props.hint ? 2 : 8,
+                },
+              },
+              h('span', { style: { fontSize: 13, fontWeight: 600, color: C.text1 } }, props.title),
+              h('span', { style: { flex: 1 } }),
+              props.aside || null,
+            )
+          : null,
+        props.hint
+          ? h(
+              'p',
+              { style: { margin: '0 0 10px', fontSize: 11.5, lineHeight: 1.6, color: C.text2 } },
+              props.hint,
+            )
+          : null,
+        props.children,
+      );
+    }
+
+    /** 小圆角标签：摆「34 条」「认识 12 天」这种数，比一行逗号分隔的话好扫。 */
+    function Chip(props) {
+      return h(
+        'span',
+        {
+          style: {
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            padding: '2px 9px',
+            borderRadius: 999,
+            border: `1px solid ${C.border1}`,
+            background: C.layer2,
+            fontSize: 11,
+            lineHeight: 1.7,
+            color: C.text2,
+            whiteSpace: 'nowrap',
+          },
+        },
+        props.children,
+      );
+    }
+
+    /**
+     * 页签。
+     *
+     * 四个视图**始终挂载**，只靠 display 切换。两个理由：
+     *   1. 切来切去不该重拉一次 /stats、/feelings —— 那是好几趟往返；
+     *   2. 渲染冒烟测试里 WebdavGroup 必须首屏就在树里（React 桩不会重渲染），
+     *      条件挂载会让它消失。
+     */
+    function Tabs(props) {
+      return h(
+        'div',
+        {
+          role: 'tablist',
+          style: {
+            display: 'flex',
+            gap: 2,
+            marginTop: 18,
+            borderBottom: `1px solid ${C.border1}`,
+          },
+        },
+        props.tabs.map((tab) => {
+          const on = props.value === tab.key;
+          return h(
+            'button',
+            {
+              key: tab.key,
+              type: 'button',
+              role: 'tab',
+              onClick: () => props.onChange(tab.key),
+              style: {
+                appearance: 'none',
+                border: 0,
+                background: 'none',
+                font: 'inherit',
+                cursor: 'pointer',
+                padding: '8px 12px 9px',
+                marginBottom: -1,
+                fontSize: 13,
+                fontWeight: on ? 600 : 400,
+                color: on ? C.text1 : C.text2,
+                borderBottom: `2px solid ${on ? C.brand : 'transparent'}`,
+              },
+            },
+            tab.label,
+          );
+        }),
+      );
+    }
+
+    /** 描边按钮/链接：导出那三样和「导入备份」用同一个样子。 */
+    function Ghost(props) {
+      const base = {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '6px 12px',
+        borderRadius: 8,
+        border: `1px solid ${C.border1}`,
+        background: C.bg,
+        color: C.text1,
+        fontSize: 12,
+        lineHeight: 1.6,
+        fontFamily: 'inherit',
+        textDecoration: 'none',
+        cursor: 'pointer',
+      };
+      if (props.href) {
+        return h(
+          'a',
+          { href: props.href, download: '', style: { ...base, ...(props.style || {}) } },
+          props.children,
+        );
+      }
+      return h(
+        'button',
+        {
+          type: 'button',
+          disabled: props.disabled,
+          onClick: props.onClick,
+          style: { ...base, opacity: props.disabled ? 0.5 : 1, cursor: props.disabled ? 'default' : 'pointer', ...(props.style || {}) },
+        },
+        props.children,
       );
     }
 
@@ -257,7 +395,15 @@ window.__ModuleLoader__.load({
      * **看** 和 **存**。走 host 的同源接口 `${API}/notes`：
      * GET 拿两份文本，POST 交回改过的那一份。
      */
-    function Notebook() {
+    /**
+     * 本子。
+     *
+     * 2026-11-03：`only` 用来只摆其中一本。情感日记原先在这儿也有一个编辑口
+     * （`/notes` 的 day），和 `/feelings` 那个是同一个文件、两套边框 —— 现在
+     * 统一走 FeelingsBox（它会先存快照），这里只留人格手记。
+     */
+    function Notebook(props) {
+      const only = (props && props.only) || null;
       const [notes, setNotes] = useState(null);
       const [error, setError] = useState('');
       const [editing, setEditing] = useState('');
@@ -317,8 +463,8 @@ window.__ModuleLoader__.load({
         marginBottom: 10,
         padding: '12px 14px',
         borderRadius: 10,
-        background: C.layer1,
-        border: `1px solid ${C.border1}`,
+        background: C.bg,
+        border: `1px solid ${C.border2}`,
       };
       const mono = {
         margin: 0,
@@ -331,12 +477,13 @@ window.__ModuleLoader__.load({
       };
 
       let body;
-      if (notes === null) {
+      const shown = notes === null ? null : (only ? notes.filter((n) => only.indexOf(n.key) !== -1) : notes);
+      if (shown === null) {
         body = h(Empty, { text: '翻本子…' });
-      } else if (notes.length === 0) {
+      } else if (shown.length === 0) {
         body = h(Empty, { text: '没有可翻的本子。' });
       } else {
-        body = notes.map((n) =>
+        body = shown.map((n) =>
           h(
             'div',
             { key: n.key, style: box },
@@ -407,8 +554,8 @@ window.__ModuleLoader__.load({
       }
 
       return h(
-        Section,
-        { title: '本子' },
+        'div',
+        null,
         error !== ''
           ? h(
               'p',
@@ -501,7 +648,7 @@ window.__ModuleLoader__.load({
       };
 
       const delta = [...text].length - [...original].length;
-      return h('div', { style: { marginTop: 16 } },
+      return h('div', { style: { marginTop: 0 } },
         h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
           h('div', { style: { fontSize: 13, fontWeight: 600 } }, '情感日记'),
           h('button', {
@@ -615,10 +762,10 @@ window.__ModuleLoader__.load({
           h('span', { style: { fontVariantNumeric: 'tabular-nums' } }, String(value)));
 
       if (!state && !error) {
-        return h('div', { style: { marginTop: 14, fontSize: 12, color: C.text2 } }, '正在数账…');
+        return h('div', { style: { marginTop: 0, fontSize: 12, color: C.text2 } }, '正在数账…');
       }
       if (error) {
-        return h('div', { style: { marginTop: 14, fontSize: 12, color: C.err } }, `体检读不到：${error}`);
+        return h('div', { style: { marginTop: 0, fontSize: 12, color: C.err } }, `体检读不到：${error}`);
       }
 
       const d = state;
@@ -631,7 +778,7 @@ window.__ModuleLoader__.load({
         ));
       }
 
-      return h('div', { style: { marginTop: 14 } },
+      return h('div', { style: { marginTop: 0 } },
         h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
           h('div', { style: { fontSize: 13, fontWeight: 600 } }, '记忆体检'),
           h('button', {
@@ -731,15 +878,15 @@ window.__ModuleLoader__.load({
         return h('button', {
           type: 'button',
           onClick: () => setOpen(true),
-          style: { marginTop: 14, fontSize: 12, padding: '4px 10px', borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: C.text2, cursor: 'pointer' },
+          style: { marginTop: 0, fontSize: 12, padding: '4px 10px', borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: C.text2, cursor: 'pointer' },
         }, '回顾一下最近七天');
       }
 
-      if (error) return h('div', { style: { marginTop: 14, fontSize: 12, color: C.err } }, `回顾读不到：${error}`);
-      if (!state) return h('div', { style: { marginTop: 14, fontSize: 12, color: C.text2 } }, '翻着…');
+      if (error) return h('div', { style: { marginTop: 0, fontSize: 12, color: C.err } }, `回顾读不到：${error}`);
+      if (!state) return h('div', { style: { marginTop: 0, fontSize: 12, color: C.text2 } }, '翻着…');
 
       const back = state.lookback;
-      return h('div', { style: { marginTop: 14 } },
+      return h('div', { style: { marginTop: 0 } },
         h('div', { style: { fontSize: 13, fontWeight: 600 } }, '回顾'),
         back.entries.length
           ? h('div', { style: { marginTop: 6 } },
@@ -850,7 +997,16 @@ window.__ModuleLoader__.load({
           {
             type: 'button',
             onClick: () => picker.current && picker.current.click(),
-            style: { ...linkStyle(C.brand), marginLeft: 16 },
+            style: {
+              fontSize: 12,
+              fontFamily: 'inherit',
+              padding: '6px 12px',
+              borderRadius: 8,
+              border: `1px solid ${C.border1}`,
+              background: C.bg,
+              color: C.text1,
+              cursor: 'pointer',
+            },
           },
           '导入备份（.json）',
         ),
@@ -897,12 +1053,21 @@ window.__ModuleLoader__.load({
 
     /* ───────────────────────── 主面板 ───────────────────────── */
 
+    /** 四个页签，按使用频率排。 */
+    const TABS = [
+      { key: 'timeline', label: '回看' },
+      { key: 'books', label: '本子' },
+      { key: 'health', label: '体检' },
+      { key: 'archive', label: '档案' },
+    ];
+
     function Panel() {
       const [phase, setPhase] = useState('loading');
       const [state, setState] = useState(null);
       const [error, setError] = useState('');
       const [busy, setBusy] = useState('');
       const [tick, setTick] = useState(0);
+      const [tab, setTab] = useState('timeline');
 
       useEffect(() => {
         let alive = true;
@@ -990,11 +1155,15 @@ window.__ModuleLoader__.load({
       // 数据还在档案里，要看就翻 relationship.json。
       const diary = d.diary || [];
 
-      const head = [];
-      head.push(`本地存储 · ${d.count || 0} 条`);
-      if (facts.days > 0) head.push(`认识 ${facts.days} 天`);
-      if (facts.nickname) head.push(`他管我叫"${facts.nickname}"`);
-      if (d.degraded) head.push('档案只读');
+      // 按使用频率排：看回忆是天天的事，改本子是偶尔，体检和带走是修东西的时候。
+      const chips = [];
+      chips.push(`共度时光 ${d.count || 0} 条`);
+      if (facts.days > 0) chips.push(`认识 ${facts.days} 天`);
+      if (facts.nickname) chips.push(`他管我叫「${facts.nickname}」`);
+      if (d.degraded) chips.push('档案只读');
+
+      const view = (key, ...children) =>
+        h('div', { style: { display: tab === key ? 'block' : 'none' } }, children);
 
       return h(
         'div',
@@ -1004,11 +1173,15 @@ window.__ModuleLoader__.load({
           { style: inner },
 
           // ── 标题 ──
-          h('h2', { style: { margin: 0, fontSize: 18, fontWeight: 600 } }, '属于我们的回忆'),
           h(
-            'p',
-            { style: { margin: '6px 0 0', fontSize: 12, color: C.text2 } },
-            head.join(' · '),
+            'h2',
+            { style: { margin: 0, fontSize: 19, fontWeight: 600, letterSpacing: '-0.01em' } },
+            '属于我们的回忆',
+          ),
+          h(
+            'div',
+            { style: { marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 } },
+            chips.map((text, i) => h(Chip, { key: i }, text)),
           ),
 
           // ── 出错横幅 ──
@@ -1034,79 +1207,61 @@ window.__ModuleLoader__.load({
               )
             : null,
 
-          // ── 「我对他的一些印象」（traits）2026-10-27 整栏下线 ──
-          // 注入层、固化侧都删了 —— 面板这里跟着删，不然界面上还挂着一栏，
-          // 而它永远不会再有新内容（只能显示砍之前的老数据）。
-          // 档案里那些 traits 一个字没删，要看就翻 relationship.json。
+          h(Tabs, { tabs: TABS, value: tab, onChange: setTab }),
 
-          // ── 「我最近常说的」（lexicon）2026-10-27 整栏下线 ──
-          // 同一刀：词表不再产出，这栏只剩历史。
-
-          // 「上一棒留下的」那一栏 2026-10-27 整栏下线 ──
-          // 档案里那些 about="self" 的 trait 一个字没删，只是不再显示。
-
-          // 「我还欠着他的」那一栏随功能一起删了（2026-10-24）。
-
-          // ── 日记 ──
-          h(
-            Section,
-            { title: '共度时光' },
+          // ── 回看：共度时光 ──
+          view(
+            'timeline',
             diary.length === 0
-              ? h(Empty, { text: '还没有日记。多聊几句，我就会有东西可记。' })
-              : diary.map((e) => h(Entry, { key: e.id, entry: e, onForget: forget, busy: busy === e.id })),
+              ? h(Card, null, h(Empty, { text: '还没有日记。多聊几句，我就会有东西可记。' }))
+              : h(
+                  'div',
+                  { style: { marginTop: 14 } },
+                  diary.map((e) => h(Entry, { key: e.id, entry: e, onForget: forget, busy: busy === e.id })),
+                ),
           ),
 
-          // 「我最近常说的」2026-10-27 整栏下线（见上面）。
+          // ── 本子：情感日记 + 人格手记 ──
+          //
+          // 两个编辑口合成一个：情感日记原来既能在「本子」里改、又能在
+          // FeelingsBox 里改，是同一个文件。留下会存快照的那个。
+          view(
+            'books',
+            h(Card, null, h(FeelingsBox)),
+            h(Card, null, h(Notebook, { only: ['handnote'] })),
+          ),
 
-          // ── 我自己的两个本子：鱼的日子 / 手记 ──
-          h(Notebook),
+          // ── 体检：数账 + 回顾 ──
+          view(
+            'health',
+            h(Card, null, h(HealthBox)),
+            h(Card, { title: '最近七天' }, h(ReviewBox)),
+          ),
 
-          // ── 带走 ──
-          h(
-            Section,
-            { title: '档案' },
+          // ── 档案：带走 / 塞回去 / 云端 ──
+          view(
+            'archive',
             h(
-              'a',
+              Card,
               {
-                href: `${API}/export`,
-                download: '',
-                style: { ...linkStyle(C.brand), fontSize: 13 },
+                title: '带走',
+                hint: '它就是一个普通文件夹，在 ~/.dsh/feiyu-diary/。可以直接打开、改、拷走。',
               },
-              '导出档案（.dshpack）',
+              h(
+                'div',
+                { style: { display: 'flex', flexWrap: 'wrap', gap: 8 } },
+                h(Ghost, { href: `${API}/export` }, '导出档案（.dshpack）'),
+                h(Ghost, { href: `${API}/backup` }, '整包备份（.json）'),
+                h(Ghost, { href: `${API}/export-md` }, '导出成册（.md）'),
+              ),
+              h(
+                'p',
+                { style: { margin: '10px 0 0', fontSize: 11.5, lineHeight: 1.7, color: C.text2 } },
+                '整包备份把四本账和人设卡收进一个 JSON，存在 ~/.dsh/backups/；换设备带它就行。想要能直接读、能打印的，用「导出成册」。',
+              ),
             ),
-            h(
-              'a',
-              {
-                href: `${API}/backup`,
-                download: '',
-                style: { ...linkStyle(C.brand), fontSize: 13, marginLeft: 16 },
-              },
-              '整包备份（.json）',
-            ),
-            h(
-              'a',
-              {
-                href: `${API}/export-md`,
-                download: '',
-                style: { ...linkStyle(C.brand), fontSize: 13, marginLeft: 16 },
-              },
-              '导出成册（.md）',
-            ),
-            h(
-              'p',
-              { style: { margin: '10px 0 0', fontSize: 12, lineHeight: 1.7, color: C.text2 } },
-              '它就是一个普通文件夹，在 ~/.dsh/feiyu-diary/。可以直接打开、改、拷走。',
-            ),
-            h(
-              'p',
-              { style: { margin: '6px 0 0', fontSize: 12, lineHeight: 1.7, color: C.text2 } },
-              '整包备份把四本账和人设卡收进一个 JSON，存在 ~/.dsh/backups/；换设备带它就行。想要能直接读、能打印的，用「导出成册」。',
-            ),
-            h(FeelingsBox),
-            h(HealthBox),
-            h(ReviewBox),
-            h(ImportBox),
-            h(CloudBox),
+            h(Card, { title: '从备份恢复' }, h(ImportBox)),
+            h(Card, { title: '云端备份（WebDAV）' }, h(CloudBox)),
           ),
         ),
       );
@@ -1168,7 +1323,7 @@ window.__ModuleLoader__.load({
 
       return h(
         'div',
-        { style: { marginTop: 10, paddingTop: 10, borderTop: `1px dashed ${C.border1}` } },
+        { style: { marginTop: 0 } },
         h(
           'p',
           { style: { ...note, margin: 0 } },
