@@ -448,6 +448,28 @@ window.__ModuleLoader__.load({
       const [state, setState] = useState(null);
       const [error, setError] = useState('');
       const [busy, setBusy] = useState(false);
+      const [noteMsg, setNoteMsg] = useState('');
+
+      // 2026-11-02 加：体检页原先只报「这句深层记忆里也有」，看得见但动不了。
+      // 现在每条旁边一颗按钮，按整行匹配删掉手记里那一份（手记是现读磁盘的，
+      // 删完下一轮就生效，不用重启）。
+      const dropNote = async (line) => {
+        setNoteMsg('');
+        try {
+          const res = await fetch(`${API}/handnote/delete`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ line }),
+          });
+          const data = await res.json();
+          if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+          setNoteMsg(`已从人格手记删掉 ${data.removed} 行`);
+          await read();
+        } catch (err) {
+          setNoteMsg(String(err && err.message ? err.message : err));
+        }
+      };
 
       const read = async () => {
         setBusy(true);
@@ -516,8 +538,16 @@ window.__ModuleLoader__.load({
             ? h('div', { style: { marginTop: 8, fontSize: 12, color: C.warn || C.text2 } },
                 `⚠ 有 ${d.memory.duplicateHints.length} 句在深层记忆和人格手记里各写了一遍：`,
                 ...d.memory.duplicateHints.slice(0, 3).map((item, i) =>
-                  h('div', { key: i, style: { opacity: 0.8 } }, `· ${item.line.slice(0, 40)}`)))
+                  h('div', { key: i, style: { opacity: 0.85, display: 'flex', gap: 8, alignItems: 'baseline' } },
+                    h('span', null, `· ${item.line.slice(0, 40)}`),
+                    h('button', {
+                      type: 'button',
+                      className: '__sm_btn',
+                      style: { fontSize: 11, padding: '1px 6px' },
+                      onClick: () => dropNote(item.line),
+                    }, '删掉这条'))))
             : null,
+          noteMsg ? h('div', { style: { marginTop: 4, fontSize: 11, color: C.text2 } }, noteMsg) : null,
           h('p', { style: { margin: '6px 0 0', fontSize: 11, lineHeight: 1.6, color: C.text2 } }, d.estimate.note),
         ),
       );

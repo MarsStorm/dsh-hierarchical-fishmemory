@@ -37,6 +37,7 @@ import z from "@deepseek-ai/schemastery";
 import { resolveDshHome } from "@deepseek-ai/dsh-home-paths";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { createMemoryLayout, normalizeMemoryTopic, retainMemoryEnds } from "./memory-layout.js";
+import { diffLines } from "./card-diff.mjs";
 import { applyRestore, backupFileName, collectBackup, parseBackup, planRestore, registerBackupBuilder, registerRestoreHandler, summarizeBackup, writeBackupFile } from "../core/backup.mjs";
 import { skipsSubagentSections } from "./subagents.js";
 import { boundedInteger, renderRecall, searchTopics } from "./memory-recall.js";
@@ -871,6 +872,7 @@ function apply(ctx, config) {
     }
   }
 
+
   ctx.tools.register(defineTool({
     name: "fish_card_history",
     description:
@@ -904,6 +906,54 @@ function apply(ctx, config) {
     async execute(_args, exec) {
       const card = resolveCard(agentOf(exec));
       return { persona: card.name ?? "none", versions: card.name ? listCardSnapshots(card.name) : [] };
+    },
+  }));
+
+  ctx.tools.register(defineTool({
+    name: "fish_card_diff",
+    description:
+      "Show the line diff between one saved persona-card version and the card as it is now. `+` lines are what the snapshot has and the current card does not (restoring would add them); `-` lines are what the current card has and the snapshot does not. Read-only.",
+    parameters: {
+      file: { type: "string", required: true, description: "Snapshot file name from fish_card_history." },
+      limit: { type: "number", description: "Max diff lines to return (default 40)." },
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          persona: { type: "string" },
+          file: { type: "string" },
+          changed: { type: "integer" },
+          lines: { type: "array", items: { type: "string" } },
+        },
+      },
+      render: (_args, value) => {
+        if (!value.changed) {
+          return [{ type: "text", text: `Persona card "${value.persona}": snapshot ${value.file} is identical to the current text.` }];
+        }
+        const shown = value.lines.slice(0, 30).join("\n");
+        const more = value.changed > value.lines.length ? `\n… ${value.changed - value.lines.length} more line(s)` : "";
+        return [{ type: "text", text: `Diff for "${value.persona}" (${value.file} → current): ${value.changed} changed line(s)\n${shown}${more}` }];
+      },
+    },
+    isConcurrencySafe: () => true,
+    async execute(args, exec) {
+      const name = typeof args?.file === "string" ? args.file.trim() : "";
+      if (!name) throw new Error("fish_card_diff: `file` is required");
+      const card = resolveCard(agentOf(exec));
+      if (!card.name) throw new Error("fish_card_diff: no persona card is active for this session");
+      const version = listCardSnapshots(card.name).find((item) => item.file === name);
+      if (!version) throw new Error(`fish_card_diff: no snapshot named ${name} for card "${card.name}"`);
+      let before = "";
+      try {
+        before = readFileSync(version.path, "utf8");
+      } catch {
+        throw new Error(`fish_card_diff: cannot read ${name}`);
+      }
+      const limit = Math.min(Math.max(Math.floor(Number(args?.limit) || 40), 1), 400);
+      const diff = diffLines(card.text ?? "", before, limit);
+      return { persona: card.name, file: name, changed: diff.total, lines: diff.lines };
     },
   }));
 

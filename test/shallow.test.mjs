@@ -41,3 +41,25 @@ test('renderList 带 key，空库给出人话', () => {
   const out = renderList(store([entry({ key: '白饭', text: '他喜欢白饭' })]), {});
   assert.match(out, /\[key: 白饭\]/);
 });
+
+test('快过期的条目在注入节末尾多一行提醒', async () => {
+  const { renderSection } = await import('../src/core/shallow.mjs');
+  const now = Date.now();
+  const store = {
+    entries: [
+      { id: 'a', key: '快到期', text: '这条只剩一天了，内容也够长够长够长够长够长够长', tags: [], created: now - 6 * 86400000, updated: now - 6 * 86400000, hits: 2 },
+      { id: 'b', key: '还早', text: '这条还早', tags: [], created: now, updated: now, hits: 1 },
+    ],
+  };
+  const text = renderSection(store, { ttlDays: 7, warnDays: 2 });
+  assert.match(text, /条浅层今天到期/);
+  assert.match(text, /看着有分量/);
+});
+
+test('没有快过期的条目就不加提醒行', async () => {
+  const { renderSection } = await import('../src/core/shallow.mjs');
+  const now = Date.now();
+  const store = { entries: [{ id: 'c', key: '新', text: '刚记的', tags: [], created: now, updated: now, hits: 1 }] };
+  const text = renderSection(store, { ttlDays: 7, warnDays: 2 });
+  assert.doesNotMatch(text, /今天到期/);
+});

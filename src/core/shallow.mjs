@@ -139,6 +139,21 @@ export function renderSection(store, config) {
     lines.push(line);
     used += line.length + 1;
   }
+  // 到期提醒（2026-11-02 加）：显示出来的可能只有前几条，快过期的反而容易漏看。
+  // 提醒只随日期变化，一天最多换一次，不会每轮打碎 prompt 前缀缓存。
+  if (lines.length > 1) {
+    const warn = clamp(Math.floor(Number(config?.warnDays) || WARN_DAYS), 1, 30);
+    const expiring = entries.filter((entry) => remainingDays(entry, config) <= warn);
+    if (expiring.length) {
+      const meaty = expiring.filter(
+        (entry) => Number(entry.hits ?? 1) > 1 || String(entry.text ?? '').length >= 40,
+      ).length;
+      const tail =
+        `- ⏳ ${expiring.length} 条浅层今天到期` +
+        (meaty ? `，其中 ${meaty} 条看着有分量——要留就写进深层记忆或情感日记` : '');
+      if (used + tail.length + 1 <= cap) lines.push(tail);
+    }
+  }
   return lines.length > 1 ? lines.join('\n') : '';
 }
 
