@@ -54,8 +54,15 @@
   "publishConfig": {
     "access": "public"
   },
-  "private": true,
   "contributors": [
     "空气凤梨（上游 feiyu-memory 作者）"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MarsStorm/dsh-hierarchical-fishmemory.git"
+  },
+  "homepage": "https://github.com/MarsStorm/dsh-hierarchical-fishmemory#readme",
+  "bugs": {
+    "url": "https://github.com/MarsStorm/dsh-hierarchical-fishmemory/issues"
+  }
 }

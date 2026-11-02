@@ -13,6 +13,7 @@
 - **浅层到期前能升格**：新工具 `shallow_promote`，可以把它写成共度时光或深层记忆；成功后从浅层删掉，不再等它过期消失。
 - **召回能按时间过滤**：`fish_recall` 加 `since` / `until`，只在那段时间里找，无日期的条目不硬凑。
 - **年册导出**：面板「档案 · 带走」多一颗按钮，按月份把某一年誊成一份 Markdown，情感日记也一起按年选。
+- **发到 npm 了**：`dsh-hierarchical-fishmemory@1.8.0`，`private` 摘掉、补上 `repository` / `homepage` / `bugs`——插件市场的索引只收「有 npm 包名、版本号、发布时间」的条目，光有 GitHub 仓库进不了市场列表。
 - 测试 81 → 87，`dist/client.js` 115932 字节。
 
 ## 1.7.0 — 2026-11-03
