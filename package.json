@@ -1,7 +1,7 @@
 {
   "name": "dsh-hierarchical-fishmemory",
-  "version": "1.8.1",
-  "description": "属于我们的回忆：分层记忆插件，一个包全管。共度时光（经过，diary 引擎）、情感日记（我自己的感受）、人格手记（每轮注入的性格与嘱托）、浅层记忆（带 7 天 TTL）、人格档案。2026-10-31 由 feiyu-memory 4.0.2 + dsh-shallow-memory + dsh-soul-md 收编而来。",
+  "version": "1.8.2",
+  "description": "面向 DeepSeek Harness 的分层长期记忆：共度时光（自动蒸馏的经过，会随时间衰减）、情感日记（手写感受，不衰减）、人格手记（每轮全量注入）、浅层记忆（7 天 TTL）与人设卡（带版本历史）共用一份 token 预算，配召回、体检、压缩与整包备份还原。一个包全管。",
   "type": "module",
   "license": "MIT",
   "author": "dsh-hierarchical-fishmemory contributors",
