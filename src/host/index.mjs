@@ -1616,7 +1616,29 @@ export function apply(ctx, rawConfig) {
       // 读不到就不给，不影响判断
     }
 
-    const built = buildJudgeInput({ lastUserText: said, handNotes });
+    // ── 也给它看"我这一轮做了什么" ──
+    //
+    // 2026-11-04 端到端抓到的洞：判断只看他那句话，于是「继续」「弄吧」
+    // 这种话一律判"不记" —— 而那一晚正好干了五个功能、修了一个 bug。
+    // **活干得越多，越不容易被记住。**
+    //
+    // 取**这一轮**我自己的回复：必须以最后一条"他说的"为界往前找，
+    // 不然 `turn-stopping` 早于回复写盘时会拿到上一轮的那段 —— 判的就不是
+    // 这一轮了。拿不到就留空，判断退回只看他那句话。
+    const cut = (() => {
+      for (let i = s.transcript.length - 1; i >= 0; i -= 1) {
+        if (s.transcript[i]?.role === 'user') return i;
+      }
+      return -1;
+    })();
+    const workNote = s.transcript
+      .slice(cut + 1)
+      .filter((m) => m?.role === 'assistant')
+      .map((m) => String(m.text ?? ''))
+      .join('\n')
+      .trim();
+
+    const built = buildJudgeInput({ lastUserText: said, handNotes, workNote });
     const opts = {
       provider,
       model,
@@ -1643,6 +1665,20 @@ export function apply(ctx, rawConfig) {
       }
       const v = parseVerdict(raw);
       log(`判断：${v.keep ? '记' : '不记'}${v.why ? ` —— ${v.why}` : ''}`);
+
+      // ── 兜底：判了"不记"，但这一轮我确实干了一堆活 ──
+      //
+      // 判断是模型，模型对"这句话没信息量"很敏感，对"这一轮产出很大"
+      // 未必看得见 —— 上面那条提示刚加上，但新提示要下一个我才会信。
+      // 而这里的错误代价仍然是**不对称的**：漏了永远不知道少了什么。
+      //
+      // 条件两条，都满足才翻：他这句话极短（≤ 20 字，典型是"继续"
+      // "弄吧""你看着办"），而我这一轮的回复不短（≥ 300 字）。
+      // 重复的条目不用怕 —— 固化那边有「续写」，同一件事会被续进上一条。
+      if (!v.keep && said.length <= 20 && workNote.length >= 300) {
+        log(`判断被兜底推翻：他说「${said.slice(0, 12)}」但我这一轮写了 ${workNote.length} 字`);
+        return { keep: true, why: '这一轮确实做了事，记的是那件事', parsed: v.parsed };
+      }
       return v;
     } catch (err) {
       warn(`判断失败，按默认记：${err instanceof Error ? err.message : String(err)}`);

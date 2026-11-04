@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { buildJudgeInput, parseVerdict } from '../src/core/judge.mjs';
+import { buildJudgeInput, parseVerdict, WORK_NOTE_MAX } from '../src/core/judge.mjs';
 
 test('parseVerdict：认 yes / 是 / 记 / 要', () => {
   for (const raw of ['yes', '是', '记', '要', '是，值得记', '记：他在学驾驶']) {
@@ -65,4 +65,36 @@ test('buildJudgeInput：空输入不抛', () => {
   const input = buildJudgeInput();
   assert.equal(input.user, '');
   assert.ok(input.system.length > 0);
+});
+
+// ── 2026-11-04：判断要看得见"我这一轮做了什么" ──
+//
+// 那一晚他说了「继续」「弄吧」，我干了五个功能、修了一个 bug，四次判断
+// 四次判「不记」—— 因为它只看得见那两个字。活干得越多越不容易被记住。
+test('buildJudgeInput：这一轮的产出进 system，不进 user', () => {
+  const input = buildJudgeInput({
+    lastUserText: '继续',
+    workNote: '弄完了——五项全部落地，版本 1.9.0，测试从 87 涨到 196。',
+  });
+  assert.equal(input.user, '继续');
+  assert.match(input.system, /这一轮我做了什么/);
+  assert.match(input.system, /1\.9\.0/);
+  assert.ok(!input.user.includes('1.9.0'));
+});
+
+test('buildJudgeInput：没有产出就不加那一段，别凭空多一段空话', () => {
+  const input = buildJudgeInput({ lastUserText: '继续' });
+  assert.equal(input.system.includes('这一轮我做了什么'), false);
+});
+
+test('buildJudgeInput：产出摘要截到 WORK_NOTE_MAX，别把整篇回复塞进去', () => {
+  const input = buildJudgeInput({ lastUserText: 'x', workNote: '啊'.repeat(1000) });
+  const head = input.system.slice(input.system.indexOf('这一轮我做了什么'));
+  assert.ok(head.length <= WORK_NOTE_MAX + 40, `实际 ${head.length} 字`);
+});
+
+test('JUDGE_SYSTEM：写明了「他只说继续但我干了活也要记」', () => {
+  const { system } = buildJudgeInput({ lastUserText: 'x' });
+  assert.match(system, /继续/);
+  assert.match(system, /要记的不是那句话，是那件事/);
 });

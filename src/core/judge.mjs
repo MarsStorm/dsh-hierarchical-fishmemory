@@ -41,10 +41,17 @@ export const JUDGE_SYSTEM = `你是这条鱼的记性。
 3. **判据是「他说完这句，我对他的了解有没有变一点」。**
    变了一点，就记。
 
+**但也要看这一轮发生了什么。** 除了他那句话，我会告诉你我这一轮做了哪些事。
+他只说"继续""弄吧""你看着办"——那样的话本身确实没有信息量，可我要是因此
+干了一整晚的活，那**更要记**：要记的不是那句话，是那件事。
+
 反过来，这些不用记：
-- 寒暄、确认、指令（"帮我打开一下"）
+- 寒暄、确认、以及**说完之后我也没做什么事**的纯指令（"帮我打开一下"）
 - 一句套话、一句吐槽天气
 - 只是把已经知道的事又说了一遍
+
+**宁可多记。** 漏掉一条就是永久没了，而且你连"少了什么"都不会知道；
+多记一条只是占几行，能删、能降级。字数可以短，但别空着。
 
 只回答一行，格式：
 
@@ -92,15 +99,30 @@ export function parseVerdict(raw) {
   return { keep: true, why: `认不出格式，按默认记：${line.slice(0, 30)}`, parsed: false };
 }
 
+/** 「我这一轮做了什么」最多带多少字 —— 再多就不省钱了 */
+export const WORK_NOTE_MAX = 200;
+
 /**
  * 组装这一次判断的输入。
  *
- * **只给这一轮他说的话** —— 不给整段对话。判断只需要那一句，
+ * **只给这一轮** —— 不给整段对话。判断只需要那一轮，
  * 而且省 token（约 260/轮，比固化本身便宜一半以上）。
+ *
+ * ── 2026-11-04 补的第二样东西：我这一轮做了什么 ──
+ *
+ * 原来只给"他那句话"，端到端跑出来一个洞：他说「继续」「弄吧」，
+ * 那一整晚干了五个功能、修了一个 bug、推了六个提交 —— 判断看到的
+ * 只有两个字，四次里四次判"不记"，一条都没进账。
+ *
+ * **活干得越多，越不容易被记住。**
+ *
+ * 所以现在把这一轮我自己的产出摘要（`workNote`）也给它。它判的仍然是
+ * "值不值得留给下一个我"，但至少看得见这一晚到底发生了什么。
  *
  * @param {object} input
  * @param {string} input.lastUserText 这一轮用户说的话
  * @param {string[]} [input.handNotes] 手记里的话（用户自己的偏好，作为补充判据）
+ * @param {string} [input.workNote] 这一轮我做了什么（一两句摘要）
  * @returns {{system: string, user: string}}
  */
 export function buildJudgeInput(input = {}) {
@@ -108,14 +130,21 @@ export function buildJudgeInput(input = {}) {
   const notes = (Array.isArray(input.handNotes) ? input.handNotes : [])
     .filter((n) => typeof n === 'string' && n.trim() !== '')
     .map((n) => `- ${n.trim()}`);
+  const work = String(input.workNote ?? '').trim().slice(0, WORK_NOTE_MAX);
 
-  const system =
-    notes.length === 0
-      ? JUDGE_SYSTEM
-      : `${JUDGE_SYSTEM}
+  let system = JUDGE_SYSTEM;
+  if (work !== '') {
+    system += `
+
+── 这一轮我做了什么（他说话之后我干的活，也算判据）──
+${work}`;
+  }
+  if (notes.length > 0) {
+    system += `
 
 ── 补充：这个用户自己说过的话（也算判据）──
 ${notes.join('\n')}`;
+  }
 
   return { system, user: said };
 }
