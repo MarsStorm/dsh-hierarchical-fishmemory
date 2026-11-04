@@ -2476,11 +2476,41 @@ window.__ModuleLoader__.load({
 
           // ── 回看：共度时光 ──
           //
-          // 顶上那两块（最近写了什么 / 还常想起）放在这一页里，不放到页签上面：
-          // 放上面会把这四个页签全部往下推，回看这一页因此和以前不一样了 ——
-          // 页签高度是面板的骨架，不该因为某本账多了一行内容就变。
+          // **这一页保持原样。** 2026-11-04 曾经把「最近写了什么」和
+          // 「还常想起」铺在这一页顶上，结果是回看页和以前不是一个样子：
+          // 一进面板先看到两大段别的东西，日记反而被挤下去了。
+          // 回看就是回看 —— 它只该是那串日记。
           view(
             'timeline',
+            diary.length === 0
+              ? h(Card, null, h(Empty, { text: '还没有日记。多聊几句，我就会有东西可记。' }))
+              : h(
+                  'div',
+                  { style: { marginTop: 14 } },
+                  diary.map((e) => h(Entry, { key: e.id, entry: e, onForget: forget, busy: busy === e.id })),
+                ),
+          ),
+
+          // ── 本子：情感日记 + 人格手记 ──
+          //
+          // 两个编辑口合成一个：情感日记原来既能在「本子」里改、又能在
+          // FeelingsBox 里改，是同一个文件。留下会存快照的那个。
+          view(
+            'books',
+            h(Card, null, h(FeelingsBox)),
+            h(Card, null, h(Notebook, { only: ['handnote'] })),
+          ),
+
+          // ── 体检：数账 + 回顾 ──
+          //
+          // 「最近写了什么」「还常想起」放在这一页：体检本来就在讲账的样子，
+          // 而这两条正是账的一部分。回看页保持只有日记那串 —— 那里是"看回忆"，
+          // 不是"看管理信息"。
+          view(
+            'health',
+            // 情感日记是四本账里唯一每轮注入为零的一份（三十多 KB，只在回想时
+            // 出现），而它最说明最近怎么样。体检页只报条数体积 —— 那条信息
+            // 在界面上等于不存在。所以在这儿抽一段出来。
             d.feelings
               ? h(
                   'div',
@@ -2509,7 +2539,6 @@ window.__ModuleLoader__.load({
                   h('div', null, d.feelings.body || '（这一段是空的）'),
                 )
               : null,
-
             // 还常想起的那几条：`recall_count` 唯一给用户看的地方。
             // 不排序、不加权，只列出来 —— 它不该影响召回，只该被看见。
             d.recalled && d.recalled.length > 0
@@ -2521,29 +2550,6 @@ window.__ModuleLoader__.load({
                     .join('、')}`,
                 )
               : null,
-
-            diary.length === 0
-              ? h(Card, null, h(Empty, { text: '还没有日记。多聊几句，我就会有东西可记。' }))
-              : h(
-                  'div',
-                  { style: { marginTop: 14 } },
-                  diary.map((e) => h(Entry, { key: e.id, entry: e, onForget: forget, busy: busy === e.id })),
-                ),
-          ),
-
-          // ── 本子：情感日记 + 人格手记 ──
-          //
-          // 两个编辑口合成一个：情感日记原来既能在「本子」里改、又能在
-          // FeelingsBox 里改，是同一个文件。留下会存快照的那个。
-          view(
-            'books',
-            h(Card, null, h(FeelingsBox)),
-            h(Card, null, h(Notebook, { only: ['handnote'] })),
-          ),
-
-          // ── 体检：数账 + 回顾 ──
-          view(
-            'health',
             h(Card, null, h(HealthBox)),
             h(Card, { title: '最近七天' }, h(ReviewBox)),
           ),
