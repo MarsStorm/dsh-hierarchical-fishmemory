@@ -1186,47 +1186,6 @@ window.__ModuleLoader__.load({
             chips.map((text, i) => h(Chip, { key: i }, text)),
           ),
 
-          // ── 还常想起的那几条 ──
-          //
-          // `recall_count` 唯一给用户看的地方：哪几条是真的还在生活里的。
-          // 不排序、不加权，只列出来 —— 它不该影响召回，只该被看见。
-          d.recalled && d.recalled.length > 0
-            ? h(
-                'div',
-                { style: { marginTop: 8, fontSize: 12, color: C.text2, opacity: 0.85 } },
-                `还常想起：${d.recalled
-                  .map((r) => `${r.text}${r.count > 1 ? `（${r.count} 次）` : ''}`)
-                  .join('、')}`,
-              )
-            : null,
-
-          // ── 顶上那一行：情感日记最后写了什么 ──
-          //
-          // 这是四本账里唯一"每轮注入为零"的一份（三十多 KB，只在回想时出现），
-          // 而它恰恰最说明最近怎么样。体检页只报条数体积 —— 那条信息
-          // 在界面上等于不存在。所以抽一段铺在最上面，看完就看完了。
-          d.feelings
-            ? h(
-                'div',
-                {
-                  style: {
-                    marginTop: 12,
-                    padding: '10px 12px',
-                    borderLeft: `2px solid ${C.border1}`,
-                    fontSize: 12,
-                    lineHeight: 1.7,
-                    color: C.text2,
-                  },
-                },
-                h(
-                  'div',
-                  { style: { marginBottom: 4, color: C.text1, fontWeight: 600, opacity: d.feelings.heading || d.feelings.sub ? 1 : 0.7 } },
-                  [d.feelings.heading, d.feelings.sub].filter(Boolean).join(' · ') || '最近写的',
-                ),
-                h('div', null, d.feelings.body || '（这一段是空的）'),
-              )
-            : null,
-
           // ── 出错横幅 ──
           //
           // 之前「忘掉」失败是**完全静默**的：服务端回 400/403，前端把 JSON
@@ -1253,8 +1212,53 @@ window.__ModuleLoader__.load({
           h(Tabs, { tabs: TABS, value: tab, onChange: setTab }),
 
           // ── 回看：共度时光 ──
+          //
+          // 顶上那两块（最近写了什么 / 还常想起）放在这一页里，不放到页签上面：
+          // 放上面会把这四个页签全部往下推，回看这一页因此和以前不一样了 ——
+          // 页签高度是面板的骨架，不该因为某本账多了一行内容就变。
           view(
             'timeline',
+            d.feelings
+              ? h(
+                  'div',
+                  {
+                    style: {
+                      marginTop: 14,
+                      padding: '10px 12px',
+                      borderLeft: `2px solid ${C.border1}`,
+                      fontSize: 12,
+                      lineHeight: 1.7,
+                      color: C.text2,
+                    },
+                  },
+                  h(
+                    'div',
+                    {
+                      style: {
+                        marginBottom: 4,
+                        color: C.text1,
+                        fontWeight: 600,
+                        opacity: d.feelings.heading || d.feelings.sub ? 1 : 0.7,
+                      },
+                    },
+                    [d.feelings.heading, d.feelings.sub].filter(Boolean).join(' · ') || '最近写的',
+                  ),
+                  h('div', null, d.feelings.body || '（这一段是空的）'),
+                )
+              : null,
+
+            // 还常想起的那几条：`recall_count` 唯一给用户看的地方。
+            // 不排序、不加权，只列出来 —— 它不该影响召回，只该被看见。
+            d.recalled && d.recalled.length > 0
+              ? h(
+                  'div',
+                  { style: { marginTop: 10, fontSize: 12, color: C.text2, opacity: 0.85 } },
+                  `还常想起：${d.recalled
+                    .map((r) => `${r.text}${r.count > 1 ? `（${r.count} 次）` : ''}`)
+                    .join('、')}`,
+                )
+              : null,
+
             diary.length === 0
               ? h(Card, null, h(Empty, { text: '还没有日记。多聊几句，我就会有东西可记。' }))
               : h(
