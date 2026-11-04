@@ -11,6 +11,7 @@
  */
 
 import { scrub } from './privacy.mjs';
+import { TZ_OFFSET_MS } from './timeline.mjs';
 // 这里原本还 import 了 archive.mjs 的 ensurePersonaStructure / ANCHOR_END /
 // LEARNED_HEADING —— 它们只被 appendPersonaLearnings 用。那个函数删了，
 // 这三个名字跟着一起没了（留着就是死引用）。
@@ -409,9 +410,13 @@ function clamp(v, lo, hi, fallback) {
 }
 
 /** 生成一个不容易撞的日记 id */
+/** 他那边的 YYYY-MM-DD（本机是 UTC，直接 toISOString 会差一天） */
+export function hisDate(ts) {
+  return new Date(ts + TZ_OFFSET_MS).toISOString().slice(0, 10);
+}
+
 export function makeDiaryId(now, existing) {
-  const d = new Date(now);
-  const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+  const ymd = hisDate(now).replace(/-/g, '');
   const base = `d_${ymd}_`;
   const used = new Set((existing ?? []).map((e) => e.id));
   for (let n = 1; n < 1000; n++) {
@@ -599,7 +604,7 @@ export function applyConsolidation(archive, rawParsed, context = {}, options = {
       const kind = VALID_KINDS.has(rawDiary.kind) ? rawDiary.kind : 'chat';
       next.diary.push({
         id: makeDiaryId(now, next.diary),
-        date: new Date(now).toISOString().slice(0, 10),
+        date: hisDate(now),
         text,
         // summary 由**另一次请求**写（见 SUMMARY_SYSTEM），这里只占位。
         // 为什么不在这里一起写：正文要"具体、不堆词"，summary 要"密、别名全"，

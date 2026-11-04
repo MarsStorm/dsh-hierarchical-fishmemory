@@ -15,7 +15,7 @@
  * JSONL 仍然是唯一真相源：追加安全、坏一行只丢一行。
  */
 
-import { calendarDaysBetween } from './timeline.mjs';
+import { TZ_OFFSET_MS, calendarDaysBetween } from './timeline.mjs';
 
 const KINDS = {
   failure: '搞砸了',
@@ -28,16 +28,16 @@ const KINDS = {
 
 const pad = (n) => String(n).padStart(2, '0');
 
-/** 本地时间的 YYYY-MM-DD */
+/** 他那边的 YYYY-MM-DD（本机是 UTC，直接取本地日期会差一天） */
 function localDate(ts) {
-  const d = new Date(ts);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const d = new Date(ts + TZ_OFFSET_MS);
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
 }
 
-/** 本地时间的 HH:MM */
+/** 他那边的 HH:MM */
 function localTime(ts) {
-  const d = new Date(ts);
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const d = new Date(ts + TZ_OFFSET_MS);
+  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 
 /** 认识多久了，说人话 */

@@ -34,11 +34,18 @@
  * ─────────────────────────────────────────────────────────────
  */
 
-/** 某时刻所在那一天的零点 */
+/**
+ * 他那边是 UTC+8，本机进程是 UTC。
+ *
+ * `d.setHours(0,0,0,0)` 切的是**本机**的零点 —— 落在这台机器上就是 UTC 零点，
+ * 于是他的 00:00–08:00 被算成前一天：早上十点看昨晚三点记的那条，
+ * 「今天」会显示成「昨天」。这个偏移量只在这里定义一次，别处一律 import。
+ */
+export const TZ_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+/** 某时刻所在那一天的零点（按他那边算） */
 export function startOfDay(ts) {
-  const d = new Date(ts);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
+  return Math.floor((ts + TZ_OFFSET_MS) / 86400000) * 86400000 - TZ_OFFSET_MS;
 }
 
 /**
@@ -63,8 +70,8 @@ export function dayLabel(createdAt, now = Date.now()) {
   if (days <= 0) return '今天';
   if (days === 1) return '昨天';
   if (days < 7) return `${days} 天前`;
-  const d = new Date(createdAt);
-  return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')}`;
+  const d = new Date(createdAt + TZ_OFFSET_MS);
+  return `${d.getUTCMonth() + 1}-${String(d.getUTCDate()).padStart(2, '0')}`;
 }
 
 /**

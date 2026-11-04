@@ -14,6 +14,7 @@
  */
 
 import { tokenize } from './keywords.mjs';
+import { startOfDay } from './timeline.mjs';
 
 /** IDF 平滑，避免 df=0 时除零 */
 const IDF_SMOOTH = 1;
@@ -410,11 +411,6 @@ export function parseTimeHint(query, now = Date.now()) {
   if (typeof query !== 'string' || query === '') return null;
 
   const DAY = 86400000;
-  const startOfDay = (t) => {
-    const d = new Date(t);
-    d.setHours(0, 0, 0, 0);
-    return d.getTime();
-  };
   const today = startOfDay(now);
   const dayRange = (fromDay, toDay) => ({ from: fromDay, to: toDay + DAY - 1 });
 

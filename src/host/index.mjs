@@ -48,7 +48,7 @@ import { datesPath, loadDates, upcoming, renderDates } from '../core/dates.mjs';
 import { applyCompaction, planCompaction } from '../core/compact.mjs';
 import { buildBook, buildYearBook } from '../core/export-md.mjs';
 import { checkLayers } from '../core/conflicts.mjs';
-import { calendarDaysBetween, stripTimeWords, softWhen } from '../core/timeline.mjs';
+import { TZ_OFFSET_MS, calendarDaysBetween, stripTimeWords, softWhen } from '../core/timeline.mjs';
 import { renderDiaryFile } from '../core/render-diary.mjs';
 import { DIARY_MD, FEELINGS_MD } from '../core/files.mjs';
 import { buildJudgeInput, parseVerdict, JUDGE_MAX_TOKENS } from '../core/judge.mjs';
@@ -1348,7 +1348,7 @@ export function apply(ctx, rawConfig) {
       // 日期按他的钟点（UTC+8）切，不按本机 UTC —— 跨零点那几个小时容易写错。
       try {
         const feelingsFile = path.join(archiveDirectory, FEELINGS_MD);
-        const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+        const today = new Date(Date.now() + TZ_OFFSET_MS).toISOString().slice(0, 10);
         const body = existsSync(feelingsFile) ? readFileSync(feelingsFile, 'utf8') : '';
         const written = new RegExp(`^## ${today}$`, 'm').test(body);
         if (!written) {
@@ -2779,7 +2779,7 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
               // 默认今年按他的钟点（UTC+8）算，跨年那几天不会串。
               const year =
                 (url.searchParams.get('year') ?? '').trim() ||
-                String(new Date(Date.now() + 8 * 3600 * 1000).getUTCFullYear());
+                String(new Date(Date.now() + TZ_OFFSET_MS).getUTCFullYear());
               if (!/^\d{4}$/.test(year)) {
                 return panelReply(res, 400, { ok: false, error: 'year 要四位年份，比如 2026' });
               }
@@ -3387,17 +3387,19 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
     if (base.length > pool.length) log(`挑往事：${base.length} 条只取最近 ${pool.length} 条`);
 
     // 索引行前面带日期 —— 模型才有办法回答「那阵子」这种问法。
-    const dayLabel = (t) => {
+    // 叫 mmdd 不叫 dayLabel：timeline.mjs 已经有一个 dayLabel（今天 / 昨天 / 3 天前），
+    // 同名不同义，读代码时最容易拿错的那一种。
+    const mmdd = (t) => {
       if (!Number.isFinite(t)) return '??/??';
-      const d = new Date(t);
-      return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
+      const d = new Date(t + TZ_OFFSET_MS);
+      return `${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCDate()).padStart(2, '0')}`;
     };
     const lines = pool.map((e) => {
       const idx =
         typeof e.summary === 'string' && e.summary !== ''
           ? e.summary
           : String(e.text).replace(/\s+/g, ' ').slice(0, 30);
-      return `${e.id} ${dayLabel(e.created_at)} ${idx}`;
+      return `${e.id} ${mmdd(e.created_at)} ${idx}`;
     });
 
     const system =
@@ -4233,7 +4235,7 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
       if (!scopes.length) throw new Error('深层记忆目录读不到');
       file = path.join(memoryRoot, scopes[0], 'core.md');
     }
-    const stamp = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    const stamp = new Date(Date.now() + TZ_OFFSET_MS).toISOString().slice(0, 10);
     const prev = existsSync(file) ? readFileSync(file, 'utf8') : '';
     const head = prev === '' || prev.endsWith('\n') ? prev : `${prev}\n`;
     await writeFile(file, `${head}- ${body}（${stamp}）\n`, 'utf8');

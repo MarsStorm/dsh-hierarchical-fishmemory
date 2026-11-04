@@ -2,6 +2,19 @@
 
 从新到旧。每条都写了「为什么」，不只是「改了什么」。
 
+## 1.9.3 — 2026-11-05
+
+「一天」只有一个时区了：**他那边（UTC+8）**。
+
+本机进程跑在 UTC，而 `timeline.mjs` 的 `startOfDay` 用的是 `d.setHours(0,0,0,0)` —— 切的是**本机**零点。于是他的 00:00–08:00 整段被算成前一天：早上十点看昨晚三点记的那条，`dayLabel` 给「昨天」、`softWhen` 给「前两天」，`calendarDaysBetween` 算出 1（应为 0）。他熬夜那几个钟头，正好全在这个缝里。
+
+- `timeline.mjs` 导出 `TZ_OFFSET_MS`，`startOfDay` 按 +8 切；`dayLabel` 的 `MM-DD` 也换算过去。
+- `dates.mjs` 删掉自己那份偏移量，改成 import —— 全仓只剩一个定义。
+- `host/index.mjs` 三处硬编码 `8 * 3600 * 1000`（今日情感日记、导出年份、面板今日戳）改用常量。
+- `recall.mjs` 的 `parseTimeHint` 不再自带一个本地 `startOfDay`；`render-diary.mjs` 的 `localDate` / `localTime`、`consolidate.mjs` 的 `date` 与 `makeDiaryId` 也都按他的日子算。
+- host 里那个返回 `MM/DD` 的局部 `dayLabel` 改名 `mmdd` —— 跟 `timeline.mjs` 导出的 `dayLabel`（今天 / 昨天 / 3 天前）同名不同义，最容易拿错的那一种。
+- 测试 202 → 204（补「他的 00:00–08:00 属于哪一天」与「早上看凌晨还是今天」）。
+
 ## 1.9.2 — 2026-11-05
 
 清理。没有新功能，只把「写了两份」的地方并回一份、把没人用的东西删掉。

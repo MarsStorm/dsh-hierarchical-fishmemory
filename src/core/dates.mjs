@@ -8,10 +8,10 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { TZ_OFFSET_MS } from './timeline.mjs';
 
 export const DATES_FILE = 'dates.json';
 const DAY_MS = 24 * 60 * 60 * 1000;
-const TZ_OFFSET_MS = 8 * 60 * 60 * 1000;
 
 export function datesPath(dataDir) {
   return join(dataDir, DATES_FILE);

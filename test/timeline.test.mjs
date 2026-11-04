@@ -1,24 +1,41 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { calendarDaysBetween, dayLabel, softWhen, startOfDay, stripTimeWords } from '../src/core/timeline.mjs';
+import { TZ_OFFSET_MS, calendarDaysBetween, dayLabel, softWhen, startOfDay, stripTimeWords } from '../src/core/timeline.mjs';
 
 const now = Date.parse('2026-11-05T10:00:00Z');
 const day = 86400000;
 
-test('startOfDay 落在本地零点', () => {
-  const d = new Date(startOfDay(now));
-  assert.equal(d.getHours(), 0);
-  assert.equal(d.getMinutes(), 0);
-  assert.equal(d.getSeconds(), 0);
-  assert.equal(d.getMilliseconds(), 0);
+test('startOfDay 落在他那边的零点', () => {
+  // 本机进程是 UTC，但「一天」按他的 UTC+8 切 —— 所以换算回去看。
+  const d = new Date(startOfDay(now) + TZ_OFFSET_MS);
+  assert.equal(d.getUTCHours(), 0);
+  assert.equal(d.getUTCMinutes(), 0);
+  assert.equal(d.getUTCSeconds(), 0);
+  assert.equal(d.getUTCMilliseconds(), 0);
+  // 也必须是 +8 那一天的 00:00，而不是 UTC 那一天的 00:00
+  assert.equal(startOfDay(now), Date.parse('2026-11-05T00:00:00+08:00'));
+});
+
+test('startOfDay：他的 00:00–08:00 属于哪一天（这里踩过一次）', () => {
+  // 他的 11-05 03:00 = 本机 11-04 19:00。按本机 UTC 零点切会落进 11-04。
+  const ts = Date.parse('2026-11-05T03:00:00+08:00');
+  assert.equal(startOfDay(ts), Date.parse('2026-11-05T00:00:00+08:00'));
 });
 
 test('calendarDaysBetween 按自然日算，不按 24 小时算', () => {
-  // 23:59 到第二天 00:01 只差 2 分钟，但那是"两天"
-  const late = new Date(2026, 10, 4, 23, 59, 0).getTime();
-  const early = new Date(2026, 10, 5, 0, 1, 0).getTime();
+  // 23:59 到第二天 00:01 只差 2 分钟，但那是"两天"（按他的钟点）
+  const late = Date.parse('2026-11-04T23:59:00+08:00');
+  const early = Date.parse('2026-11-05T00:01:00+08:00');
   assert.equal(calendarDaysBetween(late, early), 1);
+});
+
+test('calendarDaysBetween：早上看昨晚凌晨记的事，还是「今天」', () => {
+  const morning = Date.parse('2026-11-05T10:00:00+08:00');
+  const smallHours = Date.parse('2026-11-05T03:00:00+08:00');
+  assert.equal(calendarDaysBetween(smallHours, morning), 0);
+  assert.equal(dayLabel(smallHours, morning), '今天');
+  assert.equal(softWhen(smallHours, morning), '');
 });
 
 test('calendarDaysBetween 对方向与非法输入的处理', () => {
