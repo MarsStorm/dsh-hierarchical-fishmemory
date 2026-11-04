@@ -4024,6 +4024,12 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
               } catch (err) {
                 warn(`摘磁盘墓碑失败（内存那份已摘，这次仍会恢复）：${err instanceof Error ? err.message : String(err)}`);
               }
+              // ⚠️ 基线也得改。`loadedIds` 记的是"加载时磁盘上有什么"，而
+              // 落盘前的三路合并拿它判断删除归属：内存有、磁盘没有、基线有
+              // → 判成"**别人删的**"。恢复的条目正好落在这个格子里 ——
+              // 加进内存、落了盘，却被合并当场又摘掉。
+              // 删掉基线记录，它就变成"我们自己刚加的"，能活下来。
+              loadedIds.delete(entry.id);
               index = buildIndex(archive.diary);
               for (const s of sessionStates.values()) s.renderCache = { turn: -1, text: '' };
               await persist();
