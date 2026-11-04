@@ -2449,6 +2449,20 @@ window.__ModuleLoader__.load({
             chips.map((text, i) => h(Chip, { key: i }, text)),
           ),
 
+          // ── 还常想起的那几条 ──
+          //
+          // `recall_count` 唯一给用户看的地方：哪几条是真的还在生活里的。
+          // 不排序、不加权，只列出来 —— 它不该影响召回，只该被看见。
+          d.recalled && d.recalled.length > 0
+            ? h(
+                'div',
+                { style: { marginTop: 8, fontSize: 12, color: C.text2, opacity: 0.85 } },
+                `还常想起：${d.recalled
+                  .map((r) => `${r.text}${r.count > 1 ? `（${r.count} 次）` : ''}`)
+                  .join('、')}`,
+              )
+            : null,
+
           // ── 顶上那一行：情感日记最后写了什么 ──
           //
           // 这是四本账里唯一"每轮注入为零"的一份（三十多 KB，只在回想时出现），
