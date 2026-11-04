@@ -82,3 +82,18 @@ test('coldOnly：同一个 id 两边都有时只留热的', () => {
 test('COLD_DIR 是 diary 下的子目录名', () => {
   assert.equal(COLD_DIR, 'archive');
 });
+
+// 2026-11-05：host 手里是 `id → 条目` 的 Map，原来只认 Set/数组。
+// 直接 `new Set(map)` 出来的是 [key, value] 对 —— 一条都不匹配，
+// 结果是"归档条目全被当成热档案里的"，静默丢掉整批旧事。
+test('coldOnly：认 Map，并且真的按 id 过滤', () => {
+  const cold = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  const hot = new Map([['b', {}]]);
+  assert.deepEqual(coldOnly(cold, hot).map((e) => e.id), ['a', 'c']);
+});
+
+test('coldOnly：Set 与 id 数组同样生效', () => {
+  const cold = [{ id: 'a' }, { id: 'b' }];
+  assert.deepEqual(coldOnly(cold, new Set(['a'])).map((e) => e.id), ['b']);
+  assert.deepEqual(coldOnly(cold, ['b']).map((e) => e.id), ['a']);
+});

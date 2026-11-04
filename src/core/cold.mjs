@@ -100,6 +100,13 @@ export function mergeColdFiles(files) {
  * @returns {object[]}
  */
 export function coldOnly(cold, hotIds) {
-  const seen = hotIds instanceof Set ? hotIds : new Set(hotIds ?? []);
+  // 认 Map 也认 Set/数组：host 那边手里是 id → 条目的 Map，
+  // 直接 `new Set(map)` 出来的是 [key, value] 对，会静默变成"一条也没热过"。
+  const seen =
+    hotIds instanceof Map
+      ? new Set(hotIds.keys())
+      : hotIds instanceof Set
+        ? hotIds
+        : new Set(hotIds ?? []);
   return (Array.isArray(cold) ? cold : []).filter((e) => e && !seen.has(e.id));
 }

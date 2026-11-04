@@ -15,7 +15,6 @@
  * diary/relationship/lexicon/persona；本模块是「跨设备搬家」的全量快照。
  */
 
-import { readdirSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { DIARY_MD, FEELINGS_MD } from "./files.mjs";

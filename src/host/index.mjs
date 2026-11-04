@@ -80,7 +80,7 @@ import {
   describeTrashRecord,
   daysLeft,
 } from '../core/trash.mjs';
-import { COLD_DIR, mergeColdFiles } from '../core/cold.mjs';
+import { COLD_DIR, coldOnly, mergeColdFiles } from '../core/cold.mjs';
 import { peekFeelings } from '../core/feelings.mjs';
 import {
   downloadRemoteText,
@@ -491,15 +491,14 @@ export function apply(ctx, rawConfig) {
     if (s === undefined) {
       s = {
         turn: 0,
-        lastUserSeq: -1,
         lastUserText: '',
         transcript: [], // 滚动缓冲，最近若干轮
         renderCache: { turn: -1, text: '' },
-        lastOpenTurn: -Infinity,
         diaryCount: 0,
         lastShownTurn: new Map(),
         suppressedUntil: -1,
         queued: false,
+        judging: false,
         /** 上下文刚被压缩过：下一轮要把最近的事整段重灌一次（免预算） */
         needsRecentReplay: false,
       };
@@ -1449,7 +1448,6 @@ export function apply(ctx, rawConfig) {
         if (text === '') return;
 
         s.turn += 1;
-        s.lastUserSeq = event.seq;
         s.lastUserText = text;
         s.renderCache = { turn: -1, text: '' }; // 新一轮，作废缓存
         if (SUPPRESS_RE.test(text)) s.suppressedUntil = s.turn;
@@ -3577,16 +3575,17 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
             // 只读不写回：归档是有意的，把翻出来的塞回 diary 会让下次压缩
             // 再搬一遍，来回抖。命中只是"想起来"。
             const coldAll = readColdArchive();
-            const coldOnly = coldAll.filter((e) => !byId0.has(e.id));
-            const coldIds = new Set(coldOnly.map((e) => e.id));
+            // 只留"热档案里已经没有了"的：同 id 两边都有时，热的那份才是最新的。
+            const onlyCold = coldOnly(coldAll, byId0);
+            const coldIds = new Set(onlyCold.map((e) => e.id));
             // 挑往事那一步只吃最近 400 行索引（`base.slice(-400)`）。
             // 归档条目一定比热条目老，原样拼在一起会被那一步整批切掉 ——
             // 所以在这里先各取一段、总数压在 400 以内，谁都不被无声丢掉。
             const hotTail = archive.diary.slice(-300);
-            const coldTail = coldOnly.slice(-100);
+            const coldTail = onlyCold.slice(-100);
             const corpus = coldTail.length > 0 ? [...coldTail, ...hotTail] : archive.diary;
-            if (coldOnly.length > 0) {
-              log(`检索：语料含 ${coldTail.length}/${coldOnly.length} 条归档原文`);
+            if (onlyCold.length > 0) {
+              log(`检索：语料含 ${coldTail.length}/${onlyCold.length} 条归档原文`);
             }
 
             const byId = new Map(corpus.map((e) => [e.id, e]));
@@ -3614,7 +3613,7 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
               // 冷档案单建一份索引，分数并进来。
               // 两套索引的 N 与平均长度不同，分数严格说不同量纲 ——
               // 但都只用它排序，同时命中的条目自然会得两份分，正好更高。
-              if (coldOnly.length > 0) {
+              if (onlyCold.length > 0) {
                 for (const [id, s] of searchScores(coldIndex(), query, { limit: 200 })) {
                   if (coldIds.has(id)) scores.set(id, (scores.get(id) ?? 0) + s);
                 }

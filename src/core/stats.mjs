@@ -10,7 +10,7 @@
  */
 
 import { basename, join } from "node:path";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { FEELINGS_MD } from "./files.mjs";
 import { HANDNOTE_FILE, MAX_LINE_CHARS, parseHandNote } from "./handnote.mjs";
 import { listDiaryPaths, readJsonOrNull, readTextOrNull } from "./fsx.mjs";

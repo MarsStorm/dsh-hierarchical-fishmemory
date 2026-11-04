@@ -38,8 +38,6 @@ export const TRASH_FILE = '回收站.jsonl';
 /** 默认保留天数。够长，长到"当时没发现、回头想找"也还在 */
 export const DEFAULT_KEEP_DAYS = 30;
 
-/** 超过这个大小就在下次追加时顺手清理 —— 回收站不该无限长大 */
-export const TRASH_SOFT_LIMIT_BYTES = 256 * 1024;
 
 /**
  * 造一条回收站记录。

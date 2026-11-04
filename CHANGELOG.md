@@ -2,6 +2,16 @@
 
 从新到旧。每条都写了「为什么」，不只是「改了什么」。
 
+## 1.9.2 — 2026-11-05
+
+清理。没有新功能，只把「写了两份」的地方并回一份、把没人用的东西删掉。
+
+- **`coldOnly` 原来有两份**：`src/core/cold.mjs` 导出一份、有测试；`src/host/index.mjs` 里又内联了一份同名字的过滤。现在 host 用 core 那份 —— 顺便让它认 `Map`（host 手里是 `id → 条目` 的 Map，而 `new Set(map)` 会得到 `[key, value]` 对，一条都不匹配，结果是归档条目被整批当成"热档案里的"静默丢掉）。补两条测试。
+- 删掉三处未使用的导入（`stats.mjs` 的 `readFileSync`、`backup.mjs` 的 `readdirSync` / `readFileSync`）。
+- 删掉 `TRASH_SOFT_LIMIT_BYTES`（只声明、从没读过）。
+- 删掉会话状态里两个空转字段：`lastOpenTurn`（只赋值、没人读）、`lastUserSeq`（只写不读）。顺手把只靠动态赋值存在的 `judging` 补进初始值。
+- 测试 200 → 202。
+
 ## 1.9.1 — 2026-11-05
 
 **活干得越多，越不容易被记住 —— 这个洞补上了。**
