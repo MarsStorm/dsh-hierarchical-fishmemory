@@ -247,6 +247,14 @@ export function applySummaries(archive, map, now = Date.now()) {
   /** 每天衰减系数 */
   decayRate: 0.9,
   /**
+   * 想起来几次算「这条我记得牢」。
+   *
+   * 用来把 `recall_count` 映射成衰减缓冲：`log1p(count) / log1p(这个数)`。
+   * 取 10 —— 一条日记被召回十次，基本可以肯定它对你不是"早年的模糊事"，
+   * 而是常被提起的那几件之一，那就该拿满减半的待遇。
+   */
+  recallReliefFullCount: 10,
+  /**
    * 衰减的**地板**。
    *
    * 原来没有底：salience = 0.9^天数 × 原值，一路乘到 1e-5。
@@ -740,10 +748,33 @@ export function decayArchive(archive, options = {}) {
 
   const memFactor = Math.pow(opts.decayRate, days);
 
-  const diary = (archive.diary ?? []).map((e) => ({
-    ...e,
-    salience: Math.max(opts.salienceFloor, (Number.isFinite(e.salience) ? e.salience : 0.5) * memFactor),
-  }));
+  // ── 被想起来过的，衰减得慢一点（2026-11-04 加）──
+  //
+  // 原来的衰减只看时间：写下来那天起，每天 ×0.9，跟它后来有没有被翻出来
+  // **完全无关**。可"记不记得住"这件事本来就不只看年头 ——
+  // 反复被想起的那件事，人就是记得牢；一次没提过的，才是真的淡了。
+  //
+  // 现在按被召回过的次数给一个**缓冲**：每想起来一次，这次衰减就少扣一点，
+  // 最多减半（`recallRelief` 封顶 0.5）。取对数是因为边际递减 ——
+  // 第一次想起来最有意义，第一百次和第一百零一次差不多。
+  //
+  // 为什么不是直接加 salience：那会让"被翻出来"变成刷分的手段，
+  // 而它本来只是"这条我确实还记得"的证据。**只慢下来，不再涨上去。**
+  const reliefOf = (entry) => {
+    const count = Number.isFinite(entry?.recall_count) ? Number(entry.recall_count) : 0;
+    if (count <= 0) return 1;
+    const share = Math.log1p(count) / Math.log1p(opts.recallReliefFullCount);
+    const relief = Math.min(0.5, Math.max(0, share) * 0.5);
+    return 1 - relief;
+  };
+
+  const diary = (archive.diary ?? []).map((e) => {
+    const factor = Math.pow(opts.decayRate, days * reliefOf(e));
+    return {
+      ...e,
+      salience: Math.max(opts.salienceFloor, (Number.isFinite(e.salience) ? e.salience : 0.5) * factor),
+    };
+  });
 
   const items = (archive.lexicon?.items ?? []).map((i) => ({
     ...i,

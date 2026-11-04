@@ -44,13 +44,14 @@
 
 ### 二、主动查（翻旧账）
 
-- `fish_recall`：按**当时的原词**搜经过，可以限定 `since` / `until` 只看某段时间。
+- `fish_recall`：按**当时的原词**搜经过，可以限定 `since` / `until` 只看某段时间。被 `fish_compact` 折掉的原文也一并翻 —— 命中的会标「（旧档案）」，不会跟昨天的事混在一起。
 - `memory_read(topic)`：深层记忆分「常驻的 core」与「按需翻的 topics」，体系化的坑不会挤占每轮预算。
 - `shallow_list`：浅层的账，末尾还会给出「最近清掉的」几条——那是升级的最后机会。
 
 ### 三、整理与压缩（账本会老，得收拾）
 
-- `fish_compact`：把 45 天前的共度时光按月折成摘要，原文归档到 `diary/archive/YYYY-MM.jsonl`，注入池里只留摘要。
+- `fish_compact`：把 45 天前的共度时光按月折成摘要，原文归档到 `diary/archive/YYYY-MM.jsonl`，注入池里只留摘要。**归档不等于删除** —— `fish_recall` 会回去翻，命中标注「（旧档案）」。
+- `trash_list` / `trash_restore`：回收站。忘掉一条、删掉记忆层里的一行、手记被整篇覆盖之前，都会先在这儿留一份，30 天。
 - `shallow_promote`：浅层快到期时把它升格成共度时光或深层记忆，然后从浅层删掉——不用等它默默消失。
 - `fish_layer_check`：体检「同一句写了两遍」（深层 / 手记 / 情感日记 / 浅层）与「同一样东西写了两个值」（端口、版本）。
 - `loop_add` / `loop_done` / `loop_list`：答应过、挂着没做的事记一笔，每轮注入「还挂着 N 件事」。**只摆出来、不自动销账**——误杀比漏记更让人不敢信。
@@ -200,7 +201,8 @@ dsh plugin --profile web add link:/abs/path/to/dsh-hierarchical-fishmemory
 | 工具 | 作用 |
 | --- | --- |
 | `fish_recall` | 按当时的原词搜**经过**；支持 `since` / `until` 只看某段时间 |
-| `fish_compact` | 把 45 天前的条目按月折成摘要，原文归档 |
+| `fish_compact` | 把 45 天前的条目按月折成摘要，原文归档（`fish_recall` 仍能翻到） |
+| `trash_list` · `trash_restore` | 回收站：删除与覆盖前留的底，留 30 天 |
 | `fish_backup` · `fish_restore` | 整包备份与还原（`mode: "merge"` 只并共度时光与浅层） |
 | `fish_cloud_backup` | 打一份新备份并上传到 WebDAV，顺带清理超额的旧份 |
 | `fish_layer_check` | 层间重复句与同值冲突，只报告不改动 |
@@ -249,12 +251,14 @@ fish_cloud_backup({ note: "出差前" })
 - **保留份数由 `webdavKeep` 管**：靠 `PROPFIND` 列目录删最旧的；网盘禁了 `PROPFIND`
   就退化成「不清理」，不会让上传整体失败。
 
-## 更新记录（1.3.0 → 1.8.0）
+## 更新记录（1.3.0 → 1.9.0）
 
 逐条的「为什么」在 [CHANGELOG.md](./CHANGELOG.md)；这里只列每一次动了什么。
 
 | 版本 | 一句话 |
 | --- | --- |
+| **1.9.0** | 压缩后仍能翻到原文、回收站（`trash_list` / `trash_restore`）、召回过的衰减更慢、面板顶上铺情感日记那一行、日志轮转；补九个模块的测试（87 → 193） |
+| **1.8.2** | 市场卡片简介改写；设置页「当前默认卡」徽章改成真下拉 |
 | **1.8.0** | 今日提醒、浅层升格、召回按时间段、年册导出；修死配置、关掉情感日记的第二个写口、统一 token 估算 |
 | **1.7.0** | 界面重做：面板拆成回看/本子/体检/档案，设置页拆成人设卡/长期记忆/云端，合并重复编辑口 |
 | **1.6.3** | 体检第二轮：读盘工具去重、删掉被覆盖的 `/handnote/delete`，净减 116 行 |

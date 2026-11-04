@@ -19,7 +19,7 @@
  */
 
 import { readFile, writeFile, mkdir, rename, readdir, rm } from 'node:fs/promises';
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -35,6 +35,7 @@ import {
   ensurePersonaStructure,
   DIARY_DIR,
   PERSONA_FILE,
+  MANIFEST_FILE,
 } from '../core/archive.mjs';
 // 原来的 evaluateGate 那套关键词闸门拆了（见 turn-stopping 里的注释）。
 // SUPPRESS_RE 留着 —— "别记"是用户的控制，不是启发式。
@@ -67,6 +68,20 @@ import { resolveConfig, buildSchema, CONFIG_SPEC } from '../core/config.mjs';
 import { registerShallow, SHALLOW_FILE } from '../core/shallow.mjs';
 import { summarizeBackup, writeBackupFile, backupFileName, buildRegisteredBackup, restoreViaRegistered } from '../core/backup.mjs';
 import { collectLayerReport, collectReview, collectStatsFromDisk } from '../core/stats.mjs';
+import {
+  TRASH_FILE,
+  DEFAULT_KEEP_DAYS,
+  buildTrashRecord,
+  appendTrashRecord,
+  parseTrash,
+  pruneTrash,
+  serializeTrash,
+  findTrashRecord,
+  describeTrashRecord,
+  daysLeft,
+} from '../core/trash.mjs';
+import { COLD_DIR, mergeColdFiles } from '../core/cold.mjs';
+import { peekFeelings } from '../core/feelings.mjs';
 import {
   downloadRemoteText,
   explainWebdavError,
@@ -397,6 +412,56 @@ export function apply(ctx, rawConfig) {
    * 只有 `debugLog: true` 才写，且**只写形状、绝不写对话内容**（SPEC §6.3）。
    */
   const DEBUG_LOG_FILE = 'feiyu.debug.log';
+  /**
+   * 日志文件的尺寸上限（1 MB）和保留份数（1 份 `.1`）。
+   *
+   * ⚠️ **这个是补上一个真实的漏。** 原来这里是纯粹的 `appendFileSync`，
+   * 没有任何 stat/size 检查 —— 实测这台机器上那个文件已经 268 KB，
+   * 而且它只增不减。`debugLog` 一开（排查问题时一定会开），
+   * 每轮几十行，几个月后就是几十兆，还全都躺在用户的记忆目录里。
+   *
+   * 1 MB 是拍脑袋定的，但方向对：日志是给人看"刚才发生了什么"的，
+   * 超过一兆的旧日志没人会去翻。轮转只留一份，不做日期命名 ——
+   * 那样迟早攒出上百个文件。
+   */
+  const DEBUG_LOG_MAX_BYTES = 1024 * 1024;
+  const DEBUG_LOG_KEEP = 1;
+  let debugLogBytes = -1; // -1 = 还没量过
+
+  /** 写一行日志，超过上限就先挪成 `.1` 再重开。 */
+  function appendDebugLog(text) {
+    try {
+      mkdirSync(archiveDirectory, { recursive: true });
+      const file = path.join(archiveDirectory, DEBUG_LOG_FILE);
+      if (debugLogBytes < 0) {
+        try {
+          debugLogBytes = statSync(file).size;
+        } catch {
+          debugLogBytes = 0;
+        }
+      }
+      if (debugLogBytes + text.length > DEBUG_LOG_MAX_BYTES) {
+        try {
+          const rotated = `${file}.${DEBUG_LOG_KEEP}`;
+          // 只留一份：先删旧的 `.1`，再把现在的挪过去
+          try {
+            rmSync(rotated, { force: true });
+          } catch {
+            // 删不掉就让 rename 自己覆盖（多数平台能覆盖）
+          }
+          renameSync(file, rotated);
+        } catch {
+          // 挪不动就当场截断 —— 宁可丢旧日志，也不能让它无限长
+        }
+        debugLogBytes = 0;
+      }
+      appendFileSync(file, text, 'utf8');
+      debugLogBytes += text.length;
+    } catch {
+      // 写不了就算了，日志不该影响功能
+    }
+  }
+
   const emit = (level, args) => {
     const line = `[fish] ${args.join(' ')}`;
     try {
@@ -410,16 +475,7 @@ export function apply(ctx, rawConfig) {
     } catch {
       // 没有 stderr 就只走 logger
     }
-    try {
-      mkdirSync(archiveDirectory, { recursive: true });
-      appendFileSync(
-        path.join(archiveDirectory, DEBUG_LOG_FILE),
-        `${new Date().toISOString()} ${line}\n`,
-        'utf8',
-      );
-    } catch {
-      // 写不了就算了，日志不该影响功能
-    }
+    appendDebugLog(`${new Date().toISOString()} ${line}\n`);
   };
   const log = (...args) => {
     if (config.debugLog) emit('info', args);
@@ -749,6 +805,19 @@ export function apply(ctx, rawConfig) {
    */
   const FLUSH_TIMEOUT_MS = 180000;
   ctx.effect(() => () => {
+    // ── 召回计数补一次落盘（2026-11-04）──
+    //
+    // `noteRecalled` 默认只改内存、攒够 5 分钟才 `void persist()`。
+    // 进程要是正好在这 5 分钟里被关掉，那几条的 `recall_count` 就跟着
+    // 一起没了 —— 而它正是"这条我确实还记得"的证据。关之前补一次。
+    if (recallDirty) {
+      recallDirty = false;
+      try {
+        void persist();
+      } catch {
+        // 已经在关了，写不进去就算了
+      }
+    }
     const flush = Promise.resolve()
       .then(() => drainPromise)
       .then(() => writeChain)
@@ -1036,6 +1105,68 @@ export function apply(ctx, rawConfig) {
   const RECALL_TOOL_NAME = 'fish_recall';
 
   /**
+   * 记一次「想起来」。
+   *
+   * ── 为什么要它 ──
+   *
+   * 召回是**读**，可"读"这件事本身是信息：被反复翻出来的那条，
+   * 才是真的还在你生活里的那条。在这之前这个信息一个字都没留下 ——
+   * 冷却表是内存里的（重启归零），衰减对所有条目一视同仁。
+   *
+   * ── 为什么不当场写盘 ──
+   *
+   * 召回几乎每轮都发生，而 `persist()` 要重写整个档案目录（还要跑一次
+   * 三路合并、一次可读版日记渲染）。为了加两个整数把这件事变成每轮一次，
+   * 代价完全不成比例。
+   *
+   * 所以：**只改内存，落盘搭便车。** 任何一次真正的写盘（固化、面板操作、
+   * 关掉插件）都会把计数一起带上；另外加一个 5 分钟节流兜底 ——
+   * 万一后面什么也没发生（纯闲聊、聊完就关），计数也不至于白记。
+   *
+   * ── 为什么不上调 salience ──
+   *
+   * 召回打分里含 salience。在召回的那一刻给它加分，等于"想起来过的
+   * 更容易被再想起来"—— 跑几轮就会滚成一个固定的小圈子，别的条目
+   * 再也出不来。**记事实，不许它自己制造事实。**
+   *
+   * @param {string[]} ids
+   */
+  const RECALL_FLUSH_MS = 5 * 60 * 1000;
+  let lastRecallFlush = 0;
+  let recallDirty = false;
+
+  function noteRecalled(ids) {
+    const list = Array.isArray(ids) ? ids.filter((id) => typeof id === 'string' && id !== '') : [];
+    if (list.length === 0) return;
+    const now = Date.now();
+    const wanted = new Set(list);
+    let touched = 0;
+    const diary = archive.diary.map((e) => {
+      if (!wanted.has(e.id)) return e;
+      touched += 1;
+      return {
+        ...e,
+        recall_count: (Number.isFinite(e.recall_count) ? Number(e.recall_count) : 0) + 1,
+        last_recalled_at: now,
+      };
+    });
+    if (touched === 0) return;
+    archive.diary = diary;
+    recallDirty = true;
+
+    // 节流落盘。**不 await、不抛** —— 记账失败绝不该影响这一轮的注入。
+    if (now - lastRecallFlush >= RECALL_FLUSH_MS) {
+      lastRecallFlush = now;
+      recallDirty = false;
+      try {
+        void persist();
+      } catch (err) {
+        warn(`召回计数落盘没起来：${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
+  /**
    * 为某个会话渲染注入文本。
    *
    * **按轮缓存**：`assemble` 每个 model step 都会调用一次，
@@ -1145,6 +1276,19 @@ export function apply(ctx, rawConfig) {
       // 只有这两个时刻把「最近的事」整段重灌：**新会话第一轮**，或**刚被压缩过**。
       // 其余每轮都不灌 —— 它已经进了历史，看得见，再灌一遍就是重复占地方。
       const pinnedOnce = s.turn <= 1 || s.needsRecentReplay;
+
+      // ── 记账：这几条被想起来了 ──
+      //
+      // 2026-11-04 加。在这之前，"哪条真的被反复想起来过"档案里一个字都没有：
+      // 冷却只活在内存里（`lastShownTurn`），一重启就归零；衰减对所有条目
+      // 一视同仁地乘 0.9，跟它后来有没有被翻出来毫无关系。
+      //
+      // 于是"被想起"这件事从来不留痕，也就永远学不到东西。
+      //
+      // **注意这不加 salience** —— 那条路很危险：召回的判据里含 salience，
+      // 加分就等于"被想起来过的更容易再被想起来"，几轮之后会滚成一个
+      // 固定的小圈子，别的条目再也出不来。这里只记事实，怎么用是衰减层的事。
+      if (chosen.length > 0) noteRecalled(chosen.map((c) => c.entry?.id));
 
       const rendered = renderMemoryBlock({
         persona: archive.persona,
@@ -1793,6 +1937,151 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
     void backfillSummaries();
   }
 
+  /* ── 回收站 ── */
+
+  /**
+   * 删之前先留底。
+   *
+   * ── 为什么值得为它单开一节 ──
+   *
+   * 这个插件里所有删除原本都是**直接删**：`forgetEntry` 整条移除、
+   * 面板那句「删掉重复的那一份」整行移除、手记保存整篇覆盖。
+   * 而同一个项目里，情感日记保存前会存 `backups/feelings/`，人设卡也有版本
+   * —— **有保护的那份恰好不是每轮注入的那份。**
+   *
+   * 手记改坏一行，下一轮就换了个我；共度时光删错一条就是永久
+   * （立了墓碑，重新加回来还会被判成"别人删的"）。
+   *
+   * ── 为什么写失败不抛 ──
+   *
+   * 留底是**保险**，不是删除的前置条件。回收站写不进去（磁盘满、权限）
+   * 的时候，用户那句"忘掉这个"还是应该生效 —— 不然为了保住删的能力
+   * 反而把删这件事做不成了。所以这里全程吞异常，只 warn。
+   */
+  function trashPath() {
+    return path.join(archiveDirectory, TRASH_FILE);
+  }
+
+  /** 读回收站 + 顺手剪枝（超过保留天数的丢掉）。全程不抛。 */
+  function readTrash() {
+    try {
+      const file = trashPath();
+      const text = existsSync(file) ? readFileSync(file, 'utf8') : '';
+      const { records, broken } = parseTrash(text);
+      if (broken > 0) warn(`回收站里有 ${broken} 行读不出来，已跳过`);
+      const { records: kept, removed } = pruneTrash(records, { now: Date.now(), keepDays: DEFAULT_KEEP_DAYS });
+      if (removed > 0) {
+        // 剪掉的只是过期记录，写回失败也没什么可丢的
+        try {
+          writeFileSync(file, serializeTrash(kept), 'utf8');
+        } catch {
+          // 写不了就下次再说
+        }
+      }
+      return kept;
+    } catch (err) {
+      warn(`回收站读不出来（当成空的继续）：${err instanceof Error ? err.message : String(err)}`);
+      return [];
+    }
+  }
+
+  /**
+   * 往回收站里加一条。
+   *
+   * @param {object} input 见 buildTrashRecord
+   * @returns {object|undefined} 写进去的那条记录（写失败时说 undefined）
+   */
+  function pushTrash(input) {
+    try {
+      mkdirSync(archiveDirectory, { recursive: true });
+      const file = trashPath();
+      const text = existsSync(file) ? readFileSync(file, 'utf8') : '';
+      // 先剪后写：不然回收站只增不减，一年后是个几十兆的包袱
+      const { records } = parseTrash(text);
+      const { records: kept, removed } = pruneTrash(records, { now: Date.now(), keepDays: DEFAULT_KEEP_DAYS });
+      if (removed > 0) log(`回收站剪掉 ${removed} 条过期记录（超过 ${DEFAULT_KEEP_DAYS} 天）`);
+      const record = buildTrashRecord(input);
+      const next = appendTrashRecord(serializeTrash(kept), record);
+      writeFileSync(file, next, 'utf8');
+      return record;
+    } catch (err) {
+      warn(`写回收站失败（这次删除照常生效，只是找不回来了）：${err instanceof Error ? err.message : String(err)}`);
+      return undefined;
+    }
+  }
+
+  /* ── 冷档案（被 `fish_compact` 折掉的原文）── */
+  //
+  // ── 为什么要有这个读者 ──
+  //
+  // `fish_compact` 把 45 天前的条目折成月度摘要，原文**搬进**
+  // `diary/archive/YYYY-MM.jsonl`。可全镇只有它自己在写：加载路径
+  // `readArchiveDir` 只遍历 `diary/*.jsonl`，不递归子目录；`fish_recall`
+  // 也只读 `archive.diary`。
+  //
+  // 于是「压缩」实际上等于**永久删除** —— 摘要还在，但那件事的原文
+  // （原话、当时的语气、具体到名字的细节）再也搜不到了。压缩功能
+  // 一直是这样，只是没人去翻过那些条目。
+  //
+  // 这里补上"回去翻"的那条路。**只读，不写回档案**：
+  // 归档是有意的决定，把翻出来的旧条目重新塞回 `diary` 会让下次
+  // 压缩再搬一遍，来回抖动。命中就只是"想起来"。
+  function coldArchivePath() {
+    return path.join(archiveDirectory, 'diary', COLD_DIR);
+  }
+
+  // 缓存键：文件名 + mtime + 大小。压缩一次才会变，比每次全读便宜。
+  let coldCache = { signature: '', entries: [], index: null };
+
+  /**
+   * 读归档的原文条目。读不到就返回空数组 —— 冷档案坏了不能挡住热记忆。
+   *
+   * @returns {object[]} 条目（形状与 diary 一致；坏行跳过）
+   */
+  function readColdArchive() {
+    try {
+      const dir = coldArchivePath();
+      if (!existsSync(dir)) return [];
+      const names = readdirSync(dir).filter((n) => n.endsWith('.jsonl')).sort();
+      if (names.length === 0) return [];
+      const signature = names
+        .map((n) => {
+          try {
+            const st = statSync(path.join(dir, n));
+            return `${n}:${st.mtimeMs}:${st.size}`;
+          } catch {
+            return `${n}:?`;
+          }
+        })
+        .join('|');
+      if (signature === coldCache.signature) return coldCache.entries;
+
+      const files = [];
+      for (const n of names) {
+        try {
+          files.push({ name: n, text: readFileSync(path.join(dir, n), 'utf8') });
+        } catch {
+          // 单个文件读不了就跳过，别让整个归档读不出来
+        }
+      }
+      const { entries, broken, files: used } = mergeColdFiles(files);
+      if (broken > 0) warn(`冷档案：${broken} 行读不出来（坏行已跳过）`);
+      coldCache = { signature, entries, index: null };
+      log(`冷档案：读到 ${entries.length} 条归档原文（${used} 个文件）`);
+      return entries;
+    } catch (err) {
+      warn(`冷档案读不出来（当成没有）：${err instanceof Error ? err.message : String(err)}`);
+      return [];
+    }
+  }
+
+  /** 归档条目的倒排索引，跟着 coldCache 一起缓存。 */
+  function coldIndex() {
+    readColdArchive(); // 确保缓存是最新的
+    if (coldCache.index === null) coldCache.index = buildIndex(coldCache.entries);
+    return coldCache.index;
+  }
+
   /* ── 导出 / 导入（v0.1 先只做导出，路径可预期） ── */
 
   /**
@@ -1806,14 +2095,26 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
    * 这一条是这个插件必须有的：在那之前，想删一条记忆得自己去编辑
    * 日记的 jsonl 文件。会做这件事的人不需要面板，需要面板的人不会做这件事。
    *
+   * 2026-11-04：删之前先往回收站放一份（`回收站.jsonl`，留 30 天）。
+   * 墓碑照立 —— 那管的是"别被三路合并捞回来"，和"留个底"是两件事。
+   *
    * @returns {Promise<boolean>} 是否真的删掉了（id 不存在时说 false，让界面能说实话）
    */
   async function forgetEntry(id) {
     await loadPromise;
     if (typeof id !== 'string' || id === '') return false;
     const before = archive.diary.length;
+    const doomed = archive.diary.find((e) => e?.id === id);
     archive.diary = archive.diary.filter((e) => e?.id !== id);
     if (archive.diary.length === before) return false;
+    // 留底要在改动生效之前 —— 上面那两行之后 `doomed` 就是唯一的一份了
+    if (doomed !== undefined) {
+      pushTrash({
+        kind: 'diary',
+        payload: doomed,
+        label: String(doomed.text ?? '').replace(/\s+/g, ' ').slice(0, 60),
+      });
+    }
     // ⚠️ **删了就得立碑。** 不立的话，落盘前的三路合并会读一遍磁盘 ——
     // 那条还在磁盘上，内存里没有，基线里可能也没有（本会话刚加的）
     // → 判成"别人刚加的" → **捞回来**。面板上的「忘掉」当场失效。
@@ -2097,6 +2398,26 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
    * **只挑界面用得上的字段**，不把整个档案倒出去 —— 注入用的
    * keywords 索引之类的东西对界面没有意义，多传只是多暴露。
    */
+  /**
+   * 情感日记最后写了什么 —— 面板顶上那一行。
+   *
+   * `鱼的日子.md` 三十多 KB，每轮注入恰好是 **零**（它只在我手动回想时出现），
+   * 而体检页只报条数和体积。于是最能说明"这条鱼最近怎么样"的那个文件，
+   * 在界面上只剩一个字节数。这里抽最后一段的第一句铺到最上面。
+   *
+   * 读不到就返回空 —— 面板不能因为一个本子坏了打不开。
+   */
+  function feelingsPeek() {
+    try {
+      const file = path.join(archiveDirectory, FEELINGS_MD);
+      if (!existsSync(file)) return null;
+      return peekFeelings(readFileSync(file, 'utf8'));
+    } catch (err) {
+      warn(`读情感日记失败（面板那一行空着）：${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+  }
+
   function panelState() {
     const rel = archive.relationship ?? {};
     const since = archive.manifest?.created_at;
@@ -2134,6 +2455,30 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
           .slice(0, 8)
           .map((i) => i.term),
       },
+      // ── 顶上那一行（2026-11-04）──
+      //
+      // 情感日记三十多 KB、每轮注入是零，体检页只看条数体积。
+      // 最有"这条鱼最近怎么样"的信息反而最看不见，所以抽出来铺到最上面。
+      feelings: feelingsPeek(),
+      // 被翻出来最多、最近翻过的那几条 —— 这是 `recall_count` 唯一的用处，
+      // 给用户看的：哪几条是真的还在生活里的。
+      recalled: archive.diary
+        .filter((e) => Number.isFinite(e?.recall_count) && e.recall_count > 0)
+        .sort((a, b) => (b.last_recalled_at ?? 0) - (a.last_recalled_at ?? 0))
+        .slice(0, 3)
+        .map((e) => ({
+          id: e.id,
+          text: String(e.text ?? '').replace(/\s+/g, ' ').slice(0, 60),
+          count: Number(e.recall_count) || 0,
+        })),
+      // 回收站里有几条 —— 删错了至少知道去哪儿找
+      trash: (() => {
+        try {
+          return readTrash().length;
+        } catch {
+          return 0;
+        }
+      })(),
     };
   }
 
@@ -2183,7 +2528,24 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
     if (typeof body?.text !== 'string') throw new Error('内容是空的');
     if (body.text.length > 200000) throw new Error('太长（超过 20 万字符）');
     const text = body.text === '' || body.text.endsWith('\n') ? body.text : `${body.text}\n`;
-    await writeFileAtomic(path.join(archiveDirectory, n.file), text);
+    // 这个本来是**整篇覆盖**：上一版的每一行都被这一份替换掉，且没有历史。
+    // 而手记是每轮全量注入的那份 —— 改坏一次，下一轮就换了个我。
+    // 所以改之前把旧版整篇留一份底（不是逐行，因为这里丢的是一整篇）。
+    const file = path.join(archiveDirectory, n.file);
+    let prev = '';
+    try {
+      if (existsSync(file)) prev = readFileSync(file, 'utf8');
+    } catch {
+      // 读不到旧版就不留底 —— 没有内容可丢
+    }
+    if (prev !== '' && prev !== text) {
+      pushTrash({
+        kind: 'line',
+        payload: { target: n.key, whole: true, file: n.file, text: prev },
+        label: `${n.label}（覆盖前的整篇，${prev.length} 字）`,
+      });
+    }
+    await writeFileAtomic(file, text);
     log(`面板写回 ${n.file}（${text.length} 字）`);
     return { key: n.key, file: n.file, text };
   }
@@ -2545,6 +2907,13 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
                 keep.push(line);
               }
               if (!removed) return panelReply(res, 404, { ok: false, error: '这一层里找不到那一行' });
+              // 删前留底：这里删的是"重复的那一份"，但判重复的是人 ——
+              // 判错了就是整行没了，而这一层多半只有一两行。
+              pushTrash({
+                kind: 'line',
+                payload: { target, line: wanted, file: path.basename(file) },
+                label: `${target}：${wanted.slice(0, 60)}`,
+              });
               writeFileSync(file, keep.join('\n'));
               log(`删掉重复的一行（${target}），共 ${removed} 行`);
               return panelReply(res, 200, { ok: true, removed, target });
@@ -2948,10 +3317,10 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
    * 上限 400 条：再多 prompt 就压不住了。超了只取最近的 400，
    * 这是个已知的近似，日志里会说 —— 别让它悄悄降级。
    */
-  async function pickBySummary(query, limit) {
+  async function pickBySummary(query, limit, source = archive.diary) {
     const llmP = ctx.get('llm');
     if (llmP === undefined) return null;
-    const all = archive.diary.filter((e) => typeof e.text === 'string' && e.text !== '');
+    const all = source.filter((e) => typeof e.text === 'string' && e.text !== '');
     if (all.length === 0) return [];
 
     // ── 时间先收窄一次 ──
@@ -3161,7 +3530,30 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
               return true;
             };
 
-            const byId = new Map(archive.diary.map((e) => [e.id, e]));
+            const byId0 = new Map(archive.diary.map((e) => [e.id, e]));
+
+            // ── 冷档案也进语料（2026-11-04）──
+            //
+            // `fish_compact` 把 45 天前的原文搬进 `diary/archive/`，而那里
+            // 之前**没有任何读者** —— 压缩等于永久删除。显式要找的时候
+            // （"去年那件事"）恰恰是最该翻到旧纸箱的时候。
+            //
+            // 只读不写回：归档是有意的，把翻出来的塞回 diary 会让下次压缩
+            // 再搬一遍，来回抖。命中只是"想起来"。
+            const coldAll = readColdArchive();
+            const coldOnly = coldAll.filter((e) => !byId0.has(e.id));
+            const coldIds = new Set(coldOnly.map((e) => e.id));
+            // 挑往事那一步只吃最近 400 行索引（`base.slice(-400)`）。
+            // 归档条目一定比热条目老，原样拼在一起会被那一步整批切掉 ——
+            // 所以在这里先各取一段、总数压在 400 以内，谁都不被无声丢掉。
+            const hotTail = archive.diary.slice(-300);
+            const coldTail = coldOnly.slice(-100);
+            const corpus = coldTail.length > 0 ? [...coldTail, ...hotTail] : archive.diary;
+            if (coldOnly.length > 0) {
+              log(`检索：语料含 ${coldTail.length}/${coldOnly.length} 条归档原文`);
+            }
+
+            const byId = new Map(corpus.map((e) => [e.id, e]));
 
             // ── 挑：交给模型读 summary，不按键面 ──
             //
@@ -3173,7 +3565,7 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
             //
             // 代价：每次调工具多一次模型请求。只有她判断"这是往事"时才会发生，
             // 平时是零。
-            const picked = await pickBySummary(query, Math.min(limit, 3));
+            const picked = await pickBySummary(query, Math.min(limit, 3), corpus);
 
             let ranked;
             if (picked !== null) {
@@ -3183,6 +3575,14 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
             } else {
               // 没有 llm 服务时退回字面 —— 不能用"挑不了"当没找到
               const scores = searchScores(index, query, { limit: 200 });
+              // 冷档案单建一份索引，分数并进来。
+              // 两套索引的 N 与平均长度不同，分数严格说不同量纲 ——
+              // 但都只用它排序，同时命中的条目自然会得两份分，正好更高。
+              if (coldOnly.length > 0) {
+                for (const [id, s] of searchScores(coldIndex(), query, { limit: 200 })) {
+                  if (coldIds.has(id)) scores.set(id, (scores.get(id) ?? 0) + s);
+                }
+              }
               ranked = [...scores.entries()]
                 .map(([id, sim]) => ({ entry: byId.get(id), sim }))
                 .filter((x) => x.entry && typeof x.entry.text === 'string')
@@ -3203,7 +3603,7 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
             // 有结果就不兜，排序不受影响。
             if (picked === null && ranked.length === 0 && query.length <= 4) {
               const needle = query.toLowerCase();
-              ranked = archive.diary
+              ranked = corpus
                 .filter((e) => inRange(e))
                 .filter((e) => typeof e.text === 'string' && e.text.toLowerCase().includes(needle))
                 .slice(-limit)
@@ -3233,11 +3633,18 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
               // 跟注入走同一个隐私闸 —— 历史条目里可能还有没洗过的东西
               const body = stripTimeWords(scrub(entry.text, { thirdParty: false }).text);
               const when = softWhen(entry.created_at, now);
-              const line = when === '' ? body : `${when}：${body}`;
+              // 归档里的条目要标出来。不标的话它读起来和昨天的事一样新，
+              // 而"这是很久以前的事"本身是信息 —— 语气、时态全靠这个。
+              const tag = coldIds.has(entry.id) ? '（旧档案）' : '';
+              const head = when === '' ? tag : `${tag}${when}`;
+              const line = head === '' ? body : `${head}：${body}`;
               if (used + line.length > MAX_CHARS && lines.length > 0) break;
               lines.push(`- ${line}`);
               used += line.length;
             }
+
+            // 翻过也算"想起来过" —— 冷档案不在 diary 里，noteRecalled 会自动跳过
+            noteRecalled(ranked.map((x) => x.entry?.id));
 
             log(`检索「${query.slice(0, 20)}」：返回 ${lines.length} 条`);
             return {
@@ -3488,6 +3895,167 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
           },
         }),
       'fish: compact tool',
+    );
+
+    // ── 回收站 ──
+    //
+    // 这个插件里所有删除原本都是直接删：忘掉一条、删掉重复的一行、
+    // 手记整篇覆盖。而**有保护的那份恰好不是每轮注入的那份** ——
+    // 情感日记存 `backups/feelings/`，人设卡有版本历史，
+    // 而手记（每轮全量注入）和共度时光（永久）什么都没有。
+    //
+    // 现在删前都会往 `回收站.jsonl` 放一份，留 30 天。
+    // 这两个工具是"把它拿回来"的那只手。
+    scope.effect(
+      () =>
+        scope.tools.register({
+          name: 'trash_list',
+          description:
+            '看看回收站里有什么 —— 最近 30 天删掉的日记条目、记忆层里的行、被覆盖前的手记。' +
+            '他问「上次删的那个还在吗」「能不能找回来」时用它。',
+          parameters: { type: 'object', additionalProperties: false, properties: {}, required: [] },
+          output: {
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                count: { type: 'integer' },
+                text: { type: 'string' },
+              },
+            },
+            render: (_a, v) => [{ type: 'text', text: v?.text ?? '回收站是空的。' }],
+          },
+          isConcurrencySafe: () => true,
+          async execute() {
+            const records = readTrash();
+            if (records.length === 0) {
+              return { count: 0, text: '回收站是空的 —— 最近 30 天没有删过东西。' };
+            }
+            const now = Date.now();
+            const lines = records.slice(0, 20).map((r) => {
+              const left = daysLeft(r, { now, keepDays: DEFAULT_KEEP_DAYS });
+              // 快到期的那几条要提醒一句 —— 不说的话它会在某天静默消失
+              const warn = left <= 3 ? `（${left} 天后清除）` : '';
+              return `- ${describeTrashRecord(r, now)}${warn}`;
+            });
+            const more = records.length > 20 ? `\n（还有 ${records.length - 20} 条，没全列出来）` : '';
+            return {
+              count: records.length,
+              text: `回收站里有 ${records.length} 条（留 30 天）：\n${lines.join('\n')}${more}\n\n要拿回来就说一声，我用 trash_restore。`,
+            };
+          },
+          presentCall: () => ({ card: 'generic', title: '看回收站', kind: 'other', rawInput: {} }),
+        }),
+      'fish: trash_list tool',
+    );
+
+    scope.effect(
+      () =>
+        scope.tools.register({
+          name: 'trash_restore',
+          description:
+            '把回收站里的一条拿回来。传 id（trash_list 里那个）或者正文里的一段话都行。' +
+            '恢复日记条目会把它重新加回共度时光；恢复「行」/手记只告诉你原文是什么，不自动写回。',
+          parameters: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              match: { type: 'string', description: 'id，或者那条正文里的一段话。' },
+            },
+            required: ['match'],
+          },
+          output: {
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                ok: { type: 'boolean' },
+                kind: { type: 'string' },
+                restored: { type: 'boolean' },
+                text: { type: 'string' },
+              },
+            },
+            render: (_a, v) => [{ type: 'text', text: v?.text ?? '没找着。' }],
+          },
+          async execute(args) {
+            await loadPromise;
+            const needle = typeof args?.match === 'string' ? args.match.trim() : '';
+            if (needle === '') throw new Error('要恢复哪一条？给个 id 或正文里的一段话。');
+            const records = readTrash();
+            const record = findTrashRecord(records, needle);
+            if (record === undefined) {
+              return {
+                ok: false,
+                kind: '',
+                restored: false,
+                text: `回收站里没有对得上「${needle.slice(0, 20)}」的。可能已经过了 30 天，或者压根没删过。`,
+              };
+            }
+
+            if (record.kind === 'diary') {
+              const entry = record.payload;
+              if (!entry || typeof entry.id !== 'string') {
+                return { ok: false, kind: 'diary', restored: false, text: '这条记录是坏的，里头没有条目。' };
+              }
+              if (archive.diary.some((e) => e.id === entry.id)) {
+                return { ok: true, kind: 'diary', restored: false, text: '这条已经在档案里了，不用再恢复。' };
+              }
+              // ⚠️ **必须把墓碑摘掉。** 当初删的时候立了碑（防止三路合并
+              // 从磁盘把它捞回来），不摘的话这次恢复会被同一个机制挡住 ——
+              // 加进内存、落盘时被墓碑过滤掉，白忙。
+              archive.diary = [...archive.diary, entry].sort(
+                (a, b) => (a.created_at ?? 0) - (b.created_at ?? 0),
+              );
+              archive.manifest.deleted_ids = (archive.manifest.deleted_ids ?? []).filter((id) => id !== entry.id);
+              // 磁盘上的那份墓碑也得摘 —— `persist()` 落盘前会跟磁盘三路合并，
+              // 而墓碑是**取并集**的：只摘内存那一半，合并时又会被磁盘加回来。
+              // 结果就是"这条在日记里、同时又标着已删除"，下一个会话落盘时
+              // 可能按墓碑把它滤掉 —— 恢复白恢复。
+              try {
+                const diskManifest = path.join(archiveDirectory, MANIFEST_FILE);
+                if (existsSync(diskManifest)) {
+                  const rawManifest = JSON.parse(readFileSync(diskManifest, 'utf8'));
+                  const gone = Array.isArray(rawManifest?.deleted_ids) ? rawManifest.deleted_ids : [];
+                  if (gone.includes(entry.id)) {
+                    rawManifest.deleted_ids = gone.filter((id) => id !== entry.id);
+                    await writeFileAtomic(diskManifest, `${JSON.stringify(rawManifest, null, 2)}\n`);
+                  }
+                }
+              } catch (err) {
+                warn(`摘磁盘墓碑失败（内存那份已摘，这次仍会恢复）：${err instanceof Error ? err.message : String(err)}`);
+              }
+              index = buildIndex(archive.diary);
+              for (const s of sessionStates.values()) s.renderCache = { turn: -1, text: '' };
+              await persist();
+              log(`从回收站恢复一条日记：${entry.id}`);
+              return {
+                ok: true,
+                kind: 'diary',
+                restored: true,
+                text: `拿回来了：${String(entry.text ?? '').replace(/\s+/g, ' ').slice(0, 80)}`,
+              };
+            }
+
+            // 行 / 手记：只把原文念出来。不自动写回 ——
+            // 写回哪一层、写在第几行，那是要人来定的，猜错了比重写还糟。
+            const payload = record.payload ?? {};
+            const body =
+              payload.whole === true
+                ? String(payload.text ?? '')
+                : String(payload.text ?? payload.line ?? '');
+            return {
+              ok: true,
+              kind: String(record.kind),
+              restored: false,
+              text:
+                `原件在这里（${record.label ?? ''}）：\n\n${body.slice(0, 1200)}` +
+                (body.length > 1200 ? '\n……（后面还有，没全念）' : '') +
+                '\n\n这一类不自动写回 —— 你说放回哪儿，我再动手。',
+            };
+          },
+          presentCall: (args) => ({ card: 'generic', title: '从回收站拿回来', kind: 'other', rawInput: args }),
+        }),
+      'fish: trash_restore tool',
     );
 
     scope.effect(

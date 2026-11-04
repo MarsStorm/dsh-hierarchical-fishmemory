@@ -2424,6 +2424,8 @@ window.__ModuleLoader__.load({
       if (facts.days > 0) chips.push(`认识 ${facts.days} 天`);
       if (facts.nickname) chips.push(`他管我叫「${facts.nickname}」`);
       if (d.degraded) chips.push('档案只读');
+      // 回收站里有东西就提一句 —— 删错了至少知道去哪儿找
+      if (d.trash > 0) chips.push(`回收站 ${d.trash} 条`);
 
       const view = (key, ...children) =>
         h('div', { style: { display: tab === key ? 'block' : 'none' } }, children);
@@ -2446,6 +2448,33 @@ window.__ModuleLoader__.load({
             { style: { marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 } },
             chips.map((text, i) => h(Chip, { key: i }, text)),
           ),
+
+          // ── 顶上那一行：情感日记最后写了什么 ──
+          //
+          // 这是四本账里唯一"每轮注入为零"的一份（三十多 KB，只在回想时出现），
+          // 而它恰恰最说明最近怎么样。体检页只报条数体积 —— 那条信息
+          // 在界面上等于不存在。所以抽一段铺在最上面，看完就看完了。
+          d.feelings
+            ? h(
+                'div',
+                {
+                  style: {
+                    marginTop: 12,
+                    padding: '10px 12px',
+                    borderLeft: `2px solid ${C.border1}`,
+                    fontSize: 12,
+                    lineHeight: 1.7,
+                    color: C.text2,
+                  },
+                },
+                h(
+                  'div',
+                  { style: { marginBottom: 4, color: C.text1, fontWeight: 600, opacity: d.feelings.heading || d.feelings.sub ? 1 : 0.7 } },
+                  [d.feelings.heading, d.feelings.sub].filter(Boolean).join(' · ') || '最近写的',
+                ),
+                h('div', null, d.feelings.body || '（这一段是空的）'),
+              )
+            : null,
 
           // ── 出错横幅 ──
           //

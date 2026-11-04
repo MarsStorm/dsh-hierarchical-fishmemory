@@ -310,6 +310,20 @@ export function normalizeDiaryEntry(raw) {
     // 最后一次被追加的时间。created_at 不动，但排序看它 ——
     // 否则刚续写的那条会按原始时间沉到下面去。
     ...(Number.isFinite(raw.updated_at) ? { updated_at: Number(raw.updated_at) } : {}),
+    // ── 被想起来的次数（2026-11-04 加）──
+    //
+    // 这是**唯一一个由"读"产生的写**：条目被召回一次，计数加一。
+    // 早先只在内存里记冷却（`lastShownTurn`），一重启就忘光 ——
+    // 于是「哪条真的被反复想起来过」这件事，档案里一个字都没有，
+    // 衰减只能对所有条目一视同仁地乘 0.9。
+    //
+    // 有它之后：**被翻出来过的，就记得牢一点**（见 decayArchive）。
+    // 老条目没有这两个字段，Number.isFinite(undefined) 是 false，
+    // 读出来就是"从没被想起来过" —— 不需要 schema 迁移。
+    ...(Number.isFinite(raw.recall_count) && raw.recall_count > 0
+      ? { recall_count: Math.floor(Number(raw.recall_count)) }
+      : {}),
+    ...(Number.isFinite(raw.last_recalled_at) ? { last_recalled_at: Number(raw.last_recalled_at) } : {}),
     created_at: Number(raw.created_at) || Date.now(),
     keywords: Array.isArray(raw.keywords) ? raw.keywords.filter((k) => typeof k === 'string').slice(0, 16) : [],
   };
