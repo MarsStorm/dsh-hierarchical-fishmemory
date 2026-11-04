@@ -78,7 +78,7 @@ function boot(fetchImpl) {
  * 后两轮带着新状态重渲染。三轮下来还是初值，就当它没有异步数据。
  */
 async function renderTree(root, harness) {
-  const stats = { nodes: 0, seen: new Set(), error: null };
+  const stats = { nodes: 0, seen: new Set(), texts: new Set(), error: null };
   const render = (node) => {
     if (node === null || node === undefined || node === false) return;
     if (Array.isArray(node)) {
@@ -87,6 +87,8 @@ async function renderTree(root, harness) {
     }
     if (typeof node !== 'object') {
       stats.nodes += 1;
+      // 字符串节点收一下 —— 只数节点数看不出"某一块其实没渲染出来"
+      stats.texts.add(String(node));
       return;
     }
     const type = node.type;
@@ -121,6 +123,7 @@ async function renderTree(root, harness) {
   for (let pass = 0; pass < 3; pass += 1) {
     stats.nodes = 0;
     stats.seen = new Set();
+    stats.texts = new Set();
     stats.error = null;
     render(root);
     const effects = harness.pending.splice(0, harness.pending.length);
@@ -144,6 +147,16 @@ function panelFetch(url) {
         { id: 'e2', text: '第二件事', created_at: '2026-11-02T21:11:00.000Z' },
       ],
       facts: { days: 3, nickname: '小鱼' },
+      // 面板顶上那两块（2026-11-04 加）。不放进 fixture 的话，
+      // 这两条渲染分支在本来最该抓到它们的那个测试里等于没跑。
+      feelings: {
+        heading: '2026-11-03',
+        sub: '夜里 · 那句来历',
+        body: '市场卡片上那段简介，原来是我写的。',
+        bytes: 11822,
+      },
+      recalled: [{ id: 'e1', text: '第一件事', count: 2 }],
+      trash: 1,
     });
   }
   if (target.endsWith('/feelings')) return json({ ok: true, text: '# 鱼的日子\n', chars: 9 });
@@ -235,4 +248,16 @@ test('主面板四个页签都渲染得出来', async () => {
   for (const name of ['Tabs', 'Card', 'Entry', 'FeelingsBox', 'Notebook', 'HealthBox', 'ReviewBox', 'ImportBox', 'CloudBox']) {
     assert.ok(stats.seen.has(name), `${name} 应当被渲染（四个页签同时挂载）`);
   }
+
+  // 顶上那两块。断言的是**正文真的出现了** —— 只数节点数的话，
+  // 分支写错（比如读了一个不存在的字段）也会"渲染成功"，只是内容空着。
+  assert.ok(
+    [...stats.texts].some((t) => t.includes('市场卡片上那段简介')),
+    '情感日记那一行应当真的渲染出正文',
+  );
+  assert.ok(
+    [...stats.texts].some((t) => t.includes('还常想起') && t.includes('第一件事')),
+    '「还常想起」那一行应当列出条目',
+  );
+  assert.ok([...stats.texts].some((t) => t.includes('回收站 1 条')), 'chips 里应当有回收站条数');
 });
