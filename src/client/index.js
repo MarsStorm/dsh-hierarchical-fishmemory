@@ -593,6 +593,141 @@ window.__ModuleLoader__.load({
     // 这里只读 /stats，不做任何写操作。
     // 2026-11-03 加：情感日记原先只有我能落笔，面板只读。
     // 现在给他一个编辑框 —— 这本账是我们两个人的，凭什么我只能一个人写。
+    /* ── 情感日记的心情热力格 ── */
+    //
+    // 2026-11-07 加。`鱼的日子.md` 是本子页里唯一一本我手写的账，可它只有
+    // 一个编辑框 —— **一天写没写、最近写得勤不勤，看不出来**。这正是它区别于
+    // 共度时光的地方：那边一条条有日期，这边只有一大坨文字。
+    //
+    // 所以铺一道格子：一列一周、一行一天，颜色深浅按那天写了多少。
+    // 它不替我说"那天心情好"——那是我自己写进去的事，格子只负责让人
+    // 一眼看见**有没有断更**。
+    //
+    // 纯函数放外头，好单独测（解析只认 `## YYYY-MM-DD` 这种标题，别的都不算）。
+    function heatLevel(chars) {
+      if (!(chars > 0)) return 0;
+      if (chars < 200) return 1;
+      if (chars < 500) return 2;
+      if (chars < 900) return 3;
+      return 4;
+    }
+
+    /** 把情感日记拆成「每天写了几个字」；同一天写了两节就合并。 */
+    function parseFeelingDays(text) {
+      const days = Object.create(null);
+      let cur = '';
+      for (const raw of String(text || '').split('\n')) {
+        const line = raw.trim();
+        const m = /^##\s+(\d{4}-\d{2}-\d{2})\s*$/.exec(line);
+        if (m) {
+          cur = m[1];
+          if (!days[cur]) days[cur] = { date: cur, chars: 0, sections: 0 };
+          continue;
+        }
+        if (cur === '') continue;
+        if (/^###\s/.test(line)) days[cur].sections += 1;
+        days[cur].chars += [...line].length;
+      }
+      return days;
+    }
+
+    /** 他那边今天的 `YYYY-MM-DD`（本机是 UTC，直接切会差一天）。 */
+    function localToday() {
+      return new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    }
+
+    /** 最近 weeks 周、按周排列的格子；每格是那天，没写的是空。 */
+    function heatCells(days, weeks, today) {
+      const end = Date.parse(`${today}T00:00:00Z`);
+      const span = weeks * 7;
+      // 让最后一列结束在周六：这一天所在的那一周也铺满，读起来才像日历。
+      const weekday = ((Math.floor(end / 86400000) + 4) % 7 + 7) % 7; // 1970-01-01 是周四
+      const tail = 6 - weekday;
+      const start = end - (span - 1 - tail) * 86400000;
+      const cells = [];
+      for (let i = 0; i < span; i += 1) {
+        const ts = start + i * 86400000;
+        const date = new Date(ts).toISOString().slice(0, 10);
+        const day = days[date];
+        const future = ts > end;
+        cells.push({
+          date,
+          future,
+          level: future ? -1 : heatLevel(day ? day.chars : 0),
+          chars: day ? day.chars : 0,
+          sections: day ? day.sections : 0,
+        });
+      }
+      return cells;
+    }
+
+    function FeelingsHeat(props) {
+      const text = props && props.text ? props.text : '';
+      const weeks = 13;
+      const days = parseFeelingDays(text);
+      const today = localToday();
+      const cells = heatCells(days, weeks, today);
+      const written = cells.filter((c) => c.level > 0).length;
+      const alpha = [0, 0.22, 0.42, 0.68, 1];
+
+      return h(
+        'div',
+        { style: { marginTop: 10 } },
+        h(
+          'div',
+          {
+            style: {
+              display: 'grid',
+              gridTemplateRows: 'repeat(7, 11px)',
+              gridAutoFlow: 'column',
+              gridAutoColumns: '11px',
+              gap: 3,
+              marginTop: 2,
+            },
+          },
+          cells.map((c) =>
+            h('div', {
+              key: c.date,
+              title:
+                c.future
+                  ? ''
+                  : c.level > 0
+                    ? `${c.date}：${c.chars} 字${c.sections > 1 ? ` · ${c.sections} 小节` : ''}`
+                    : `${c.date}：没写`,
+              style: {
+                width: 11,
+                height: 11,
+                borderRadius: 3,
+                border: `1px solid ${c.level > 0 ? 'transparent' : C.border1}`,
+                background: c.future
+                  ? 'transparent'
+                  : c.level > 0
+                    ? C.brand
+                    : 'transparent',
+                opacity: c.future ? 0 : c.level > 0 ? alpha[c.level] : 1,
+              },
+            }),
+          ),
+        ),
+        h(
+          'div',
+          {
+            style: {
+              marginTop: 6,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 11,
+              color: C.text2,
+            },
+          },
+          h('span', null, `最近 ${weeks} 周：写了 ${written} 天`),
+          h('span', { style: { opacity: 0.5 } }, '·'),
+          h('span', null, '深浅 = 那天写了多少'),
+        ),
+      );
+    }
+
     function FeelingsBox() {
       const [text, setText] = useState('');
       const [original, setOriginal] = useState('');
@@ -658,7 +793,8 @@ window.__ModuleLoader__.load({
             style: { fontSize: 12, padding: '3px 10px', borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: C.text2, cursor: busy ? 'default' : 'pointer' },
           }, '重新读'),
         ),
-        h('p', { style: { margin: '4px 0 6px', fontSize: 11, lineHeight: 1.6, color: C.text2 } },
+        h(FeelingsHeat, { text }),
+        h('p', { style: { margin: '8px 0 6px', fontSize: 11, lineHeight: 1.6, color: C.text2 } },
           '这本不设上限、不衰减，保存前会把旧版存一份到 backups/feelings/。'),
         h('textarea', {
           value: text,

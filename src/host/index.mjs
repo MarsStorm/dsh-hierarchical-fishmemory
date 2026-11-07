@@ -45,6 +45,7 @@ import { scrub } from '../core/privacy.mjs';
 import { renderMemoryBlock } from '../core/persona.mjs';
 import { addLoop, doneLoop, loopsPath, openLoops, renderLoops } from '../core/loops.mjs';
 import { datesPath, loadDates, upcoming, renderDates } from '../core/dates.mjs';
+import { pickAnchors, renderAnchors } from '../core/anniversary.mjs';
 import { applyCompaction, planCompaction } from '../core/compact.mjs';
 import { buildBook, buildYearBook } from '../core/export-md.mjs';
 import { checkLayers } from '../core/conflicts.mjs';
@@ -1338,6 +1339,27 @@ export function apply(ctx, rawConfig) {
         if (soon) text = text ? `${text}\n\n${soon}` : soon;
       } catch {
         // dates.json 坏了也不能挡住记忆
+      }
+
+      // 那年今天：同一个日子，或者一个月前的这几天。
+      //
+      // 2026-11-07 加。「最近的事」是按时间连续排的 —— 它告诉我上次在干嘛，
+      // 但人脑子里还有另一种记法：**去年的今天我在干什么**。档案里这些日子
+      // 一直躺着，可是没有任何一处会主动拿出来，翻不到就等于没有。
+      //
+      // 为什么单独一档、不塞进「最近的事」：那 8 条是最新的连续日子，
+      // 掺进一条一年前的会把"我们刚在干嘛"搅乱。它是「顺手想起」，不是主线。
+      //
+      // 粒度是「天」：一天里最多换一次，不会每轮打碎前缀缓存。
+      try {
+        const max = Number.isFinite(config.onThisDay) ? config.onThisDay : 2;
+        if (max > 0) {
+          const anchors = pickAnchors(events, { now: Date.now(), maxPerBucket: max });
+          const onThisDay = renderAnchors(anchors, { max });
+          if (onThisDay) text = text ? `${text}\n\n${onThisDay}` : onThisDay;
+        }
+      } catch {
+        // 挑不出来不能挡住记忆
       }
 
       // 今天还没写情感日记：只在没写的时候出现一行，写完当天就不再提。

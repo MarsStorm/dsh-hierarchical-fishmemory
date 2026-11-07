@@ -120,6 +120,15 @@ export const CONFIG_SPEC = [
     label: '「最近的事」最多列几条（不靠相似度，永远在场）',
   },
   {
+    key: 'onThisDay',
+    type: 'number',
+    default: 2,
+    min: 0,
+    max: 4,
+    step: 1,
+    label: '「那年今天」最多几条（同一个日子 / 一个月前的这几天；0 = 关掉）',
+  },
+  {
     key: 'maxShowPerTurn',
     type: 'number',
     default: 4,
