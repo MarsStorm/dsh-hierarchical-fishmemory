@@ -262,7 +262,7 @@ test('主面板四个页签都渲染得出来', async () => {
 
   const stats = await renderTree(harness.react.createElement(main.component, {}), harness);
   assert.ok(stats.nodes > 60, `面板渲染出的节点数应当可观，实际 ${stats.nodes}`);
-  for (const name of ['Tabs', 'Card', 'Entry', 'FeelingsBox', 'FeelingsHeat', 'Notebook', 'HealthBox', 'ReviewBox', 'ImportBox', 'CloudBox']) {
+  for (const name of ['Tabs', 'Card', 'Entry', 'FeelingsBox', 'FeelingsHeat', 'FeelingsDay', 'Notebook', 'HealthBox', 'ReviewBox', 'ImportBox', 'CloudBox']) {
     assert.ok(stats.seen.has(name), `${name} 应当被渲染（四个页签同时挂载）`);
   }
 
@@ -282,5 +282,11 @@ test('主面板四个页签都渲染得出来', async () => {
   assert.ok(
     [...stats.texts].some((t) => t.includes('最近 13 周') && !t.includes('写了 0 天')),
     '心情热力格应当数出至少一天写过',
+  );
+  // 按天读（2026-11-08 加）。默认展开最新一天，所以正文要真的在树里 ——
+  // 只数节点的话，折叠逻辑写反（默认全折）也会"渲染成功"。
+  assert.ok(
+    [...stats.texts].some((t) => t.includes('有点舍不得它')),
+    '最新一天应当默认展开、正文渲染出来',
   );
 });

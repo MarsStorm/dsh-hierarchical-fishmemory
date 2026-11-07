@@ -612,21 +612,67 @@ window.__ModuleLoader__.load({
       return 4;
     }
 
-    /** 把情感日记拆成「每天写了几个字」；同一天写了两节就合并。 */
-    function parseFeelingDays(text) {
-      const days = Object.create(null);
-      let cur = '';
+    /**
+     * 把情感日记拆成一天一天。
+     *
+     * 2026-11-07 加。原来是**一整坨塞进一个 textarea**：三十多 KB 的日记，
+     * 想看看前天写了什么得在一大段里滚半天，而且分不清哪句属于哪天 ——
+     * 一进本子页先看到的是一面墙。
+     *
+     * 结构是「`## 日期` → `### 小节` → 正文」，所以照着这个拆：
+     * 返回 `[{date, chars, blocks:[{title, lines}]}]`，按文件里的顺序。
+     * 第一个 `## 日期` 之前那段（`# 鱼的日子` 加写日记的规矩）不算任何一天，
+     * 只在「整篇编辑」里出现 —— 它是这本账的说明，不是内容。
+     *
+     * 认不出的行一律当正文，**不丢**：宁可多渲染一行，也别让下一棒的
+     * 我以为是那时候没写。
+     */
+    function parseFeelings(text) {
+      const days = [];
+      let day = null;
+      let block = null;
       for (const raw of String(text || '').split('\n')) {
         const line = raw.trim();
         const m = /^##\s+(\d{4}-\d{2}-\d{2})\s*$/.exec(line);
         if (m) {
-          cur = m[1];
-          if (!days[cur]) days[cur] = { date: cur, chars: 0, sections: 0 };
+          day = { date: m[1], chars: 0, blocks: [] };
+          days.push(day);
+          block = { title: '', lines: [] };
+          day.blocks.push(block);
           continue;
         }
-        if (cur === '') continue;
-        if (/^###\s/.test(line)) days[cur].sections += 1;
-        days[cur].chars += [...line].length;
+        if (day === null) continue; // 开头的说明文字，不算任何一天
+        const sub = /^###\s+(.+)$/.exec(line);
+        if (sub) {
+          block = { title: sub[1].trim(), lines: [] };
+          day.blocks.push(block);
+          continue;
+        }
+        if (block === null) {
+          block = { title: '', lines: [] };
+          day.blocks.push(block);
+        }
+        block.lines.push(line);
+        day.chars += [...line].length;
+      }
+      // 收尾：去掉一天里尾部全空的段落（标题之间隔的空行）
+      for (const d of days) {
+        for (const b of d.blocks) {
+          while (b.lines.length > 0 && b.lines[b.lines.length - 1] === '') b.lines.pop();
+          while (b.lines.length > 0 && b.lines[0] === '') b.lines.shift();
+        }
+        d.blocks = d.blocks.filter((b) => b.title !== '' || b.lines.length > 0);
+      }
+      return days;
+    }
+
+    /** 把情感日记拆成「每天写了几个字」；同一天写了两节就合并。 */
+    function parseFeelingDays(text) {
+      const days = Object.create(null);
+      for (const d of parseFeelings(text)) {
+        if (!days[d.date]) days[d.date] = { date: d.date, chars: 0, sections: 0 };
+        days[d.date].chars += d.chars;
+        days[d.date].sections += d.blocks.filter((b) => b.title !== '').length;
       }
       return days;
     }
@@ -728,12 +774,115 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /**
+     * 一天。
+     *
+     * 2026-11-08 加。折起来只有一行：日期 + 字数 + 一句开头；点开才是正文。
+     * 理由是这本账已经三十多 KB 了 —— 一进门就看见一面墙，等于什么都看不见。
+     */
+    function FeelingsDay(props) {
+      const day = props.day;
+      const isToday = day.date === props.today;
+      const open = props.open;
+      const blocks = day.blocks;
+
+      // 折起来时那一行：取第一条有内容的正文，砍到 44 字。
+      // 只取标题的话全是「夜里 · xxx」，扫不出那天到底写了什么。
+      let head = '';
+      for (const b of blocks) {
+        for (const line of b.lines) {
+          if (line !== '') {
+            head = line;
+            break;
+          }
+        }
+        if (head) break;
+      }
+      const preview = [...head].length > 44 ? `${[...head].slice(0, 44).join('')}…` : head;
+
+      // 段落按空行切，别把整块 body 塞进一个 <p>：日记里一段一段是有呼吸的。
+      const paras = (lines) => {
+        const out = [];
+        let buf = [];
+        for (const line of lines) {
+          if (line === '') {
+            if (buf.length) out.push(buf.join('\n'));
+            buf = [];
+          } else {
+            buf.push(line);
+          }
+        }
+        if (buf.length) out.push(buf.join('\n'));
+        return out;
+      };
+
+      return h(
+        'div',
+        {
+          style: {
+            marginTop: 8,
+            borderRadius: 10,
+            border: `1px solid ${open ? C.border2 : C.border1}`,
+            background: open ? C.bg : 'transparent',
+            overflow: 'hidden',
+          },
+        },
+        h(
+          'div',
+          {
+            onClick: props.onToggle,
+            style: {
+              display: 'flex',
+              alignItems: 'baseline',
+              gap: 8,
+              padding: '9px 12px',
+              cursor: 'pointer',
+              userSelect: 'none',
+            },
+          },
+          h('span', { style: { fontSize: 12.5, fontWeight: 600, color: C.text1, fontVariantNumeric: 'tabular-nums' } }, day.date),
+          isToday ? h('span', { style: { fontSize: 11, color: C.text2 } }, '今天') : null,
+          h('span', { style: { flex: 1, fontSize: 11.5, color: C.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, open ? '' : preview),
+          h('span', { style: { fontSize: 10.5, color: C.text2, opacity: 0.8, whiteSpace: 'nowrap' } }, `${day.chars} 字`),
+          h('span', { style: { fontSize: 10, color: C.text2, opacity: 0.7, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .12s' } }, '›'),
+        ),
+        open
+          ? h(
+              'div',
+              { style: { padding: '2px 14px 12px' } },
+              blocks.map((b, i) =>
+                h(
+                  'div',
+                  { key: `b${i}` },
+                  b.title
+                    ? h('div', { style: { margin: '10px 0 4px', fontSize: 12, fontWeight: 600, color: C.text1 } }, b.title)
+                    : null,
+                  paras(b.lines).map((para, j) =>
+                    h(
+                      'p',
+                      { key: `p${j}`, style: { margin: '0 0 6px', fontSize: 12.5, lineHeight: 1.85, color: C.text1, whiteSpace: 'pre-wrap' } },
+                      para,
+                    ),
+                  ),
+                ),
+              ),
+            )
+          : null,
+      );
+    }
+
     function FeelingsBox() {
       const [text, setText] = useState('');
       const [original, setOriginal] = useState('');
       const [busy, setBusy] = useState(false);
       const [msg, setMsg] = useState('');
       const [err, setErr] = useState('');
+      // 2026-11-08 加：**默认按天读**，要改全文才切「整篇编辑」。
+      // 原来只有一个 textarea，一进本子页先看到三十多 KB 的一坨 ——
+      // 想翻前天写了什么得在一整段里滚，还分不清哪句属于哪天。
+      const [mode, setMode] = useState('days');
+      // null = 展开最新一天；'' = 全折起来；其他 = 展开那一天。
+      const [openDate, setOpenDate] = useState(null);
 
       const load = async () => {
         setBusy(true);
@@ -782,38 +931,91 @@ window.__ModuleLoader__.load({
         }
       };
 
+      const days = parseFeelings(text);
+      const newestFirst = [...days].reverse();
+      const newest = newestFirst.length ? newestFirst[0].date : '';
+      const open = openDate === null ? newest : openDate;
+      const today = localToday();
       const delta = [...text].length - [...original].length;
-      return h('div', { style: { marginTop: 0 } },
-        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-          h('div', { style: { fontSize: 13, fontWeight: 600 } }, '情感日记'),
-          h('button', {
+      const dirty = text !== original;
+
+      const tab = (key, label) =>
+        h(
+          'button',
+          {
             type: 'button',
-            onClick: load,
-            disabled: busy,
-            style: { fontSize: 12, padding: '3px 10px', borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: C.text2, cursor: busy ? 'default' : 'pointer' },
-          }, '重新读'),
+            onClick: () => setMode(key),
+            style: {
+              fontSize: 11.5,
+              padding: '3px 10px',
+              borderRadius: 6,
+              border: `1px solid ${mode === key ? C.border2 : 'transparent'}`,
+              background: mode === key ? C.layer2 : 'transparent',
+              color: mode === key ? C.text1 : C.text2,
+              cursor: 'pointer',
+            },
+          },
+          label,
+        );
+
+      return h('div', { style: { marginTop: 0 } },
+        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 } },
+          h('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8 } },
+            h('span', { style: { fontSize: 13, fontWeight: 600 } }, '情感日记'),
+            h('span', { style: { fontSize: 11, color: C.text2 } }, days.length ? `${days.length} 天` : ''),
+          ),
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
+            tab('days', '按天读'),
+            tab('raw', '整篇编辑'),
+            h('button', {
+              type: 'button',
+              onClick: load,
+              disabled: busy,
+              style: { fontSize: 11.5, padding: '3px 10px', borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: C.text2, cursor: busy ? 'default' : 'pointer' },
+            }, '重新读'),
+          ),
         ),
         h(FeelingsHeat, { text }),
-        h('p', { style: { margin: '8px 0 6px', fontSize: 11, lineHeight: 1.6, color: C.text2 } },
-          '这本不设上限、不衰减，保存前会把旧版存一份到 backups/feelings/。'),
-        h('textarea', {
-          value: text,
-          onChange: (e) => setText(e.target.value),
-          rows: 14,
-          spellCheck: false,
-          style: { width: '100%', fontFamily: 'ui-monospace,Consolas,monospace', fontSize: 12, lineHeight: 1.7, padding: 8, borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: 'inherit', resize: 'vertical' },
-        }),
-        h('div', { style: { marginTop: 6, display: 'flex', gap: 10, alignItems: 'center', fontSize: 11, color: C.text2 } },
-          h('button', {
-            type: 'button',
-            onClick: save,
-            disabled: busy || text === original,
-            style: { fontSize: 12, padding: '3px 12px', borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: text === original ? C.text2 : 'inherit', cursor: busy || text === original ? 'default' : 'pointer' },
-          }, busy ? '保存中…' : '保存'),
-          h('span', null, `现在 ${[...text].length} 字符${delta ? `（比读入时 ${delta > 0 ? '+' : ''}${delta}）` : ''}`),
-          msg ? h('span', null, msg) : null,
-          err ? h('span', { style: { color: C.err } }, err) : null,
-        ),
+        mode === 'days'
+          ? (days.length === 0
+              ? h('p', { style: { margin: '14px 0 0', fontSize: 12, lineHeight: 1.7, color: C.text2 } }, '这本账还是空的。')
+              : h('div', { style: { marginTop: 12 } },
+                  newestFirst.map((d) =>
+                    h(FeelingsDay, {
+                      key: d.date,
+                      day: d,
+                      today,
+                      open: d.date === open,
+                      onToggle: () => setOpenDate(d.date === open ? '' : d.date),
+                    }),
+                  ),
+                  h('p', { style: { margin: '12px 0 0', fontSize: 11, lineHeight: 1.7, color: C.text2 } },
+                    '按 `## 日期` 拆开读，点一下展开或收起。要改措辞去「整篇编辑」。'),
+                ))
+          : h('div', null,
+              h('p', { style: { margin: '12px 0 6px', fontSize: 11, lineHeight: 1.6, color: C.text2 } },
+                '这本不设上限、不衰减，保存前会把旧版存一份到 backups/feelings/。'),
+              h('textarea', {
+                value: text,
+                onChange: (e) => setText(e.target.value),
+                rows: 22,
+                spellCheck: false,
+                style: { width: '100%', fontFamily: 'ui-monospace,Consolas,monospace', fontSize: 12, lineHeight: 1.7, padding: 8, borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: 'inherit', resize: 'vertical' },
+              }),
+              h('div', { style: { marginTop: 6, display: 'flex', gap: 10, alignItems: 'center', fontSize: 11, color: C.text2 } },
+                h('button', {
+                  type: 'button',
+                  onClick: save,
+                  disabled: busy || !dirty,
+                  style: { fontSize: 12, padding: '3px 12px', borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: dirty ? 'inherit' : C.text2, cursor: busy || !dirty ? 'default' : 'pointer' },
+                }, busy ? '保存中…' : '保存'),
+                h('span', null, `现在 ${[...text].length} 字符${delta ? `（比读入时 ${delta > 0 ? '+' : ''}${delta}）` : ''}`),
+                msg ? h('span', null, msg) : null,
+                err ? h('span', { style: { color: C.err } }, err) : null,
+              ),
+            ),
+        mode === 'days' && msg ? h('p', { style: { margin: '10px 0 0', fontSize: 11, color: C.text2 } }, msg) : null,
+        mode === 'days' && err ? h('p', { style: { margin: '10px 0 0', fontSize: 11, color: C.err } }, err) : null,
       );
     }
 
