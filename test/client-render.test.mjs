@@ -251,6 +251,16 @@ test('设置页能整棵树渲染出来（含云端表单）', async () => {
   assert.ok(stats.nodes > 20, `渲染出的节点数应当可观，实际 ${stats.nodes}`);
   assert.ok(stats.seen.has('WebdavGroup'), '云端备份表单应当被渲染（页签靠 display 藏，不靠卸载）');
   assert.ok(stats.seen.has('CloudBoundary'), '云端表单外面要有错误边界');
+
+  // 人设卡那两块（2026-11-08 加）。`panel(key, 孩子)` 原来只收**一个**
+  // 孩子，而 cards 面板传了三个 —— 卡列表和「工作区」被静默丢掉，于是
+  // 「保存完就看不到自己写的了，更没法编辑」。这里守的就是这件事：
+  // 列表标题和每张卡旁边的「编辑」必须真的在树里。
+  const flat = [...stats.texts];
+  assert.ok(flat.includes('cardListTitle'), '人设卡列表那块应当渲染出来');
+  assert.ok(flat.includes('editCard'), '每张卡旁边要有「编辑」按钮');
+  assert.ok(flat.includes('wsTitle'), '「工作区」那块也应当渲染出来（同一个 panel 的第三个孩子）');
+  assert.ok(flat.includes('newCard'), '写卡那块要有「新建一张」');
 });
 
 test('主面板四个页签都渲染得出来', async () => {

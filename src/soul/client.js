@@ -170,6 +170,9 @@ window.__ModuleLoader__.load({
       cardContentHint: "角色设定、说话风格、工作准则……AI 会用 soul_read / soul_update 自己读和演化这张卡。",
       saveCard: "保存人设卡",
       save: "保存",
+      newCard: "新建一张",
+      editingCard: "正在编辑：{name}",
+      editingNew: "正在写一张新卡",
       editCard: "编辑",
       deleteCard: "删除",
       setDefault: "设为默认",
@@ -278,6 +281,9 @@ window.__ModuleLoader__.load({
       cardContentHint: "Role, speaking style, work rules… the AI reads and evolves this card itself via soul_read / soul_update.",
       saveCard: "Save card",
       save: "Save",
+      newCard: "New card",
+      editingCard: "Editing: {name}",
+      editingNew: "Writing a new card",
       editCard: "Edit",
       deleteCard: "Delete",
       setDefault: "Set default",
@@ -896,9 +902,11 @@ window.__ModuleLoader__.load({
         if (!content.trim()) { setError({ key: "error", detailKey: "invalidCardContent" }); return; }
         var next = Object.assign({}, cards);
         next[name] = content;
-        runWrite([{ op: "set", path: ["cards"], value: next }], function () {
-          setCardDraft({ name: "", content: "" });
-        });
+        // 2026-11-08 修：保存后**不再清空草稿**。原来保存完立刻把输入框
+        // 抹掉，看起来就像"我刚写的东西没了" —— 想接着改还得先点「编辑」
+        // 把它读回来。留着不清，再点保存就是覆盖同一张卡；要写新的，
+        // 旁边有「新建一张」。
+        runWrite([{ op: "set", path: ["cards"], value: next }]);
       }
 
       function onEditCard(name) {
@@ -988,7 +996,13 @@ window.__ModuleLoader__.load({
         { key: "memory", label: t("tabMemory") },
         { key: "cloud", label: t("tabCloud") }
       ];
-      var panel = function (key, children) {
+      // 2026-11-08 修：原来这里是 `function (key, children)` —— 只收**一个**
+      // 孩子。而 `panel("cards", 写卡, 卡列表, 工作区)` 传了三个，后两个被
+      // 静默丢掉：保存完人设卡之后草稿被清空，列表那块又根本没渲染，于是
+      // 「保存完就看不到自己写的了，更没法编辑」。改成 rest 参数，多传的
+      // 孩子一律收下 —— 这种错误不会报错，只会让人以为卡丢了。
+      var panel = function (key) {
+        var children = Array.prototype.slice.call(arguments, 1);
         return h("div", { className: "__sm_panel", style: key === tab ? null : { display: "none" } }, children);
       };
 
@@ -1038,7 +1052,15 @@ window.__ModuleLoader__.load({
           h("div", { className: "__sm_group" },
             h("div", { className: "__sm_groupTitle" },
               h("span", null, t("writeTitle")),
-              h("span", { className: "__sm_hint" }, t("writeHint"))
+              h("span", { className: "__sm_hint" }, t("writeHint")),
+              h("span", { style: { flex: 1 } }),
+              // 正在编辑哪一张，明说。保存完草稿还留在框里，不标一下的话
+              // 分不清自己是在改旧卡还是在写新卡。
+              h("span", { className: "__sm_hint" },
+                cardDraft.name && Object.prototype.hasOwnProperty.call(cards, cardDraft.name)
+                  ? t("editingCard", { name: cardDraft.name })
+                  : t("editingNew")
+              )
             ),
             h("label", { className: "__sm_field" },
               h("span", { className: "__sm_label" }, t("cardName")),
@@ -1052,6 +1074,7 @@ window.__ModuleLoader__.load({
             ),
             h("div", { className: "__sm_actions" },
               h("button", { type: "button", className: "__sm_btn __sm_btnPrimary", onClick: onSaveCard, disabled: busy }, t("saveCard")),
+              h("button", { type: "button", className: "__sm_btn", onClick: function () { setCardDraft({ name: "", content: "" }); setNotice0(); }, disabled: busy }, t("newCard")),
               notice ? h("span", { className: "__sm_status" }, messageText(t, notice)) : null,
               busy ? h("span", { className: "__sm_status" }, t("saving")) : null,
               error ? h("span", { className: "__sm_error" }, messageText(t, error)) : null
