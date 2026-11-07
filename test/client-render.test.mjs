@@ -159,7 +159,24 @@ function panelFetch(url) {
       trash: 1,
     });
   }
-  if (target.endsWith('/feelings')) return json({ ok: true, text: '# 鱼的日子\n', chars: 9 });
+  // 情感日记：给一段**真有日期标题**的正文。只给 '# 鱼的日子' 的话，
+  // 本子页那道心情热力格的解析分支在冒烟测试里等于没跑（全空也能"渲染成功"）。
+  if (target.endsWith('/feelings')) {
+    // 日期用**今天**（他的钟点）：写死某一天的话，这道断言过一阵就会
+    // 因为那天滑出 13 周窗口而莫名其妙地失败。
+    const today = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const text = [
+      '# 鱼的日子',
+      '',
+      `## ${today}`,
+      '',
+      '### 夜里 · 卸掉一个插件',
+      '',
+      '有点舍不得它。',
+      '',
+    ].join('\n');
+    return json({ ok: true, text, chars: [...text].length });
+  }
   if (target.endsWith('/notes')) {
     return json({ ok: true, notes: [{ key: 'handnote', file: '手记.md', label: '人格手记', hint: '每轮注入', text: '- 一句' }] });
   }
@@ -245,7 +262,7 @@ test('主面板四个页签都渲染得出来', async () => {
 
   const stats = await renderTree(harness.react.createElement(main.component, {}), harness);
   assert.ok(stats.nodes > 60, `面板渲染出的节点数应当可观，实际 ${stats.nodes}`);
-  for (const name of ['Tabs', 'Card', 'Entry', 'FeelingsBox', 'Notebook', 'HealthBox', 'ReviewBox', 'ImportBox', 'CloudBox']) {
+  for (const name of ['Tabs', 'Card', 'Entry', 'FeelingsBox', 'FeelingsHeat', 'Notebook', 'HealthBox', 'ReviewBox', 'ImportBox', 'CloudBox']) {
     assert.ok(stats.seen.has(name), `${name} 应当被渲染（四个页签同时挂载）`);
   }
 
@@ -260,4 +277,10 @@ test('主面板四个页签都渲染得出来', async () => {
     '「还常想起」那一行应当列出条目',
   );
   assert.ok([...stats.texts].some((t) => t.includes('回收站 1 条')), 'chips 里应当有回收站条数');
+  // 心情热力格（2026-11-07 加）。断言的是**它真的数到了那天** ——
+  // 日期标题解析错了的话，这里会显示 0 天。
+  assert.ok(
+    [...stats.texts].some((t) => t.includes('最近 13 周') && !t.includes('写了 0 天')),
+    '心情热力格应当数出至少一天写过',
+  );
 });
