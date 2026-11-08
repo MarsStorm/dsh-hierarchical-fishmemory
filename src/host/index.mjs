@@ -4434,6 +4434,7 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
         maxInject: config.stickyMaxInject,
       }),
     });
+    log(`小纸条已注册：${path.join(archiveDirectory, STICKY_FILE)}`);
   } catch (err) {
     warn(`小纸条注册失败（不影响聊天）：${err instanceof Error ? err.message : String(err)}`);
   }
