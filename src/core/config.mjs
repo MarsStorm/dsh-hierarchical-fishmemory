@@ -129,6 +129,15 @@ export const CONFIG_SPEC = [
     label: '「那年今天」最多几条（同一个日子 / 一个月前的这几天；0 = 关掉）',
   },
   {
+    key: 'flashback',
+    type: 'number',
+    default: 1,
+    min: 0,
+    max: 1,
+    step: 1,
+    label: '「忽然想起那一天」每天从情感日记里随机翻一天（0 = 关掉）',
+  },
+  {
     key: 'maxShowPerTurn',
     type: 'number',
     default: 4,

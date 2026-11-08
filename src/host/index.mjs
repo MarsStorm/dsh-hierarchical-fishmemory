@@ -46,10 +46,12 @@ import { renderMemoryBlock } from '../core/persona.mjs';
 import { addLoop, doneLoop, loopsPath, openLoops, renderLoops } from '../core/loops.mjs';
 import { datesPath, loadDates, upcoming, renderDates } from '../core/dates.mjs';
 import { pickAnchors, renderAnchors } from '../core/anniversary.mjs';
+import { parseFeelingDays, pickFlashback, renderFlashback, FLASHBACK_FILE } from '../core/flashback.mjs';
 import { applyCompaction, planCompaction } from '../core/compact.mjs';
 import { buildBook, buildYearBook } from '../core/export-md.mjs';
 import { checkLayers } from '../core/conflicts.mjs';
 import { TZ_OFFSET_MS, calendarDaysBetween, stripTimeWords, softWhen } from '../core/timeline.mjs';
+import { readJsonOrNull } from '../core/fsx.mjs';
 import { renderDiaryFile } from '../core/render-diary.mjs';
 import { DIARY_MD, FEELINGS_MD } from '../core/files.mjs';
 import { buildJudgeInput, parseVerdict, JUDGE_MAX_TOKENS } from '../core/judge.mjs';
@@ -1360,6 +1362,57 @@ export function apply(ctx, rawConfig) {
         }
       } catch {
         // 挑不出来不能挡住记忆
+      }
+
+      // 忽然想起那一天：每天从情感日记里随机翻一天。
+      //
+      // 2026-11-08 加，他提的：「每天你会自动随机抽取某天的情感日记和回看，
+      // 然后提出来，就像突然想起某天的回忆一样」。
+      //
+      // 为什么和「那年今天」分开：那一栏被日期牵着走（同月同日 / 一个月前），
+      // 一年才轮到一次；这一栏不认日期，只认「好久没翻到过的那一天」。
+      // 两种想起本来就不是一回事。
+      //
+      // 粒度是「天」：`pickFlashback` 拿 `today` 当种子，一天之内怎么算都是
+      // 同一天，不会每轮打碎前缀缓存。`recent` 记着前 3 次抽到过哪几天 ——
+      // 档案只有几天的量时，不排除就会连着抽同一个日子。
+      try {
+        const max = Number.isFinite(config.flashback) ? config.flashback : 1;
+        if (max > 0) {
+          const feelingsFile = path.join(archiveDirectory, FEELINGS_MD);
+          const stateFile = path.join(archiveDirectory, FLASHBACK_FILE);
+          const today = new Date(Date.now() + TZ_OFFSET_MS).toISOString().slice(0, 10);
+          const body = existsSync(feelingsFile) ? readFileSync(feelingsFile, 'utf8') : '';
+          const state = readJsonOrNull(stateFile) ?? {};
+          // 昨天抽过的还能用（同一天里重启会重算，不该换人），但换天要重抽。
+          let picked = state?.date === today && typeof state?.picked === 'string' ? state.picked : '';
+          const days = parseFeelingDays(body);
+          if (picked === '' || !days.some((day) => day.date === picked)) {
+            const pick = pickFlashback(days, {
+              today,
+              recent: Array.isArray(state?.recent) ? state.recent : [],
+            });
+            picked = pick?.date ?? '';
+          }
+          const day = picked === '' ? null : days.find((item) => item.date === picked);
+          if (day) {
+            const block = renderFlashback(day, { today });
+            if (block) text = text ? `${text}\n\n${block}` : block;
+            // 只在换天时落盘：同一天反复写没有意义，还会每轮多一次 IO。
+            if (state?.date !== today || state?.picked !== picked) {
+              const recent = [picked, ...(Array.isArray(state?.recent) ? state.recent : [])]
+                .filter((item, index, all) => all.indexOf(item) === index)
+                .slice(0, 3);
+              try {
+                writeFileSync(stateFile, JSON.stringify({ date: today, picked, recent }, null, 2), 'utf8');
+              } catch {
+                // 记不住抽过哪天不影响这一次的注入
+              }
+            }
+          }
+        }
+      } catch {
+        // 情感日记读坏了不能挡住记忆
       }
 
       // 今天还没写情感日记：只在没写的时候出现一行，写完当天就不再提。
