@@ -15,6 +15,7 @@ import { FEELINGS_MD } from "./files.mjs";
 import { HANDNOTE_FILE, MAX_LINE_CHARS, parseHandNote } from "./handnote.mjs";
 import { listDiaryPaths, readJsonOrNull, readTextOrNull } from "./fsx.mjs";
 import { SHALLOW_FILE } from "./shallow.mjs";
+import { STICKY_FILE } from "./sticky.mjs";
 import { findDuplicates, findValueConflicts } from "./conflicts.mjs";
 import { estimateTokens } from "./tokenize.mjs";
 
@@ -326,6 +327,7 @@ export function collectLayerReport(options = {}) {
     }
   }
   push("人格手记", "handnote", readText(join(diaryDir, HANDNOTE_FILE)));
+  push("小纸条", "sticky", readText(join(diaryDir, STICKY_FILE)));
   push("情感日记", "feelings", readText(join(diaryDir, FEELINGS_MD)));
   try {
     const store = JSON.parse(String(readText(join(diaryDir, SHALLOW_FILE)) ?? "{}") || "{}");

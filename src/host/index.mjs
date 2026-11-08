@@ -69,6 +69,13 @@ import {
 } from '../core/consolidate.mjs';
 import { resolveConfig, buildSchema, CONFIG_SPEC } from '../core/config.mjs';
 import { registerShallow, SHALLOW_FILE } from '../core/shallow.mjs';
+import {
+  STICKY_FILE,
+  STICKY_ARCHIVE_FILE,
+  patchDid,
+  recordTurn,
+  registerSticky,
+} from '../core/sticky.mjs';
 import { summarizeBackup, writeBackupFile, backupFileName, buildRegisteredBackup, restoreViaRegistered } from '../core/backup.mjs';
 import { collectLayerReport, collectReview, collectStatsFromDisk } from '../core/stats.mjs';
 import {
@@ -1555,6 +1562,9 @@ export function apply(ctx, rawConfig) {
         if (text !== '') {
           s.transcript.push({ role: 'assistant', text });
           if (s.transcript.length > 40) s.transcript.splice(0, s.transcript.length - 40);
+          // 回复到了 —— 如果这一轮的纸条已经先写了（turn-stopping 更早），
+          // 回头把「我这轮」补上。
+          patchStickyDid(s);
         }
       }
     } catch (err) {
@@ -1785,6 +1795,79 @@ export function apply(ctx, rawConfig) {
       });
   }
 
+  /* ── 小纸条：他说的原话，一轮一行 ── */
+
+  const stickyFile = () => path.join(archiveDirectory, STICKY_FILE);
+  const stickyArchive = () => path.join(archiveDirectory, STICKY_ARCHIVE_FILE);
+
+  /**
+   * 这一轮我干了什么（一句话，给纸条当注解）。
+   *
+   * 必须以最后一条"他说的"为界往前找 —— `turn-stopping` 早于回复落盘时
+   * 拿到的是**上一轮**的回复，那注解就是错的。
+   *
+   * @param {any} s
+   * @returns {string}
+   */
+  function stickyWorkNote(s) {
+    const cut = (() => {
+      for (let i = s.transcript.length - 1; i >= 0; i -= 1) {
+        if (s.transcript[i]?.role === 'user') return i;
+      }
+      return -1;
+    })();
+    return s.transcript
+      .slice(cut + 1)
+      .filter((m) => m?.role === 'assistant')
+      .map((m) => String(m.text ?? ''))
+      .join(' ')
+      .trim();
+  }
+
+  /**
+   * 记一行小纸条。**同步**、毫秒级，不发模型请求。
+   *
+   * 为什么同步：`agent/turn-stopping` 是 serial 事件、会被 await，
+   * 这里绝不能有 await。文件才几百行，读改写一次是微秒级的事。
+   *
+   * @param {any} s
+   */
+  function noteSticky(s) {
+    if (config.stickyEnabled === false) return;
+    const said = String(s.lastUserText ?? '').trim();
+    try {
+      const r = recordTurn({
+        file: stickyFile(),
+        archiveFile: stickyArchive(),
+        said,
+        did: stickyWorkNote(s),
+        enabled: true,
+      });
+      if (r.written) log(`小纸条记了一条：「${said.slice(0, 16)}」`);
+    } catch (err) {
+      warn(`小纸条写失败（不影响别的）：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * 回复落盘之后回头补「我这轮」字段。
+   *
+   * `turn-stopping` 常常比回复早到，那一刻没有注解可写；
+   * 等 assistant 消息真到了，再补上去 —— 条目不会只剩半句话。
+   *
+   * @param {any} s
+   */
+  function patchStickyDid(s) {
+    if (config.stickyEnabled === false) return;
+    try {
+      const did = stickyWorkNote(s);
+      if (did === '') return;
+      patchDid(stickyFile(), did, String(s.lastUserText ?? '').trim());
+    } catch (err) {
+      warn(`小纸条补注失败（不影响别的）：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   ctx.on('agent/turn-stopping', ({ agent }) => {
     // ⚠️ 这个事件是 serial，会被 await。这里必须**同步、极快**地返回。
     // 任何模型调用都丢给 drain()，绝不在这里 await。
@@ -1809,6 +1892,12 @@ export function apply(ctx, rawConfig) {
         log('用户说了别记，跳过');
         return;
       }
+
+      // ── 小纸条：这一轮先记下他说的原话 ──
+      //
+      // 放在判断之前、且**同步**做：判断可能跳过这一轮（共度时光里
+      // 没有它），但原话本身不该跟着被跳过 —— 那正是小纸条存在的理由。
+      noteSticky(s);
 
       // ── 旧的「关键词闸门」拆了，换成一次极短的模型判断 ──
       //
@@ -2609,6 +2698,12 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
       label: '人格手记',
       hint: '每轮全量注入 · 无条数上限 · 单行别超 240 字',
     },
+    {
+      key: 'sticky',
+      file: STICKY_FILE,
+      label: '小纸条',
+      hint: '他说的原话 · 一轮一行 · ★ 是钉住的（永不过期）',
+    },
   ];
 
   /** 读这两个本子。文件不在就当空的 —— 那是"还没写"，不是错误。 */
@@ -2951,6 +3046,8 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
                 if (idx > 0) file = path.join(memoryRoot, rest.slice(0, idx), 'topics', `${rest.slice(idx + 1)}.md`);
               } else if (target === 'handnote') {
                 file = path.join(archiveDirectory, HANDNOTE_FILE);
+              } else if (target === 'sticky') {
+                file = path.join(archiveDirectory, STICKY_FILE);
               } else if (target === 'feelings') {
                 file = path.join(archiveDirectory, FEELINGS_MD);
               }
@@ -2999,6 +3096,8 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
                 if (idx > 0) file = path.join(memoryRoot, rest.slice(0, idx), 'topics', `${rest.slice(idx + 1)}.md`);
               } else if (target === 'handnote') {
                 file = path.join(archiveDirectory, HANDNOTE_FILE);
+              } else if (target === 'sticky') {
+                file = path.join(archiveDirectory, STICKY_FILE);
               } else if (target === 'feelings') {
                 file = path.join(archiveDirectory, FEELINGS_MD);
               }
@@ -4322,6 +4421,21 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
     registerShallow(ctx, { file: path.join(archiveDirectory, SHALLOW_FILE), log, promote: promoteShallow });
   } catch (err) {
     warn(`浅层记忆注册失败（不影响聊天）：${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  try {
+    registerSticky(ctx, {
+      file: path.join(archiveDirectory, STICKY_FILE),
+      archiveFile: path.join(archiveDirectory, STICKY_ARCHIVE_FILE),
+      log,
+      config: () => ({
+        enabled: config.stickyEnabled !== false,
+        ttlDays: config.stickyTtlDays,
+        maxInject: config.stickyMaxInject,
+      }),
+    });
+  } catch (err) {
+    warn(`小纸条注册失败（不影响聊天）：${err instanceof Error ? err.message : String(err)}`);
   }
 
   log(`已加载，档案目录：${archiveDirectory}`);

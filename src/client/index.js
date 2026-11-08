@@ -1573,7 +1573,7 @@ window.__ModuleLoader__.load({
           view(
             'books',
             h(Card, null, h(FeelingsBox)),
-            h(Card, null, h(Notebook, { only: ['handnote'] })),
+            h(Card, null, h(Notebook, { only: ['handnote', 'sticky'] })),
           ),
 
           // ── 体检：数账 + 回顾 ──

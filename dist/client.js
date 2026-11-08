@@ -270,6 +270,12 @@ window.__ModuleLoader__.load({
       onThisDayHint: "同月同日、或一个月前的那几天，最多给几条。",
       fieldFlashback: "「忽然想起那一天」",
       flashbackHint: "每天从情感日记里随机翻一天，像突然想起一段回忆那样提出来。",
+      fieldStickyEnabled: "「小纸条」记他说的原话",
+      stickyEnabledHint: "每轮把他说的那句话原样记一行，每轮都注入 —— 语气和用词不会被日记压没。",
+      fieldStickyTtlDays: "「小纸条」保留天数",
+      stickyTtlDaysHint: "超过这个天数的纸条不再注入（★ 钉住的不受这个限制）。",
+      fieldStickyMaxInject: "「小纸条」每轮最多注入几条",
+      stickyMaxInjectHint: "从新到旧给，最多这么多条；再多就把最旧的先放下。",
       recallUnavailable: "主插件配置命名空间不可用（服务端没注册 dsh-hierarchical-fishmemory？）"
     };
     var en = {
@@ -388,6 +394,12 @@ window.__ModuleLoader__.load({
       onThisDayHint: "Same month and day, or the few days a month ago.",
       fieldFlashback: "\"A day suddenly remembered\"",
       flashbackHint: "Every day, pick one day from the feelings diary and mention it like an old memory surfacing.",
+      fieldStickyEnabled: "Keep his own words (\"sticky notes\")",
+      stickyEnabledHint: "Every turn, record one line of what he actually said, and inject it back — tone and wording survive what the diary compresses.",
+      fieldStickyTtlDays: "Sticky note retention (days)",
+      stickyTtlDaysHint: "Older notes stop being injected past this age (pinned ★ notes are exempt).",
+      fieldStickyMaxInject: "Sticky notes injected per turn",
+      stickyMaxInjectHint: "Newest first, at most this many; older ones wait their turn.",
       recallUnavailable: "Main plugin config namespace unavailable (no dsh-hierarchical-fishmemory namespace registered?)"
     };
 
@@ -451,7 +463,10 @@ window.__ModuleLoader__.load({
     // 并热重载插件 —— 改完不用重启。
     var RECALL_FIELDS = [
       { key: "onThisDay", type: "number", min: 0, max: 4, def: 2, label: "fieldOnThisDay", hint: "onThisDayHint" },
-      { key: "flashback", type: "checkbox", def: 1, label: "fieldFlashback", hint: "flashbackHint" }
+      { key: "flashback", type: "checkbox", def: 1, label: "fieldFlashback", hint: "flashbackHint" },
+      { key: "stickyEnabled", type: "checkbox", def: 1, label: "fieldStickyEnabled", hint: "stickyEnabledHint" },
+      { key: "stickyTtlDays", type: "number", min: 1, max: 365, def: 30, label: "fieldStickyTtlDays", hint: "stickyTtlDaysHint" },
+      { key: "stickyMaxInject", type: "number", min: 1, max: 20, def: 8, label: "fieldStickyMaxInject", hint: "stickyMaxInjectHint" }
     ];
 
     function RecallConfig(props) {
@@ -3003,7 +3018,7 @@ window.__ModuleLoader__.load({
           view(
             'books',
             h(Card, null, h(FeelingsBox)),
-            h(Card, null, h(Notebook, { only: ['handnote'] })),
+            h(Card, null, h(Notebook, { only: ['handnote', 'sticky'] })),
           ),
 
           // ── 体检：数账 + 回顾 ──

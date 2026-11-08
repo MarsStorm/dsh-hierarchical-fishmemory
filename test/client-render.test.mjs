@@ -270,6 +270,10 @@ test('设置页能整棵树渲染出来（含云端表单）', async () => {
   assert.ok(flat.includes('recallTitle'), '长期记忆页要有「回忆开关」那块');
   assert.ok(flat.includes('fieldOnThisDay'), '要有「那年今天」那条');
   assert.ok(flat.includes('fieldFlashback'), '要有「忽然想起那一天」那条');
+  // 1.10.0 加的三项小纸条配置（同一块，同一个 scope）
+  assert.ok(flat.includes('fieldStickyEnabled'), '要有「小纸条」总开关');
+  assert.ok(flat.includes('fieldStickyTtlDays'), '要有小纸条保留天数');
+  assert.ok(flat.includes('fieldStickyMaxInject'), '要有小纸条每轮注入条数');
 });
 
 test('主面板四个页签都渲染得出来', async () => {
