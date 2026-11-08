@@ -259,7 +259,14 @@ window.__ModuleLoader__.load({
       cloudLoadFail: "读不到云端设置：{detail}",
       cloudSaveFail: "保存失败：{detail}",
       cloudPasswordSet: "已保存密码",
-      cloudPasswordUnset: "还没设密码"
+      cloudPasswordUnset: "还没设密码",
+      recallTitle: "回忆开关",
+      recallIntro: "这两项决定「突然想起」类注入的强度；改完即时生效，不用重启。",
+      fieldOnThisDay: "「那年今天」最多几条（0 = 关掉）",
+      onThisDayHint: "同月同日、或一个月前的那几天，最多给几条。",
+      fieldFlashback: "「忽然想起那一天」",
+      flashbackHint: "每天从情感日记里随机翻一天，像突然想起一段回忆那样提出来。",
+      recallUnavailable: "主插件配置命名空间不可用（服务端没注册 dsh-hierarchical-fishmemory？）"
     };
     var en = {
       settingsNav: "Memories That Belong to Us",
@@ -370,7 +377,14 @@ window.__ModuleLoader__.load({
       cloudLoadFail: "Could not read cloud settings: {detail}",
       cloudSaveFail: "Save failed: {detail}",
       cloudPasswordSet: "password saved",
-      cloudPasswordUnset: "no password yet"
+      cloudPasswordUnset: "no password yet",
+      recallTitle: "Recall switches",
+      recallIntro: "These control how many \"suddenly remembered\" lines get injected. Takes effect immediately — no restart.",
+      fieldOnThisDay: "\"On this day\" — how many lines at most (0 = off)",
+      onThisDayHint: "Same month and day, or the few days a month ago.",
+      fieldFlashback: "\"A day suddenly remembered\"",
+      flashbackHint: "Every day, pick one day from the feelings diary and mention it like an old memory surfacing.",
+      recallUnavailable: "Main plugin config namespace unavailable (no dsh-hierarchical-fishmemory namespace registered?)"
     };
 
     var MEMORY_FIELDS = [
@@ -416,6 +430,129 @@ window.__ModuleLoader__.load({
         }
         return this.props.children;
       }
+    }
+
+    // ── 回忆开关（主插件配置命名空间） ───────────────────────────────────
+    //
+    // 为什么单独画一块：「那年今天」「忽然想起那一天」是**主插件**的 config
+    // 字段（entry id = dsh-hierarchical-fishmemory），不是 soul-md 命名空间里
+    // 的 memory 字段 —— 两者是两个 settings 文档，写错一个界面上就会
+    // "保存了但没生效"。
+    //
+    // 为什么不用宿主自动生成的表单：宿主**没有**通用的 schema 表单渲染器
+    // （`plugins.row.config` 槽全 runtime 没有内置渲染者），官方插件各带一个
+    // companion 包。所以这里手写。
+    //
+    // 写回走 `commitSettingsOps` → 宿主把改动写进 profile 的 cordis.patch.yml
+    // 并热重载插件 —— 改完不用重启。
+    var RECALL_FIELDS = [
+      { key: "onThisDay", type: "number", min: 0, max: 4, def: 2, label: "fieldOnThisDay", hint: "onThisDayHint" },
+      { key: "flashback", type: "checkbox", def: 1, label: "fieldFlashback", hint: "flashbackHint" }
+    ];
+
+    function RecallConfig(props) {
+      var t = props.t;
+      var scope = props.scope;
+      var [snapshot, setSnapshot] = react.useState(function () {
+        return scope && typeof scope.getSnapshot === "function" ? scope.getSnapshot() : { status: "unavailable" };
+      });
+      var [draft, setDraft] = react.useState({});
+      var [busy, setBusy] = react.useState(false);
+      var [notice, setNotice] = react.useState(null);
+      var [error, setError] = react.useState(null);
+      var pending = react.useRef(false);
+
+      react.useEffect(function () {
+        var alive = true;
+        var sync = function () { if (alive) setSnapshot(scope.getSnapshot()); };
+        var un = scope && typeof scope.subscribe === "function" ? scope.subscribe(sync) : null;
+        return function () { alive = false; if (un) un(); };
+      }, [scope]);
+
+      if (!scope || snapshot.status === "unavailable") {
+        return h("p", { className: "__sm_unavailable" }, t("recallUnavailable"));
+      }
+      if (snapshot.status !== "ready" || snapshot.value === void 0) {
+        return h("p", { className: "__sm_status" }, t("loading"));
+      }
+
+      var value = snapshot.value && typeof snapshot.value === "object" ? snapshot.value : {};
+
+      function fieldValue(f) {
+        if (Object.prototype.hasOwnProperty.call(draft, f.key)) return draft[f.key];
+        var raw = value[f.key];
+        if (f.type === "checkbox") return raw === void 0 ? Boolean(f.def) : Boolean(raw);
+        var n = Number(raw);
+        return Number.isFinite(n) ? n : f.def;
+      }
+
+      function setField(f, v) {
+        setDraft(function (prev) { var next = Object.assign({}, prev); next[f.key] = v; return next; });
+        setNotice(null);
+        setError(null);
+      }
+
+      function onSave() {
+        if (pending.current) return;
+        var ops = [];
+        RECALL_FIELDS.forEach(function (f) {
+          var cur = fieldValue(f);
+          var base = value[f.key];
+          var next = f.type === "checkbox" ? (cur ? 1 : 0) : Number(cur);
+          var baseNum = Number(base);
+          if (f.type === "checkbox") {
+            var same = Number.isFinite(baseNum) ? baseNum === next : Boolean(f.def) === Boolean(next);
+            if (!same) ops.push({ op: "set", path: [f.key], value: next });
+          } else if (!Number.isFinite(baseNum) || baseNum !== next) {
+            ops.push({ op: "set", path: [f.key], value: next });
+          }
+        });
+        if (ops.length === 0) { setNotice({ key: "saved" }); return; }
+        pending.current = true;
+        setBusy(true);
+        commitSettingsOps(scope, ops).then(function (ok) {
+          pending.current = false;
+          setBusy(false);
+          setSnapshot(scope.getSnapshot());
+          if (!ok) { setError({ key: "error", detailKey: "notApplied" }); setDraft({}); return; }
+          setNotice({ key: "saved" });
+          setDraft({});
+        }).catch(function (e) {
+          pending.current = false;
+          setBusy(false);
+          setSnapshot(scope.getSnapshot());
+          setError({ key: "error", detail: String((e && e.message) || e) });
+        });
+      }
+
+      return h("div", { className: "__sm_group" },
+        h("div", { className: "__sm_groupTitle" },
+          h("span", null, t("recallTitle")),
+          h("span", { className: "__sm_hint" }, t("recallIntro"))
+        ),
+        RECALL_FIELDS.map(function (f) {
+          if (f.type === "checkbox") {
+            return h("label", { key: f.key, className: "__sm_field" },
+              h("span", { className: "__sm_row" },
+                h("input", { className: "__sm_check", type: "checkbox", checked: Boolean(fieldValue(f)), onChange: function (e) { setField(f, e.target.checked); } }),
+                h("span", { className: "__sm_label" }, t(f.label))
+              ),
+              f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
+            );
+          }
+          return h("label", { key: f.key, className: "__sm_field" },
+            h("span", { className: "__sm_label" }, t(f.label)),
+            h("input", { className: "__sm_input", type: "number", min: f.min, max: f.max, step: 1, value: fieldValue(f), onChange: function (e) { setField(f, e.target.value); } }),
+            f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
+          );
+        }),
+        h("div", { className: "__sm_actions" },
+          h("button", { type: "button", className: "__sm_btn __sm_btnPrimary", onClick: onSave, disabled: busy }, t("save")),
+          notice ? h("span", { className: "__sm_status" }, messageText(t, notice)) : null,
+          busy ? h("span", { className: "__sm_status" }, t("saving")) : null,
+          error ? h("span", { className: "__sm_error", role: "alert" }, messageText(t, error)) : null
+        )
+      );
     }
 
     function WebdavGroup(props) {
@@ -1187,7 +1324,11 @@ window.__ModuleLoader__.load({
               busy ? h("span", { className: "__sm_status" }, t("saving")) : null,
               error ? h("span", { className: "__sm_error" }, messageText(t, error)) : null
             )
-          )
+          ),
+          // 「那年今天」「忽然想起那一天」住在**主插件**的配置命名空间，
+          // 和上面 soul-md 的 memory 字段不是同一个文档 —— 所以这块自己拿
+          // 另一个 scope，不能混进 onSaveMemory 那批 ops。
+          h(RecallConfig, { t: t, scope: props.recallScope })
         ),
 
         // ── 云端备份 ─────────────────────────────────────────────────────
@@ -1287,13 +1428,16 @@ window.__ModuleLoader__.load({
       // a revision the other had already superseded — the Host refuses the stale
       // write and the scope still settles it as success.
       var scope = ctx.configForms.get("soul-md");
+      // 主插件自己的配置命名空间（entry id = 包名）。**和 soul-md 不是同一份
+      // 文档** —— 「那年今天」「忽然想起那一天」写在这里。
+      var recallScope = ctx.configForms.get("dsh-hierarchical-fishmemory");
       ctx.slots.inject("plugins.bundle.config", function () {
         return ctx.slots.register({
           name: "plugins.bundle.config",
           key: "dsh-hierarchical-fishmemory",
           locale: NS
         }, function (props) {
-          return h(SoulSection, Object.assign({}, props, { scope: scope, t: t, locale: ctx.locale }));
+          return h(SoulSection, Object.assign({}, props, { scope: scope, recallScope: recallScope, t: t, locale: ctx.locale }));
         });
       });
       ctx.slots.inject("conversation.session.header.actions", function () {
@@ -1315,7 +1459,7 @@ window.__ModuleLoader__.load({
           label: function () { return t("settingsNav"); },
           locale: NS
         }, function (props) {
-          return h(SoulSection, Object.assign({}, props, { scope: scope, t: t, locale: ctx.locale }));
+          return h(SoulSection, Object.assign({}, props, { scope: scope, recallScope: recallScope, t: t, locale: ctx.locale }));
         });
       });
     }

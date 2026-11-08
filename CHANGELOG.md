@@ -2,6 +2,25 @@
 
 从新到旧。每条都写了「为什么」，不只是「改了什么」。
 
+## 1.9.9 — 2026-11-08
+
+**「那年今天」和「忽然想起那一天」的开关，用户在设置页里找不到 —— 1.9.8 那句「设置页自动出现」是错的。**
+
+他重启完回来说：不光这两个看不到，之前说的「那年今天」什么的也找不到。
+
+查下来是两件事叠在一起：
+
+1. **宿主根本没有通用的 schema 表单渲染器。** `plugins.row.config` 这个槽全 runtime 只有 `dsh-client-ui-plugin-manager` 在读，而它只是把 `form` 当 props 传给槽，没有内置渲染者；官方插件每个都自带一个 companion 包才画得出来。`dsh-settings` 的 `describe()` 虽然把每个插件的 volatile 字段都投影成命名空间（`autoGenerate` 这个标志全 runtime **没有任何消费方**），但没人拿它画页面。所以「导出 Config 就自动出现在设置页」这个假设不成立。
+2. **而我们的界面只画了 `soul-md` 一个命名空间。** `ctx.configForms.get("soul-md")` 拿到的是人设卡与 memory 字段；「那年今天」「忽然想起那一天」是**主插件**（entry id = `dsh-hierarchical-fishmemory`）的配置，在另一份 settings 文档里，从来没有界面渲染过它。
+
+改法：在「长期记忆」页里自己画一块「回忆开关」，另取 `ctx.configForms.get("dsh-hierarchical-fishmemory")` 这个 scope，写入仍走 `commitSettingsOps`（`scope.mutate` → 宿主写进 profile 的 `cordis.patch.yml` 并热重载插件，改完不用重启）。宿主侧读的是 `apply()` 时算出的**常量** `config`，但插件被热重载会重新 `apply`，所以即时生效。
+
+- `src/soul/client.js` 新增组件 `RecallConfig` 与字段表 `RECALL_FIELDS`（`onThisDay` 数字 0–4，`flashback` 开关）。
+- zh / en 两份字典各加 7 个键。
+- `test/client-render.test.mjs` 加三条断言：`recallTitle` / `fieldOnThisDay` / `fieldFlashback` 必须在渲染树里。
+- 顺带把 `cordis.patch.yml` 里补上的 `onThisDay: 2` / `flashback: 1` 留在原处 —— 那本来也该写全，因为 patch 的 `config:` 是整体替换语义。
+- 测试 226。
+
 ## 1.9.8 — 2026-11-08
 
 **每天随机翻一天情感日记，像忽然想起某件事那样递给下一条鱼。**

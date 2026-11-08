@@ -261,6 +261,15 @@ test('设置页能整棵树渲染出来（含云端表单）', async () => {
   assert.ok(flat.includes('editCard'), '每张卡旁边要有「编辑」按钮');
   assert.ok(flat.includes('wsTitle'), '「工作区」那块也应当渲染出来（同一个 panel 的第三个孩子）');
   assert.ok(flat.includes('newCard'), '写卡那块要有「新建一张」');
+
+  // 「那年今天」「忽然想起那一天」两个开关（2026-11-08 加）。
+  //
+  // 它们住在**主插件**的配置命名空间，宿主**没有**通用的 schema 表单渲染器
+  // （plugins.row.config 槽全 runtime 没有内置渲染者），所以这块是自己画的。
+  // 之前用户找不到开关，就是因为只画了 soul-md 的 memory 字段。
+  assert.ok(flat.includes('recallTitle'), '长期记忆页要有「回忆开关」那块');
+  assert.ok(flat.includes('fieldOnThisDay'), '要有「那年今天」那条');
+  assert.ok(flat.includes('fieldFlashback'), '要有「忽然想起那一天」那条');
 });
 
 test('主面板四个页签都渲染得出来', async () => {
