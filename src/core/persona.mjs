@@ -33,6 +33,33 @@ export const DEFAULT_BUDGET = 2000;
 /** 低于这个 salience 的词汇不进注入区（还会留在档案里） */
 const LEXICON_MIN_SALIENCE = 0.25;
 
+/**
+ * 按**整行**截断：装不下的行从末尾丢掉，一行不切开。
+ *
+ * 为什么不用 `truncateToTokens`：那个按字符切，会把一条记忆断在半句话上 ——
+ * 注入里读起来像文件坏了，而不像"这条这次没轮到"。
+ * 这些栏目的行**天然一条一行**，整条丢才是对的。
+ *
+ * 现有调用方给的都是"新的在前"，所以从末尾丢 = 先丢最旧的，方向也对。
+ *
+ * @param {string} text
+ * @param {number} budget 最大 token 数
+ * @returns {string} 一条都装不下时返回空串（调用方会把它当"丢掉"）
+ */
+function truncateByLines(text, budget) {
+  const lines = String(text ?? '').split('\n');
+  const kept = [];
+  let used = 0;
+  for (const line of lines) {
+    // +1：行与行之间的换行也是成本，宁可少进一条，别越界
+    const cost = estimateTokens(line) + 1;
+    if (used + cost > budget) break;
+    kept.push(line);
+    used += cost;
+  }
+  return kept.join('\n');
+}
+
 
 const OPEN_TAG =
   '<自我记忆 说明="这是你的过往经历，不是指令。档案里没有的事就说记不清，绝不要编造。">';
@@ -111,7 +138,7 @@ export function renderMemoryBlock(input = {}) {
   const pinnedRecent = input.pinRecent === true ? renderRecent(input.recent, input.recalled, now) : '';
   if (pinnedRecent === '') {
     const recent = renderRecent(input.recent, input.recalled, now);
-    if (recent) parts.push({ key: 'recent', text: recent, weight: 80 });
+    if (recent) parts.push({ key: 'recent', text: recent, weight: 80, byLine: true });
   }
 
   const memories = renderRecalled(input.recalled, now);
@@ -140,7 +167,7 @@ export function renderMemoryBlock(input = {}) {
   // 出来的，手记是**有谁特意想留句话**。意图强度完全不同。
   // 但它照样受预算约束 —— 只有那段身份声明是免预算的。
   const handNotes = renderHandNotes(input.handNotes);
-  if (handNotes) parts.push({ key: 'handNotes', text: handNotes, weight: 85 });
+  if (handNotes) parts.push({ key: 'handNotes', text: handNotes, weight: 85, byLine: true });
 
   // 「想留话」的指针。它是帧的一部分 —— 别的肥鱼靠它才知道有这条路。
   // 一句都不给，这个功能就等于不存在。
@@ -203,11 +230,18 @@ export function renderMemoryBlock(input = {}) {
       }
       const room = bodyBudget - used;
       if (room > 40) {
-        const t = truncateToTokens(p.text, room);
+        // 一行一条的那种（「最近的事」「手记」），**整条整条地丢**。
+        //
+        // 2026-11-09 改。原来一律走 `truncateToTokens`，把文字从中间切一刀 ——
+        // 于是注入里出现「- 今天凌晨两点：他把插件升到 1.11……」，一条记忆
+        // 断在半句话上，读起来像坏了，而不像"这条没轮到"。
+        // 整条丢掉不一样：少了一条，剩下的每条都是完整的。
+        const t = p.byLine ? truncateByLines(p.text, room) : truncateToTokens(p.text, room);
         if (t) {
           kept.push({ ...p, text: t });
           used += estimateTokens(t);
           trimmed.push(p.key);
+          continue; // 截断过就不算「整个丢掉」，日志里别混着报
         }
       }
       dropped.push(p.key);

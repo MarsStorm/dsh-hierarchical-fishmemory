@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  MAX_DID_CHARS,
   MAX_LINES,
   MAX_SAID_CHARS,
   STICKY_ARCHIVE_FILE,
@@ -19,6 +20,7 @@ import {
   readNotes,
   readNotesSync,
   recordTurn,
+  repeatCount,
   renderNote,
   renderSection,
   setPinned,
@@ -339,4 +341,63 @@ test('recordTurn 原样存下带省略号的话（标记只在渲染时加）', 
   const raw = readFileSync(file, 'utf8');
   assert.ok(raw.includes('他说：其实我想说…'), raw);
   assert.ok(!raw.includes('这里断了'), '文件里不该有渲染用的标记');
+});
+
+// ── 「这句你以前说过」 ──
+//
+// 他重复提起的事，通常是他心里有分量的事 —— 所以这不是查重，是读出分量。
+// 判据是词的 Dice 系数，不是字面相等：换了说法也得认出来。
+
+function note(idx, said, at = Date.now()) {
+  return { index: idx, pinned: false, date: '2026-11-09', time: '00:00', said, did: '', at, raw: '' };
+}
+
+test('repeatCount：换了说法再说一遍也能认出来', () => {
+  const notes = [
+    note(0, '我其实挺担心这个插件会不会把记忆弄乱'),
+    note(1, '我挺担心这个插件会不会把记忆弄乱'),
+  ];
+  assert.equal(repeatCount(notes, notes[0]), 1);
+  assert.equal(repeatCount(notes, notes[1]), 0, '更早的那条不算重复');
+});
+
+test('repeatCount：不相干的话一条都不算', () => {
+  const notes = [
+    note(0, '我其实挺担心这个插件会不会把记忆弄乱'),
+    note(1, '今天中午想吃面条'),
+    note(2, '插件升到 1.11.0 了'),
+  ];
+  assert.equal(repeatCount(notes, notes[0]), 0);
+});
+
+test('repeatCount：太短的话不判相似（「好累」和「好饿」不是一回事）', () => {
+  const notes = [note(0, '好累'), note(1, '好饿')];
+  assert.equal(repeatCount(notes, notes[0]), 0);
+});
+
+test('renderSection：说过几遍就标几次，但不改原话', () => {
+  const { file } = tmp();
+  const at = Date.parse('2026-11-09T01:00:00+08:00');
+  appendNoteSync(file, renderNote({ said: '我其实挺担心这个插件会不会把记忆弄乱', at }));
+  appendNoteSync(file, renderNote({ said: '我挺担心这个插件会不会把记忆弄乱', at: at + 60000 }));
+  appendNoteSync(file, renderNote({ said: '我担心这个插件会不会把记忆弄乱', at: at + 120000 }));
+
+  const notes = readNotesSync(file);
+  const out = renderSection(notes, { ttlDays: 30, at: at + 180000 });
+  assert.ok(out.includes('第 3 次说'), `应该有「第 3 次说」：\n${out}`);
+  assert.ok(out.includes('第 2 次说'), `应该有「第 2 次说」：\n${out}`);
+
+  // 文件里还是原话，一个字没动
+  const raw = readFileSync(file, 'utf8');
+  assert.ok(raw.includes('｜他说：我其实挺担心这个插件会不会把记忆弄乱'));
+  assert.equal(raw.includes('次说'), false, '标注只活在注入里，不落盘');
+});
+
+test('renderNote：超长的「我这轮」截断后留省略号，还能被解析回来', () => {
+  const long = '先看日志再动代码'.repeat(30);
+  const line = renderNote({ said: '嗯', did: long, at: Date.parse('2026-11-09T01:00:00+08:00') });
+  const [note, ...rest] = parseNotes(line);
+  assert.equal(rest.length, 0);
+  assert.ok(note.did.endsWith('…'), `应该有省略号：${note.did}`);
+  assert.ok(note.did.length <= MAX_DID_CHARS, '不超过上限');
 });

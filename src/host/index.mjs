@@ -1449,7 +1449,10 @@ export function apply(ctx, rawConfig) {
           (pinnedOnce ? '（整段重灌，免预算）' : '') +
           ` · 想起 ${chosen.length} 条` +
           ` · 注入 ${rendered.tokens} token` +
-          (rendered.dropped.length > 0 ? ` · 裁掉 ${rendered.dropped.join('/')}` : ''),
+          (rendered.dropped.length > 0 ? ` · 裁掉 ${rendered.dropped.join('/')}` : '') +
+          // 截断 ≠ 裁掉：截断是"进来了但少了几条"。混在一起报，看日志的人
+          // 会以为整段没了，其实只是短了一点。
+          (rendered.trimmed?.length > 0 ? ` · 少了 ${rendered.trimmed.join('/')}` : ''),
       );
     } catch (err) {
       warn(`渲染记忆失败：${err instanceof Error ? err.message : String(err)}`);

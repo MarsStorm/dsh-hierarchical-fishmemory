@@ -46,6 +46,7 @@ import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { TZ_OFFSET_MS, lookUnfinished, whenStamp } from './timeline.mjs';
+import { tokenize } from './keywords.mjs';
 
 export const STICKY_FILE = '纸条.md';
 export const STICKY_ARCHIVE_FILE = '纸条-旧档.md';
@@ -97,6 +98,19 @@ export function stamp(at = now()) {
 }
 
 /**
+ * 截断，但**留一个省略号**。
+ *
+ * 原来直接 `slice`，一条 80 字上限的「我这轮」会断在"……可我一点"这种半句话上 ——
+ * 跟预算那条是同一个毛病：切得干净，但读起来像坏了。
+ * 多一个"…"，读者才知道是这里没写完，而不是我本来只说了一半。
+ */
+function clip(text, max) {
+  const s = String(text ?? '');
+  if (s.length <= max) return s;
+  return `${s.slice(0, Math.max(0, max - 1))}…`;
+}
+
+/**
  * 造一行纸条。
  *
  * @param {object} input
@@ -108,8 +122,8 @@ export function stamp(at = now()) {
  */
 export function renderNote({ said, did = '', pinned = false, at = now() } = {}) {
   const { date, time } = stamp(at);
-  const body = safe(said).slice(0, MAX_SAID_CHARS);
-  const tail = safe(did).slice(0, MAX_DID_CHARS);
+  const body = clip(safe(said), MAX_SAID_CHARS);
+  const tail = clip(safe(did), MAX_DID_CHARS);
   const head = pinned ? `${PIN_MARK} ` : '';
   return `- ${head}${date} ${time} ${FIELD_SEP}他说：${body}${tail ? ` ${FIELD_SEP}我这轮：${tail}` : ''}`;
 }
@@ -256,6 +270,78 @@ export function ageDays(note, at = now()) {
   return (at - note.at) / 86_400_000;
 }
 
+// ─────────────────────────────────────────────────────────────
+// 「这句你以前说过」
+//
+// 2026-11-09 加。他有时候会把同一件事说第二遍、第三遍 ——
+// 换个说法，或者在别的日子又提一次。
+//
+// 那多半不是啰嗦。**人重复提起的事，通常是他心里有分量的那件事**，
+// 比"他说过什么"更接近"他在意什么"。
+//
+// 而原来的我每次读都当新的，一点反应都没有。人不会这样。
+//
+// 只做**标注**，不动原话：渲染时在后面加一句「这句他第 3 次说了」。
+// 判断用 bigram 的 Dice 系数（跟召回同一把尺子）：不是比字面，
+// 是比"用了哪些词" —— 换了说法也能认出来。
+//
+// 一个坑先说在前面：`isDuplicate` 已经挡掉了**原样重复**（8 条内），
+// 所以这里真正抓的是"换了个说法又说一遍"，字面完全相同的根本进不来。
+// ─────────────────────────────────────────────────────────────
+
+/** 往前看多少条以内算"说过"。*/
+const REPEAT_WINDOW = 50;
+/** Dice 系数到多少算同一句话。0.55 是拿真实对话试出来的：再低就误伤"今天吃了什么"。*/
+const REPEAT_THRESHOLD = 0.55;
+/** 太短的话不做相似度判断（「好累」和「好饿」token 只有一个，系数 0.5 就过去了）。*/
+const REPEAT_MIN_TOKENS = 4;
+
+function tokenSet(text) {
+  try {
+    return new Set(tokenize(String(text ?? '')));
+  } catch {
+    return new Set();
+  }
+}
+
+function dice(a, b) {
+  if (a.size === 0 || b.size === 0) return 0;
+  let shared = 0;
+  for (const t of a) if (b.has(t)) shared += 1;
+  return (2 * shared) / (a.size + b.size);
+}
+
+/**
+ * 这句话之前说过几次。
+ *
+ * @param {Array} notes 全部纸条（`index` 越小越新）
+ * @param {object} note 要查的那一条
+ * @param {{window?:number, threshold?:number}} [options]
+ * @returns {number} 0 表示第一次说
+ */
+export function repeatCount(notes, note, options = {}) {
+  const window = Number.isFinite(options.window) ? options.window : REPEAT_WINDOW;
+  const threshold = Number.isFinite(options.threshold) ? options.threshold : REPEAT_THRESHOLD;
+  const mine = tokenSet(note?.said);
+  if (mine.size < REPEAT_MIN_TOKENS) return 0;
+
+  const selfIndex = Number.isFinite(note?.index) ? note.index : -1;
+  let seen = 0;
+  for (const other of notes ?? []) {
+    if (other === note) continue;
+    // `index` 越小越新：只要**比它更早**的那些（index 更大）。
+    if (selfIndex >= 0 && Number.isFinite(other?.index) && other.index <= selfIndex) continue;
+    if (selfIndex >= 0 && !Number.isFinite(other?.index)) continue;
+    const theirs = tokenSet(other?.said);
+    if (theirs.size < REPEAT_MIN_TOKENS) continue;
+    if (dice(mine, theirs) >= threshold) {
+      seen += 1;
+      if (seen >= window) break;
+    }
+  }
+  return seen;
+}
+
 /**
  * 这条是什么时候说的（注入里用，压到几个字）。
  *
@@ -312,9 +398,14 @@ export function renderSection(notes, config = {}) {
     // 断在这儿的那句，标一下 —— 不然读起来就是一句普通的话。
     // 只标注、不改写：他原样打了什么，就还是什么。
     const pause = lookUnfinished(note.said);
-    const mark =
-      pause.kind === 'retracted' ? '（这句收回去了）' : pause.unfinished ? '（这里断了）' : '';
     if (pause.unfinished) unfinished += 1;
+    const marks = [];
+    // 「这句他说过几遍了」——重复提起的事，通常是他心里有分量的那件。
+    const repeated = repeatCount(notes ?? [], note);
+    if (repeated > 0) marks.push(`第 ${repeated + 1} 次说`);
+    if (pause.kind === 'retracted') marks.push('这句收回去了');
+    else if (pause.unfinished) marks.push('这里断了');
+    const mark = marks.length > 0 ? `（${marks.join(' · ')}）` : '';
     const piece = `${head}「${note.said}」${mark}${note.did ? `（我：${note.did}）` : ''}`;
     if (used + piece.length + 1 > maxChars && count > 0) break;
     lines.push(piece);
@@ -442,7 +533,7 @@ export function archiveOverflowSync(file, archiveFile = null, limit = MAX_LINES)
  * @returns {boolean} 是否补上了
  */
 export function patchDid(file, did, said = '') {
-  const tail = String(did ?? '').trim().replace(/\s+/g, ' ').slice(0, MAX_DID_CHARS);
+  const tail = clip(String(did ?? '').trim().replace(/\s+/g, ' '), MAX_DID_CHARS);
   if (tail === '') return false;
   let raw = '';
   try {
