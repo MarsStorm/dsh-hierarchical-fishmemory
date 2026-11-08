@@ -24,6 +24,7 @@ import {
   setPinned,
   shouldNote,
   stamp,
+  whenLabel,
 } from '../src/core/sticky.mjs';
 
 function tmp() {
@@ -285,4 +286,21 @@ test('recordTurn：超限时顺手把最旧的挪进旧档', () => {
   assert.equal(readNotesSync(file).length, 3);
   assert.ok(existsSync(archive));
   assert.equal(readNotesSync(archive).length, 1);
+});
+
+test('whenLabel：今天 / 昨天 / N 天前，太旧的退回日期', () => {
+  const at = Date.parse('2026-11-09T12:00:00+08:00');
+  assert.equal(whenLabel({ at }, at), '今天');
+  assert.equal(whenLabel({ at: at - 86400000 }, at), '昨天');
+  assert.equal(whenLabel({ at: at - 3 * 86400000 }, at), '3 天前');
+  assert.equal(whenLabel({ at: at - 60 * 86400000, date: '2026-09-10' }, at), '2026-09-10');
+});
+
+test('renderSection：每条前面带「什么时候说的」', () => {
+  const at = Date.now();
+  const notes = [
+    { pinned: false, date: '2026-11-09', time: '00:00', said: '那是真的', did: '', at, index: 0, raw: '' },
+  ];
+  const out = renderSection(notes, { ttlDays: 30, at });
+  assert.ok(out.includes('今天 · 「那是真的」'), out);
 });

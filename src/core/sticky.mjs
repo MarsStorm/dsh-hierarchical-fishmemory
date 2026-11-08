@@ -257,21 +257,42 @@ export function ageDays(note, at = now()) {
 }
 
 /**
+ * 这条是什么时候说的（注入里用，压到几个字）。
+ *
+ * 注入里不写完整日期：8 条 × 10 个字符是白烧的预算，
+ * 而"三天前""昨天"是**读起来就知道远近**的说法。
+ * 超过 30 天的（只有 ★ 钉住的才会走到这儿）才退回日期。
+ *
+ * @param {{at?:number, date?:string}} note
+ * @param {number} [at]
+ * @returns {string}
+ */
+export function whenLabel(note, at = now()) {
+  const d = Math.floor(ageDays(note, at));
+  if (!Number.isFinite(d) || d < 0) return '';
+  if (d === 0) return '今天';
+  if (d === 1) return '昨天';
+  if (d <= 30) return `${d} 天前`;
+  return String(note?.date ?? '');
+}
+
+/**
  * 渲染注入段。
  *
  * 规则：标 ★ 的永远给；其余只给 TTL 内的，从新到旧，最多 MAX_INJECT 条、
  * MAX_INJECT_CHARS 字。一条都没有时返回空串（不注入任何东西）。
  *
  * @param {Array} notes
- * @param {{ttlDays?:number, maxInject?:number, maxChars?:number}} [config]
+ * @param {{ttlDays?:number, maxInject?:number, maxChars?:number, at?:number}} [config]
  * @returns {string}
  */
 export function renderSection(notes, config = {}) {
   const ttl = Math.max(1, Math.min(365, Math.floor(Number(config?.ttlDays) || DEFAULT_TTL_DAYS)));
   const maxInject = Math.max(1, Math.min(30, Math.floor(Number(config?.maxInject) || MAX_INJECT)));
   const maxChars = Math.max(200, Math.min(4000, Math.floor(Number(config?.maxChars) || MAX_INJECT_CHARS)));
+  const at = Number.isFinite(config?.at) ? config.at : now();
 
-  const fresh = (notes ?? []).filter((n) => n.pinned || ageDays(n) <= ttl);
+  const fresh = (notes ?? []).filter((n) => n.pinned || ageDays(n, at) <= ttl);
   if (fresh.length === 0) return '';
 
   const lines = [`## 小纸条 · 他说过的原话（${ttl} 天内的都在这儿；★ 是他钉住的）`];
@@ -279,7 +300,9 @@ export function renderSection(notes, config = {}) {
   let count = 0;
   for (const note of fresh) {
     if (count >= maxInject) break;
-    const piece = `- ${note.pinned ? '★ ' : ''}「${note.said}」${note.did ? `（我：${note.did}）` : ''}`;
+    const when = whenLabel(note, at);
+    const head = `- ${note.pinned ? '★ ' : ''}${when ? `${when} · ` : ''}`;
+    const piece = `${head}「${note.said}」${note.did ? `（我：${note.did}）` : ''}`;
     if (used + piece.length + 1 > maxChars && count > 0) break;
     lines.push(piece);
     used += piece.length + 1;
