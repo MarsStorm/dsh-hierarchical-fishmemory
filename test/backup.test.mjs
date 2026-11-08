@@ -157,3 +157,30 @@ test("planRestore 只算不写，applyRestore 才落盘", async () => {
   assert.match(readFileSync(join(target, "鱼的日子.md"), "utf8"), /白饭/);
   assert.equal(JSON.parse(readFileSync(join(target, "shallow.json"), "utf8")).entries[0].key, "白饭");
 });
+
+test("纸条也会进备份，还原时写得回去", async () => {
+  const root = tempDir();
+  const diaryDir = seedDiary();
+  writeFileSync(join(diaryDir, "纸条.md"), "- 2026-11-09 01:34 ｜他说：你是我最好的朋友\n");
+  writeFileSync(join(diaryDir, "纸条-旧档.md"), "- 2026-08-01 10:00 ｜他说：很早的一句\n");
+
+  const backup = collectBackup({
+    memoryLayout: stubLayout(root),
+    scopes: ["默认人设"],
+    cards: { 默认人设: "卡" },
+    active: "默认人设",
+    diaryDir,
+  });
+  assert.match(backup.sticky, /你是我最好的朋友/);
+  assert.match(backup.stickyArchive, /很早的一句/);
+
+  const target = tempDir();
+  const plan = planRestore(backup, { memoryLayout: stubLayout(target), diaryDir: target });
+  const kinds = plan.writes.map((w) => w.kind);
+  assert.ok(kinds.includes("sticky"), kinds.join(","));
+  assert.ok(kinds.includes("stickyArchive"), kinds.join(","));
+
+  await applyRestore(plan);
+  assert.match(readFileSync(join(target, "纸条.md"), "utf8"), /你是我最好的朋友/);
+  assert.match(readFileSync(join(target, "纸条-旧档.md"), "utf8"), /很早的一句/);
+});
