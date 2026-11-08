@@ -25,7 +25,7 @@
  */
 
 import { estimateTokens, truncateToTokens } from './tokenize.mjs';
-import { calendarDaysBetween, dayLabel, softWhen, stripTimeWords } from './timeline.mjs';
+import { calendarDaysBetween, dayLabel, softWhen, stripTimeWords, whenStamp } from './timeline.mjs';
 
 /** 默认注入预算（token）。可被 config.budgetTokens 覆盖。 */
 export const DEFAULT_BUDGET = 2000;
@@ -442,7 +442,12 @@ export function renderRecent(entries, shown, now = Date.now(), limit = 12) {
   if (picked.length === 0) return '';
 
   const lines = picked.map((e) => {
-    const day = dayLabel(e.created_at, now);
+    // 「今天 → 今天凌晨两点」：日期之外把钟点也说出来。
+    //
+    // 2026-11-09 加。原先只有「今天 / 昨天」——同一天的早上十点和凌晨两点
+    // 写出来一模一样，于是他熬夜这件事在记忆里根本不存在。
+    // 只加几个字，但「他凌晨两点还在问我插件的事」这种细节全靠它。
+    const day = whenStamp(e.created_at, now);
     // 正文里可能还留着写入那天写的"今天" —— 摘掉，时间只由前缀给。
     // 老档案里这种词一大把，不能指望重写用户的数据来修。
     const body = stripTimeWords(e.text);

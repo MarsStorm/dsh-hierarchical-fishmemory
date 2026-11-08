@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { TZ_OFFSET_MS, calendarDaysBetween, dayLabel, softWhen, startOfDay, stripTimeWords } from '../src/core/timeline.mjs';
+import { TZ_OFFSET_MS, calendarDaysBetween, clockLabel, dayLabel, lookUnfinished, phaseOf, softWhen, startOfDay, stripTimeWords, whenStamp } from '../src/core/timeline.mjs';
 
 const now = Date.parse('2026-11-05T10:00:00Z');
 const day = 86400000;
@@ -96,4 +96,61 @@ test('stripTimeWords 对非字符串返回空串', () => {
 test('stripTimeWords 不动不含时间词的正文', () => {
   const text = '他把端口改成了 3080';
   assert.equal(stripTimeWords(text), text);
+});
+
+test('phaseOf：按他的钟点分段，边界挑的是人的说法', () => {
+  assert.equal(phaseOf(0), '凌晨');
+  assert.equal(phaseOf(2), '凌晨');
+  assert.equal(phaseOf(4), '凌晨');
+  assert.equal(phaseOf(5), '清晨');
+  assert.equal(phaseOf(7), '清晨');
+  assert.equal(phaseOf(8), '上午');
+  assert.equal(phaseOf(10), '上午');
+  assert.equal(phaseOf(11), '中午'); // 十一点还没吃午饭，算中午的开头
+  assert.equal(phaseOf(12), '中午');
+  assert.equal(phaseOf(13), '下午');
+  assert.equal(phaseOf(16), '下午');
+  assert.equal(phaseOf(17), '傍晚');
+  assert.equal(phaseOf(18), '傍晚');
+  assert.equal(phaseOf(19), '夜里');
+  assert.equal(phaseOf(22), '夜里');
+  assert.equal(phaseOf(23), '深夜');
+  assert.equal(phaseOf(-1), '');
+  assert.equal(phaseOf(24), '');
+});
+
+test('clockLabel：凌晨两点而不是 02:17；半点说"半"', () => {
+  // 这两条都按他的 UTC+8 算：02:00 与 14:30
+  assert.equal(clockLabel(Date.parse('2026-11-09T02:00:00+08:00')), '凌晨两点');
+  assert.equal(clockLabel(Date.parse('2026-11-09T02:20:00+08:00')), '凌晨两点');
+  assert.equal(clockLabel(Date.parse('2026-11-09T02:45:00+08:00')), '凌晨两点半');
+  assert.equal(clockLabel(Date.parse('2026-11-09T00:10:00+08:00')), '凌晨零点');
+  assert.equal(clockLabel(Date.parse('2026-11-09T11:00:00+08:00')), '中午十一点');
+  assert.equal(clockLabel(Date.parse('2026-11-09T12:00:00+08:00')), '中午十二点');
+  assert.equal(clockLabel(Date.parse('2026-11-09T13:00:00+08:00')), '下午一点');
+  assert.equal(clockLabel(Date.parse('2026-11-09T14:30:00+08:00')), '下午两点半');
+  assert.equal(clockLabel(Date.parse('2026-11-09T23:10:00+08:00')), '深夜十一点');
+  assert.equal(clockLabel(NaN), '');
+});
+
+test('whenStamp：哪天 + 几点，远了就用空格隔开', () => {
+  const at = Date.parse('2026-11-09T12:00:00+08:00');
+  assert.equal(whenStamp(at, at), '今天中午十二点');
+  assert.equal(whenStamp(at - day, at), '昨天中午十二点');
+  assert.equal(whenStamp(at - 3 * day, at), '3 天前 中午十二点');
+  assert.equal(whenStamp(at - 30 * day, at), '10-10 中午十二点');
+  assert.equal(whenStamp(NaN, at), '');
+});
+
+test('lookUnfinished：只看尾巴，不改他的话', () => {
+  assert.deepEqual(lookUnfinished('算了'), { unfinished: true, kind: 'retracted' });
+  assert.deepEqual(lookUnfinished('没什么。'), { unfinished: true, kind: 'retracted' });
+  assert.deepEqual(lookUnfinished('当我没说'), { unfinished: true, kind: 'retracted' });
+  assert.deepEqual(lookUnfinished('其实我想说…'), { unfinished: true, kind: 'trailing' });
+  assert.deepEqual(lookUnfinished('我想说的是...'), { unfinished: true, kind: 'trailing' });
+  assert.deepEqual(lookUnfinished('那个'), { unfinished: true, kind: 'trailing' });
+  assert.deepEqual(lookUnfinished('今天挺开心的'), { unfinished: false, kind: '' });
+  assert.deepEqual(lookUnfinished(''), { unfinished: false, kind: '' });
+  // 收回去的话不算"拖尾巴"，两者分得开
+  assert.equal(lookUnfinished('算了').kind, 'retracted');
 });

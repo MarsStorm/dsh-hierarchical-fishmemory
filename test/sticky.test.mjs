@@ -290,17 +290,53 @@ test('recordTurn：超限时顺手把最旧的挪进旧档', () => {
 
 test('whenLabel：今天 / 昨天 / N 天前，太旧的退回日期', () => {
   const at = Date.parse('2026-11-09T12:00:00+08:00');
-  assert.equal(whenLabel({ at }, at), '今天');
-  assert.equal(whenLabel({ at: at - 86400000 }, at), '昨天');
-  assert.equal(whenLabel({ at: at - 3 * 86400000 }, at), '3 天前');
+  // 30 天内带上钟点（「今天中午十二点」），因为"几点说的"是这条的分量之一
+  assert.equal(whenLabel({ at }, at), '今天中午十二点');
+  assert.equal(whenLabel({ at: at - 86400000 }, at), '昨天中午十二点');
+  assert.equal(whenLabel({ at: at - 3 * 86400000 }, at), '3 天前 中午十二点');
   assert.equal(whenLabel({ at: at - 60 * 86400000, date: '2026-09-10' }, at), '2026-09-10');
 });
 
 test('renderSection：每条前面带「什么时候说的」', () => {
-  const at = Date.now();
+  const at = Date.parse('2026-11-09T12:00:00+08:00');
   const notes = [
-    { pinned: false, date: '2026-11-09', time: '00:00', said: '那是真的', did: '', at, index: 0, raw: '' },
+    { pinned: false, date: '2026-11-09', time: '02:00', said: '那是真的', did: '', at: at - 10 * 3600000, index: 0, raw: '' },
   ];
   const out = renderSection(notes, { ttlDays: 30, at });
-  assert.ok(out.includes('今天 · 「那是真的」'), out);
+  assert.ok(out.includes('今天凌晨两点 · 「那是真的」'), out);
+});
+
+test('renderSection：断在这儿的那句要标出来，但不改他的字', () => {
+  const at = Date.parse('2026-11-09T12:00:00+08:00');
+  const notes = [
+    { pinned: false, date: '2026-11-09', time: '02:00', said: '其实我想说…', did: '', at: at - 3600000, index: 0, raw: '' },
+    { pinned: false, date: '2026-11-09', time: '01:00', said: '算了', did: '', at: at - 7200000, index: 1, raw: '' },
+    { pinned: false, date: '2026-11-08', time: '20:00', said: '今天挺开心的', did: '陪他聊了会儿', at: at - 16 * 3600000, index: 2, raw: '' },
+  ];
+  const out = renderSection(notes, { ttlDays: 30, at });
+  // 原话一个字都没动，标记加在引号外面
+  assert.ok(out.includes('「其实我想说…」（这里断了）'), out);
+  assert.ok(out.includes('「算了」（这句收回去了）'), out);
+  assert.ok(!out.includes('「今天挺开心的」（这里断了）'), out);
+  assert.ok(!out.includes('「今天挺开心的」（这句收回去了）'), out);
+  // 有断句才多说这一行
+  assert.ok(out.includes('没说完的那几句'), out);
+});
+
+test('renderSection：没有断句就不多花那一行', () => {
+  const at = Date.parse('2026-11-09T12:00:00+08:00');
+  const notes = [
+    { pinned: false, date: '2026-11-09', time: '02:00', said: '今天挺开心的', did: '', at: at - 3600000, index: 0, raw: '' },
+  ];
+  const out = renderSection(notes, { ttlDays: 30, at });
+  assert.ok(!out.includes('没说完的那几句'), out);
+});
+
+test('recordTurn 原样存下带省略号的话（标记只在渲染时加）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sticky-pause-'));
+  const file = join(dir, STICKY_FILE);
+  recordTurn({ file, archiveFile: join(dir, STICKY_ARCHIVE_FILE), said: '其实我想说…', did: '' });
+  const raw = readFileSync(file, 'utf8');
+  assert.ok(raw.includes('他说：其实我想说…'), raw);
+  assert.ok(!raw.includes('这里断了'), '文件里不该有渲染用的标记');
 });

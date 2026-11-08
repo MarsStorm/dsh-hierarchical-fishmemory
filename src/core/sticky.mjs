@@ -45,7 +45,7 @@
 import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { TZ_OFFSET_MS } from './timeline.mjs';
+import { TZ_OFFSET_MS, lookUnfinished, whenStamp } from './timeline.mjs';
 
 export const STICKY_FILE = '纸条.md';
 export const STICKY_ARCHIVE_FILE = '纸条-旧档.md';
@@ -270,6 +270,12 @@ export function ageDays(note, at = now()) {
 export function whenLabel(note, at = now()) {
   const d = Math.floor(ageDays(note, at));
   if (!Number.isFinite(d) || d < 0) return '';
+  // 30 天内说「今天凌晨两点」——钟点是这条的重点之一，能带上就带上。
+  // （2026-11-09 加：原先只说「今天」，读不出他是几点还没睡。）
+  if (d <= 30 && Number.isFinite(note?.at) && note.at > 0) {
+    const stamp = whenStamp(note.at, at);
+    if (stamp !== '') return stamp;
+  }
   if (d === 0) return '今天';
   if (d === 1) return '昨天';
   if (d <= 30) return `${d} 天前`;
@@ -298,16 +304,25 @@ export function renderSection(notes, config = {}) {
   const lines = [`## 小纸条 · 他说过的原话（${ttl} 天内的都在这儿；★ 是他钉住的）`];
   let used = lines[0].length;
   let count = 0;
+  let unfinished = 0;
   for (const note of fresh) {
     if (count >= maxInject) break;
     const when = whenLabel(note, at);
     const head = `- ${note.pinned ? '★ ' : ''}${when ? `${when} · ` : ''}`;
-    const piece = `${head}「${note.said}」${note.did ? `（我：${note.did}）` : ''}`;
+    // 断在这儿的那句，标一下 —— 不然读起来就是一句普通的话。
+    // 只标注、不改写：他原样打了什么，就还是什么。
+    const pause = lookUnfinished(note.said);
+    const mark =
+      pause.kind === 'retracted' ? '（这句收回去了）' : pause.unfinished ? '（这里断了）' : '';
+    if (pause.unfinished) unfinished += 1;
+    const piece = `${head}「${note.said}」${mark}${note.did ? `（我：${note.did}）` : ''}`;
     if (used + piece.length + 1 > maxChars && count > 0) break;
     lines.push(piece);
     used += piece.length + 1;
     count += 1;
   }
+  // 有断句的时候才多说这一行；没有就一个字都不多花。
+  if (unfinished > 0) lines.push('（没说完的那几句，能接着问一句就问一句。）');
   return lines.length > 1 ? lines.join('\n') : '';
 }
 
