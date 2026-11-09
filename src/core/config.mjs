@@ -138,6 +138,15 @@ export const CONFIG_SPEC = [
     label: '「忽然想起那一天」每天从情感日记里随机翻一天（0 = 关掉）',
   },
   {
+    key: 'silenceNudge',
+    type: 'number',
+    default: 3,
+    min: 0,
+    max: 20,
+    step: 1,
+    label: '「闷太久」：连着几轮只有工具调用就注一句催我说话（0 = 关掉）',
+  },
+  {
     key: 'staleLoopDays',
     type: 'number',
     default: 3,

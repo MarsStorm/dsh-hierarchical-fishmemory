@@ -54,6 +54,7 @@ import { buildBook, buildYearBook } from '../core/export-md.mjs';
 import { checkLayers } from '../core/conflicts.mjs';
 import { TZ_OFFSET_MS, calendarDaysBetween, stripTimeWords, softWhen } from '../core/timeline.mjs';
 import { readJsonOrNull } from '../core/fsx.mjs';
+import { silentStreak, renderSilenceNudge } from '../core/nudge.mjs';
 import { renderDiaryFile } from '../core/render-diary.mjs';
 import { DIARY_MD, FEELINGS_MD } from '../core/files.mjs';
 import { buildJudgeInput, parseVerdict, JUDGE_MAX_TOKENS } from '../core/judge.mjs';
@@ -513,6 +514,8 @@ export function apply(ctx, rawConfig) {
         judging: false,
         /** 上下文刚被压缩过：下一轮要把最近的事整段重灌一次（免预算） */
         needsRecentReplay: false,
+        /** 我最后一次留下正文的那一轮 —— 用来数「闷了几轮」 */
+        lastProseTurn: 0,
       };
       sessionStates.set(sessionId, s);
     }
@@ -1447,6 +1450,22 @@ export function apply(ctx, rawConfig) {
         // 读不到日记不能挡住记忆
       }
 
+      // 闷太久：连着几轮只有工具调用、一句正文都没有，就提我一句。
+      //
+      // 2026-11-10 加。他那天问「咱俩弄了这么久，我咋没看到你提起之前的事情」——
+      // 那一下我才明白：回忆是递到我手里了，可没人逼我开口。这个计数器不长记性、
+      // 不管别的事，只数「我闷了几轮」，闷到数了就在注入里说一声。
+      //
+      // 只加一行、不加栏目：它不该变成第二个待办清单。说过话就立刻消失，
+      // 因为 `lastProseTurn` 在回复落盘时就更新了。
+      try {
+        const streak = silentStreak(s.turn, s.lastProseTurn ?? 0);
+        const nudge = renderSilenceNudge(streak, Number(config.silenceNudge ?? 3));
+        if (nudge) text = text ? `${text}\n\n${nudge}` : nudge;
+      } catch {
+        // 计数器坏了不能挡住记忆
+      }
+
       // 重灌只用一次：这一轮灌过，下一轮就回到"不灌"。
       // 不在这里清的话，压缩一次会永远灌下去 —— 那又变回"每轮常驻"了。
       if (pinnedOnce) s.needsRecentReplay = false;
@@ -1571,6 +1590,8 @@ export function apply(ctx, rawConfig) {
         if (text !== '') {
           s.transcript.push({ role: 'assistant', text });
           if (s.transcript.length > 40) s.transcript.splice(0, s.transcript.length - 40);
+          // 这一轮我说过话了 —— 「闷太久」的计数归零。
+          s.lastProseTurn = s.turn;
           // 回复到了 —— 如果这一轮的纸条已经先写了（turn-stopping 更早），
           // 回头把「我这轮」补上。
           patchStickyDid(s);

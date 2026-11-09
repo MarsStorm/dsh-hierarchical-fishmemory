@@ -278,6 +278,8 @@ window.__ModuleLoader__.load({
       stickyMaxInjectHint: "从新到旧给，最多这么多条；再多就把最旧的先放下。",
       fieldStaleLoopDays: "「小闹钟」几天算陈了",
       staleLoopDaysHint: "还挂着的事超过这么多天没动静，就在那一行后面标一句「记下 N 天了」；0 = 不标。",
+      fieldSilenceNudge: "「闷太久」提醒",
+      silenceNudgeHint: "连着几轮只有工具调用、一句正文都没写，就往注入里放一句催我开口；0 = 不提醒。",
       fieldMirrorHint: "镜子",
       mirrorHint: "想看「今天陪得怎么样」，直接说一声——我用 fish_mirror 给你翻，不进每轮注入。",
       recallUnavailable: "主插件配置命名空间不可用（服务端没注册 dsh-hierarchical-fishmemory？）"
@@ -406,6 +408,8 @@ window.__ModuleLoader__.load({
       stickyMaxInjectHint: "Newest first, at most this many; older ones wait their turn.",
       fieldStaleLoopDays: '"Pocket watch" — days before a loop looks stale',
       staleLoopDaysHint: "Mark a still-open item after this many quiet days; 0 = never.",
+      fieldSilenceNudge: '"Too quiet" nudge',
+      silenceNudgeHint: "After this many turns with tool calls only and no prose, inject one line pushing me to speak; 0 = off.",
       recallUnavailable: "Main plugin config namespace unavailable (no dsh-hierarchical-fishmemory namespace registered?)"
     };
 
@@ -473,7 +477,8 @@ window.__ModuleLoader__.load({
       { key: "stickyEnabled", type: "checkbox", def: 1, label: "fieldStickyEnabled", hint: "stickyEnabledHint" },
       { key: "stickyTtlDays", type: "number", min: 1, max: 365, def: 30, label: "fieldStickyTtlDays", hint: "stickyTtlDaysHint" },
       { key: "stickyMaxInject", type: "number", min: 1, max: 20, def: 8, label: "fieldStickyMaxInject", hint: "stickyMaxInjectHint" },
-      { key: "staleLoopDays", type: "number", min: 0, max: 30, def: 3, label: "fieldStaleLoopDays", hint: "staleLoopDaysHint" }
+      { key: "staleLoopDays", type: "number", min: 0, max: 30, def: 3, label: "fieldStaleLoopDays", hint: "staleLoopDaysHint" },
+      { key: "silenceNudge", type: "number", min: 0, max: 20, def: 3, label: "fieldSilenceNudge", hint: "silenceNudgeHint" }
     ];
 
     function RecallConfig(props) {
