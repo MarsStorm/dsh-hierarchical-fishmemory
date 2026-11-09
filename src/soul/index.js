@@ -38,6 +38,7 @@ import { resolveDshHome } from "@deepseek-ai/dsh-home-paths";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { createMemoryLayout, normalizeMemoryTopic, retainMemoryEnds } from "./memory-layout.js";
 import { diffLines } from "./card-diff.mjs";
+import { planCardSnapshots } from "./card-watch.mjs";
 import { applyRestore, backupFileName, collectBackup, parseBackup, planRestore, registerBackupBuilder, registerRestoreHandler, summarizeBackup, writeBackupFile } from "../core/backup.mjs";
 import { readDiaryEntries } from "../core/stats.mjs";
 import { SHALLOW_FILE } from "../core/shallow.mjs";
@@ -392,6 +393,36 @@ function apply(ctx, config) {
     };
   }, "soul-md.sections()");
 
+  // ── 人设卡的「外面改」也要留旧版 ─────────────────────────────────────────
+  //
+  // `soul_update` 覆盖前会 `saveCardSnapshot`（见下面的工具），但设置页改卡
+  // 是直接写 settings 文档，根本不经过那个工具 —— 那条路上的旧文本以前一律
+  // 丢。2026-11-09 补：在这里盯 settings 文档的变化，发现哪张卡的正文变了、
+  // 而且手里还握着它的上一版，就先把上一版存一份。
+  //
+  // 幂等靠 `lastSeenCards`：`soul_update` 落盘前会先把新文本写进这张表，
+  // 等下面的 watcher 被触发时看到「新旧一样」，就不会重复存。
+  let lastSeenCards = null;
+  let cardWatchReady = false;
+
+  function noteCards(cards) {
+    lastSeenCards = { ...(cards ?? {}) };
+    cardWatchReady = true;
+  }
+
+  function snapshotCardsChangedOutside(cards) {
+    const next = cards ?? {};
+    if (!cardWatchReady) {
+      // 第一次见到：只记基线，不存快照（否则一启动就给每张卡存一份假的旧版）。
+      noteCards(next);
+      return;
+    }
+    for (const { name: cardName, text } of planCardSnapshots(lastSeenCards, next)) {
+      saveCardSnapshot(cardName, text);
+    }
+    noteCards(next);
+  }
+
   // ── settings-backed configuration ─────────────────────────────────────────
   // DSH 0.1.7 exposes Config directly as live profile fields.
   const onSettingsChange = () => {
@@ -407,6 +438,13 @@ function apply(ctx, config) {
     void maybeMigrate();
     void publishWorkspaces();
     startWorkspaceWatch();
+    // 设置页改的卡也要留旧版（见上面 snapshotCardsChangedOutside 的注释）。
+    // 整段 try：留旧版是后悔药，坏了也不能连累主流程。
+    try {
+      snapshotCardsChangedOutside(cfg().cards);
+    } catch (error) {
+      ctx.logger?.warn?.(`[soul-md] 人设卡旧版快照失败：${error instanceof Error ? error.message : String(error)}`);
+    }
   };
   ctx.on("settings/document-updated", (id) => {
     if (id === NS) onSettingsChange();
@@ -827,6 +865,9 @@ function apply(ctx, config) {
       const nextCards = { ...(c.cards ?? {}), [card.name]: content };
       // 改之前先把旧的留一版 —— 人设卡改坏了没法手写回原样，这是唯一的后悔药。
       if (card.text && card.text !== content) saveCardSnapshot(card.name, card.text);
+      // 先把新文本记进 lastSeenCards，再去写 settings：等下 document-updated
+      // 触发的 watcher 看到「新旧一样」，就不会把同一份旧版再存一遍。
+      noteCards(nextCards);
       await settings.update(NS, { ...c, cards: nextCards });
       return { bytes, persona: card.name };
     },
@@ -873,6 +914,18 @@ function apply(ctx, config) {
     }
   }
 
+  // 「目录还不存在」和「目录是空的」不是一回事：前者表示一次快照都没存过
+  // （从没走过存快照的路），后者只是这段时间没改过卡。以前两者都报成空
+  // 列表，工具就理直气壮地说「没改过」—— 2026-11-09 开始分开说。
+  function cardDirState() {
+    try {
+      if (statSync(cardDir()).isDirectory()) return "empty";
+    } catch {
+      return "missing";
+    }
+    return "empty";
+  }
+
 
   ctx.tools.register(defineTool({
     name: "fish_card_history",
@@ -885,6 +938,7 @@ function apply(ctx, config) {
         additionalProperties: false,
         properties: {
           persona: { type: "string" },
+          hint: { type: "string" },
           versions: {
             type: "array",
             items: {
@@ -898,15 +952,25 @@ function apply(ctx, config) {
           },
         },
       },
-      render: (_args, value) =>
-        [{ type: "text", text: value.versions.length
-          ? `Persona card "${value.persona}" has ${value.versions.length} saved version(s):\n${value.versions.map((v) => `- ${v.file} (${v.chars} chars)`).join("\n")}`
-          : `Persona card "${value.persona}" has no saved versions yet.` }],
+      render: (_args, value) => {
+        if (value.versions.length) {
+          return [{ type: "text", text: `Persona card "${value.persona}" has ${value.versions.length} saved version(s):\n${value.versions.map((v) => `- ${v.file} (${v.chars} chars)`).join("\n")}` }];
+        }
+        // 「一次没存过」和「存过但没改」要分得开，否则这句"没有版本"会骗人。
+        const why = value.hint === "missing"
+          ? `Persona card "${value.persona}" has no saved versions yet, and the snapshot folder ${cardDir()} does not exist — so nothing has EVER been snapshotted on this machine (not merely "unchanged").`
+          : `Persona card "${value.persona}" has no saved versions yet.`;
+        return [{ type: "text", text: why }];
+      },
     },
     isConcurrencySafe: () => true,
     async execute(_args, exec) {
       const card = resolveCard(agentOf(exec));
-      return { persona: card.name ?? "none", versions: card.name ? listCardSnapshots(card.name) : [] };
+      return {
+        persona: card.name ?? "none",
+        hint: cardDirState(),
+        versions: card.name ? listCardSnapshots(card.name) : [],
+      };
     },
   }));
 
@@ -1003,6 +1067,7 @@ function apply(ctx, config) {
       const c = cfg();
       const current = card.text ?? "";
       const snapshot = current && current !== content ? saveCardSnapshot(card.name, current) ?? "" : "";
+      noteCards({ ...(c.cards ?? {}), [card.name]: content });
       await settings.update(NS, { ...c, cards: { ...(c.cards ?? {}), [card.name]: content } });
       return { persona: card.name, file: target.file, chars: content.length, dryRun: false, snapshot };
     },

@@ -1,6 +1,6 @@
 {
   "name": "dsh-hierarchical-fishmemory",
-  "version": "1.13.0",
+  "version": "1.14.0",
   "description": "面向 DeepSeek Harness 的分层长期记忆：共度时光（自动蒸馏的经过，会随时间衰减）、情感日记（手写感受，不衰减）、人格手记（每轮全量注入）、浅层记忆（7 天 TTL）与人设卡（带版本历史）共用一份 token 预算，配召回、体检、压缩与整包备份还原。一个包全管。",
   "type": "module",
   "license": "MIT",
