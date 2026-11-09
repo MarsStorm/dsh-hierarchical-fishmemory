@@ -2,6 +2,14 @@
 
 从新到旧。每条都写了「为什么」，不只是「改了什么」。
 
+## 1.14.1 — 2026-11-10
+
+**补 1.14.0 漏的一行：`fish_card_history` 的输出里有个 `path` 字段没在 schema 里声明。**
+
+1.14.0 之前这台机器一份快照都没有，`versions` 一直是空数组，那个多出来的字段从来没被 schema 校验碰到过。1.14.0 生效、第一份快照落盘之后，工具立刻报 `tool "fish_card_history" returned invalid output: "value.versions[0].path" is not a declared property (additionalProperties: false)`。
+
+教训跟手记里那条一样：**空数组会替所有形状错误打掩护**。一条路径从没真正走通过，就别当它验过了。
+
 ## 1.14.0 — 2026-11-10
 
 **设置页改的人设卡，旧版也开始留了 —— 补的是个静默丢了很久的东西。**

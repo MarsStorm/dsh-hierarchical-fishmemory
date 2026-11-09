@@ -946,6 +946,7 @@ function apply(ctx, config) {
               additionalProperties: false,
               properties: {
                 file: { type: "string" },
+                path: { type: "string" },
                 chars: { type: "integer" },
               },
             },
