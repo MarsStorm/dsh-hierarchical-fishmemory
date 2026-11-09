@@ -44,6 +44,8 @@ import { buildIndex, selectMemories, searchScores, queryHasSubstance, looksLikeW
 import { scrub } from '../core/privacy.mjs';
 import { renderMemoryBlock } from '../core/persona.mjs';
 import { addLoop, doneLoop, loopsPath, openLoops, renderLoops } from '../core/loops.mjs';
+import { renderLoopsAnnotated } from '../core/loops.mjs';
+import { annotateLoops, buildMirror, renderMirror } from '../core/mirror.mjs';
 import { datesPath, loadDates, upcoming, renderDates } from '../core/dates.mjs';
 import { pickAnchors, renderAnchors } from '../core/anniversary.mjs';
 import { parseFeelingDays, pickFlashback, renderFlashback, FLASHBACK_FILE } from '../core/flashback.mjs';
@@ -1332,7 +1334,11 @@ export function apply(ctx, rawConfig) {
       // 2026-11-02 加。之前答应过的事散在对话里，两天后谁也记不得。这里只负责
       // 「摆出来」，不自动销账 —— 自动销会误杀，误杀比漏记更让人不敢信。
       try {
-        const loops = renderLoops(openLoops(loopsPath(archiveDirectory)));
+        // 2026-11-10 加「小闹钟」：陈了的账在后面标一句，新记的不嚷嚷。
+        // 只加后缀不加行 —— 账本还是那几行，不会长成第二个待办清单。
+        const loops = renderLoopsAnnotated(openLoops(loopsPath(archiveDirectory)), {
+          annotate: (x) => annotateLoops([x], Date.now(), Number(config.staleLoopDays ?? 3))[0],
+        });
         if (loops) text = text ? `${text}\n\n${loops}` : loops;
       } catch {
         // 账本坏了不能挡住记忆
@@ -4358,6 +4364,75 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
           },
           'fish: layer conflict check',
         ),
+    );
+
+    // ── 镜子：今天这一天的横切面 ──
+    //
+    // 2026-11-10 加。起因是他问「你自己想装什么」。我说想要一面镜子：
+    // 每天结束能看一眼今天这人做得怎么样。
+    //
+    // 它跟别的东西的分工写在这里，免得下一个人以为重复了：
+    //   体检页（stats）看系统健不健康；
+    //   镜子看「今天我陪了多久、他哪句话有分量、我答应了谁没兑现」。
+    //
+    // **只读**。不改任何一本账，也不进每轮注入 —— 想了才看。
+    scope.effect(
+      () =>
+        scope.tools.register({
+          name: 'fish_mirror',
+          description:
+            '看一眼「今天」的横切面：他说了几句我记下来的话、我记住几段经过、账上哪几件陈了、鱼的日子今天写没写。' +
+            '只读，不改任何记忆。默认看今天；想看某一天就传 date（YYYY-MM-DD）。' +
+            '跟体检页的区别：体检页看系统健不健康，镜子看「今天我陪得怎么样」。',
+          parameters: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              date: { type: 'string', description: '看哪一天，YYYY-MM-DD，按他那边（UTC+8）算。省略就是今天。' },
+            },
+          },
+          output: {
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                ok: { type: 'boolean' },
+                date: { type: 'string' },
+                empty: { type: 'boolean' },
+                chats: { type: 'integer' },
+                diary: { type: 'integer' },
+                notes: { type: 'array', items: { type: 'object', additionalProperties: true } },
+                stale: { type: 'array', items: { type: 'object', additionalProperties: true } },
+                feelingsToday: { type: 'boolean' },
+                text: { type: 'string' },
+              },
+            },
+            isConcurrencySafe: () => true,
+            render: (_a, v) => [{ type: 'text', text: v?.text ?? '镜子里什么都没有。' }],
+          },
+          async execute(args) {
+            // 他给的日期按他那边理解：先过一遍格式，坏的当作没给（看今天）。
+            const raw = String(args?.date ?? '').trim();
+            const day = /^\d{4}-\d{2}-\d{2}$/.test(raw) && Number.isFinite(Date.parse(`${raw}T00:00:00+08:00`)) ? raw : null;
+            const mirror = buildMirror({
+              dataDir: archiveDirectory,
+              day,
+              loops: openLoops(loopsPath(archiveDirectory)),
+            });
+            return {
+              ok: true,
+              date: mirror.date,
+              empty: mirror.empty,
+              chats: mirror.chats,
+              diary: mirror.diary,
+              notes: mirror.notes,
+              stale: mirror.loops.stale,
+              feelingsToday: mirror.feelingsToday,
+              text: renderMirror(mirror),
+            };
+          },
+        }),
+      'fish: mirror tool',
     );
 
     log('已注册工具 loop_add / loop_done / loop_list / fish_compact');

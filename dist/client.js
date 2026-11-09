@@ -276,6 +276,10 @@ window.__ModuleLoader__.load({
       stickyTtlDaysHint: "超过这个天数的纸条不再注入（★ 钉住的不受这个限制）。",
       fieldStickyMaxInject: "「小纸条」每轮最多注入几条",
       stickyMaxInjectHint: "从新到旧给，最多这么多条；再多就把最旧的先放下。",
+      fieldStaleLoopDays: "「小闹钟」几天算陈了",
+      staleLoopDaysHint: "还挂着的事超过这么多天没动静，就在那一行后面标一句「记下 N 天了」；0 = 不标。",
+      fieldMirrorHint: "镜子",
+      mirrorHint: "想看「今天陪得怎么样」，直接说一声——我用 fish_mirror 给你翻，不进每轮注入。",
       recallUnavailable: "主插件配置命名空间不可用（服务端没注册 dsh-hierarchical-fishmemory？）"
     };
     var en = {
@@ -400,6 +404,8 @@ window.__ModuleLoader__.load({
       stickyTtlDaysHint: "Older notes stop being injected past this age (pinned ★ notes are exempt).",
       fieldStickyMaxInject: "Sticky notes injected per turn",
       stickyMaxInjectHint: "Newest first, at most this many; older ones wait their turn.",
+      fieldStaleLoopDays: '"Pocket watch" — days before a loop looks stale',
+      staleLoopDaysHint: "Mark a still-open item after this many quiet days; 0 = never.",
       recallUnavailable: "Main plugin config namespace unavailable (no dsh-hierarchical-fishmemory namespace registered?)"
     };
 
@@ -466,7 +472,8 @@ window.__ModuleLoader__.load({
       { key: "flashback", type: "checkbox", def: 1, label: "fieldFlashback", hint: "flashbackHint" },
       { key: "stickyEnabled", type: "checkbox", def: 1, label: "fieldStickyEnabled", hint: "stickyEnabledHint" },
       { key: "stickyTtlDays", type: "number", min: 1, max: 365, def: 30, label: "fieldStickyTtlDays", hint: "stickyTtlDaysHint" },
-      { key: "stickyMaxInject", type: "number", min: 1, max: 20, def: 8, label: "fieldStickyMaxInject", hint: "stickyMaxInjectHint" }
+      { key: "stickyMaxInject", type: "number", min: 1, max: 20, def: 8, label: "fieldStickyMaxInject", hint: "stickyMaxInjectHint" },
+      { key: "staleLoopDays", type: "number", min: 0, max: 30, def: 3, label: "fieldStaleLoopDays", hint: "staleLoopDaysHint" }
     ];
 
     function RecallConfig(props) {

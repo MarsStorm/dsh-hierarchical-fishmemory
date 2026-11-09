@@ -79,3 +79,32 @@ export function renderLoops(items, options = {}) {
   const hint = '- 办完了用 loop_done 销掉，别让它一直挂着。';
   return [head, ...lines, ...(tail ? [tail] : []), hint].join('\n');
 }
+
+/**
+ * 带「陈了没」的版本（2026-11-10 加）。
+ *
+ * loops.mjs 不该知道时间怎么算（那是 timeline 的事），也不该 import
+ * mirror（会绕成一个圈：mirror → sticky → loops ← mirror）。
+ * 所以这里只留一个口子：调用方给 annotate，这里负责拼。
+ *
+ * 刻意只加后缀、不加行 —— 账本一旦长出第二类行，就变成待办清单了。
+ *
+ * @param {Array} items
+ * @param {{limit?:number, annotate?:(x:object)=>{text:string, suffix:string}}} [options]
+ */
+export function renderLoopsAnnotated(items, options = {}) {
+  const annotate = typeof options.annotate === 'function' ? options.annotate : null;
+  if (!annotate) return renderLoops(items, options);
+  const list = (items ?? []).filter((x) => x && typeof x.text === 'string' && x.text.trim());
+  if (list.length === 0) return '';
+  const limit = Number.isFinite(options.limit) ? options.limit : 8;
+  const shown = list.slice(-limit);
+  const head = `## 还挂着的事（${list.length} 件）`;
+  const lines = shown.map((x) => {
+    const hint = annotate(x);
+    return `- ${x.text}${hint?.suffix ?? ''}`;
+  });
+  const tail = list.length > shown.length ? `- …还有 ${list.length - shown.length} 件，用 loop_list 看全` : '';
+  const hint = '- 办完了用 loop_done 销掉，别让它一直挂着。';
+  return [head, ...lines, ...(tail ? [tail] : []), hint].join('\n');
+}

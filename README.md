@@ -62,6 +62,7 @@
 - `shallow_promote`：浅层快到期时把它升格成共度时光或深层记忆，然后从浅层删掉——不用等它默默消失。
 - `fish_layer_check`：体检「同一句写了两遍」（深层 / 手记 / 情感日记 / 浅层）与「同一样东西写了两个值」（端口、版本）。
 - `loop_add` / `loop_done` / `loop_list`：答应过、挂着没做的事记一笔，每轮注入「还挂着 N 件事」。**只摆出来、不自动销账**——误杀比漏记更让人不敢信。
+- `fish_mirror`：今天这一天的横切面——他说了几句我记下的原话、我记住几段经过、账上哪几件陈了、鱼的日子写没写。**只读**，不改任何一本账，也不进每轮注入。跟体检页分工不同：体检页看系统健不健康，镜子看「今天陪得怎么样」。
 
 ### 四、备份与搬家
 
@@ -216,6 +217,7 @@ dsh plugin --profile web add link:/abs/path/to/dsh-hierarchical-fishmemory
 | `fish_layer_check` | 层间重复句与同值冲突，只报告不改动 |
 | `fish_card_history` · `fish_card_diff` · `fish_card_restore` | 人设卡版本历史、逐行差异、退回旧版 |
 | `loop_add` · `loop_done` · `loop_list` | 挂起事项；每轮注入「还挂着 N 件事」 |
+| `fish_mirror` | 今天这一天的横切面（原话 / 经过 / 陈了的账 / 心里写没写），只读 |
 | `memory_read(topic)` · `memory_append` · `memory_rewrite` · `memory_search` | 深层事实与坑，按主题取、按主题写 |
 | `soul_read` · `soul_update` | 读 / 改当前人设卡 |
 | `shallow_note` · `shallow_touch` · `shallow_list` · `shallow_forget` · `shallow_sweep` | 浅层记忆；再提到就自动续期 |
@@ -267,6 +269,7 @@ fish_cloud_backup({ note: "出差前" })
 | --- | --- |
 | **1.9.3** | 时区统一：`dayLabel` / `softWhen` / 「认识 N 天」全按 UTC+8 切日，他的凌晨不再算成前一天 |
 | **1.9.2** | 清理：`coldOnly` 两份并回一份（并修掉 Map 不匹配）、三处未使用的导入、两个空转字段 |
+| **1.13.0** | 镜子 `fish_mirror`（今天陪得怎么样的横切面，只读）；小闹钟——还挂着的事陈了就在后面标一句，只加后缀不加行（`staleLoopDays`，0 = 不标）；测试 270 → 281 |
 | **1.9.1** | 判定层看得见「我这一轮做了什么」—— 他只说「继续」而我干了一整晚，从前一律判「不记」；补 4 项测试（196 → 200） |
 | **1.9.0** | 压缩后仍能翻到原文、回收站（`trash_list` / `trash_restore`）、召回过的衰减更慢、面板顶上铺情感日记那一行、日志轮转；补九个模块的测试（87 → 196） |
 | **1.8.2** | 市场卡片简介改写；设置页「当前默认卡」徽章改成真下拉 |

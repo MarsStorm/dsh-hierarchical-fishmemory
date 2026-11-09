@@ -138,6 +138,15 @@ export const CONFIG_SPEC = [
     label: '「忽然想起那一天」每天从情感日记里随机翻一天（0 = 关掉）',
   },
   {
+    key: 'staleLoopDays',
+    type: 'number',
+    default: 3,
+    min: 0,
+    max: 30,
+    step: 1,
+    label: '「小闹钟」还挂着的事几天没动就标一句陈了（0 = 不标）',
+  },
+  {
     key: 'stickyEnabled',
     type: 'boolean',
     default: true,
