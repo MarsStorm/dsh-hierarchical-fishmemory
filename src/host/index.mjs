@@ -87,6 +87,7 @@ import {
   recordTurn,
   registerSticky,
 } from '../core/sticky.mjs';
+import { LESSON_FILE, registerLesson } from '../core/lesson.mjs';
 import { summarizeBackup, writeBackupFile, backupFileName, buildRegisteredBackup, restoreViaRegistered } from '../core/backup.mjs';
 import { collectLayerReport, collectReview, collectStatsFromDisk } from '../core/stats.mjs';
 import {
@@ -526,6 +527,10 @@ export function apply(ctx, rawConfig) {
         needsRecentReplay: false,
         /** 我最后一次留下正文的那一轮 —— 用来数「闷了几轮」 */
         lastProseTurn: 0,
+        /** 模型没吐正文时留下的素材（内存里，不落盘）—— 下一轮重放一次 */
+        replayMaterial: null,
+        /** 重放过几次：给两次，还不行就认了 */
+        replayTries: 0,
       };
       sessionStates.set(sessionId, s);
     }
@@ -1683,6 +1688,8 @@ export function apply(ctx, rawConfig) {
           await consolidate(job.sessionId, job.agent, jobAbort.signal);
           // 顺手补一条上次被格式卡掉的。失败了不影响这一轮。
           await retryPending(job.sessionId, job.agent, jobAbort.signal);
+          // 上一轮模型压根没吐字的，拿当时那份素材重放一次
+          await retryFailedTurn(job.sessionId, job.agent, jobAbort.signal);
         } catch (err) {
           warn(`固化失败：${err instanceof Error ? err.message : String(err)}`);
         } finally {
@@ -1980,7 +1987,15 @@ export function apply(ctx, rawConfig) {
    * @param {any} agent
    * @param {AbortSignal} [signal] 这个任务自己的可中止信号（由 drain 提供）
    */
-  async function consolidate(sessionId, agent, signal) {
+  /**
+   * 固化一轮对话。
+   *
+   * `replay` 是「上一轮模型根本没吐字」时留下的素材：那时候 transcript 还在内存里，
+   * 但下一轮它就漂走了（滚动缓冲只留 40 条、固化只看最后 12 条）。
+   * 所以失败时**把当时那份 prompt 原样留住**，下一轮拿它再跑一次 ——
+   * 内容一个字不差，只是晚了一点。见 retryFailedTurn()。
+   */
+  async function consolidate(sessionId, agent, signal, replay = null) {
     const s = stateOf(sessionId);
     const llm = ctx.get('llm');
     if (llm === undefined) {
@@ -1997,63 +2012,72 @@ export function apply(ctx, rawConfig) {
       return;
     }
 
-    // 只取本次会话中"还没记过"的那部分：最近几轮足够，不用全量
-    const recent = s.transcript.slice(-12);
-    if (recent.length === 0) {
-      log('没有可总结的对话，跳过固化');
-      return;
+    let built;
+    let extendTarget = null;
+    if (replay !== null) {
+      // 重放：用当时那份素材，不重新取材（transcript 已经漂走了）
+      built = { system: replay.system, user: replay.user };
+      extendTarget = replay.extendTarget ?? null;
+      log(`重放上一轮没写成的固化（${built.user.length} 字素材，原轮次 ${replay.turn ?? "—"}）`);
+    } else {
+      // 只取本次会话中"还没记过"的那部分：最近几轮足够，不用全量
+      const recent = s.transcript.slice(-12);
+      if (recent.length === 0) {
+        log('没有可总结的对话，跳过固化');
+        return;
+      }
+
+      log(`固化开始：${recent.length} 条消息 → ${provider}/${model}`);
+
+      const transcript = recent
+        .map((m) => `${m.role === 'user' ? '他' : '我'}：${m.text}`)
+        .join('\n\n');
+
+      // 隐私：先洗再发。密钥硬拦 + 第三方泛化都在这一步生效。
+      const scrubOpts = {
+        thirdParty: config.thirdPartyRedaction !== false,
+        amountThreshold: config.amountThreshold,
+      };
+      const scrubbed = scrub(transcript, scrubOpts);
+
+      const recentDiary = archive.diary
+        .slice(-5)
+        .map((e) => `- ${e.text}`)
+        .join('\n');
+
+      // ── 能不能续写上一条？──
+      //
+      // 固化每次看"最后 12 条消息"，越往后素材越全 —— 同一段对话会被续着写
+      // 成 138 / 232 / 309 字三张快照，讲的是同一件事，占掉「最近的事」三个位。
+      // 所以：同一个 session、轮数差在窗口内、而且还没到 appendMaxChars，
+      // 就把上一条一起给模型，让它只写"多出来的那部分"。
+      // 默认从 4 调到 20（2026-10-27）。4 轮太窄：实测五分钟里写了三条同一件事。
+  const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWindowTurns : 20;
+      const appendMax = DEFAULT_CONSOLIDATION.appendMaxChars;
+      const lastEvent = [...archive.diary]
+        .reverse()
+        .find((e) => e.kind !== 'note' && e.session === sessionId);
+      extendTarget =
+        lastEvent &&
+        Number.isFinite(lastEvent.turn) &&
+        s.turn - lastEvent.turn <= appendWindow &&
+        lastEvent.text.length < appendMax
+          ? lastEvent
+          : null;
+      // 两种都打 —— 下次一眼看出是"没找到可续的"还是"找到了但模型不听话"
+      log(
+        extendTarget
+          ? `续写判断：接上一条 ${extendTarget.id}（轮数差 ${s.turn - extendTarget.turn}，${extendTarget.text.length} 字）`
+          : `续写判断：没有可续的（最后一条事件 turn=${lastEvent?.turn ?? "—"}，本轮 turn=${s.turn}）`,
+      );
+
+      built = buildConsolidationInput({
+        transcript: scrubbed.text,
+        relationship: archive.relationship,
+        recentDiary,
+        extend: extendTarget,
+      });
     }
-
-    log(`固化开始：${recent.length} 条消息 → ${provider}/${model}`);
-
-    const transcript = recent
-      .map((m) => `${m.role === 'user' ? '他' : '我'}：${m.text}`)
-      .join('\n\n');
-
-    // 隐私：先洗再发。密钥硬拦 + 第三方泛化都在这一步生效。
-    const scrubOpts = {
-      thirdParty: config.thirdPartyRedaction !== false,
-      amountThreshold: config.amountThreshold,
-    };
-    const scrubbed = scrub(transcript, scrubOpts);
-
-    const recentDiary = archive.diary
-      .slice(-5)
-      .map((e) => `- ${e.text}`)
-      .join('\n');
-
-    // ── 能不能续写上一条？──
-    //
-    // 固化每次看"最后 12 条消息"，越往后素材越全 —— 同一段对话会被续着写
-    // 成 138 / 232 / 309 字三张快照，讲的是同一件事，占掉「最近的事」三个位。
-    // 所以：同一个 session、轮数差在窗口内、而且还没到 appendMaxChars，
-    // 就把上一条一起给模型，让它只写"多出来的那部分"。
-    // 默认从 4 调到 20（2026-10-27）。4 轮太窄：实测五分钟里写了三条同一件事。
-const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWindowTurns : 20;
-    const appendMax = DEFAULT_CONSOLIDATION.appendMaxChars;
-    const lastEvent = [...archive.diary]
-      .reverse()
-      .find((e) => e.kind !== 'note' && e.session === sessionId);
-    const extendTarget =
-      lastEvent &&
-      Number.isFinite(lastEvent.turn) &&
-      s.turn - lastEvent.turn <= appendWindow &&
-      lastEvent.text.length < appendMax
-        ? lastEvent
-        : null;
-    // 两种都打 —— 下次一眼看出是"没找到可续的"还是"找到了但模型不听话"
-    log(
-      extendTarget
-        ? `续写判断：接上一条 ${extendTarget.id}（轮数差 ${s.turn - extendTarget.turn}，${extendTarget.text.length} 字）`
-        : `续写判断：没有可续的（最后一条事件 turn=${lastEvent?.turn ?? "—"}，本轮 turn=${s.turn}）`,
-    );
-
-    const built = buildConsolidationInput({
-      transcript: scrubbed.text,
-      relationship: archive.relationship,
-      recentDiary,
-      extend: extendTarget,
-    });
 
     const messages = [{ role: 'user', content: [{ type: 'text', text: built.user }] }];
     const opts = {
@@ -2130,12 +2154,45 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
     // 2026-10-30 本地改：DSH 的 finish 块是 { type:'finish', reason:{kind,failure} }，
     // 作者读的 finish.kind 永远是 undefined —— 报错被当成「模型没输出」丢掉。
     const finishReason = finish?.reason ?? finish;
+
+    // ── 没吐出正文：把素材留住，下一轮重放 ──
+    //
+    // 2026-11-10 补。日志里这一类是 `这一趟没拿到正文` 与 `模型调用失败`：
+    // 模型压根没写（流断了、上游返 reasoning 不给 content、模型名没配）。
+    // 待重试队列接不住这种 —— 它接的是"写了但格式歪"，这里连原文都没有。
+    // 于是那一轮就这么没了，而且下一轮 transcript 已经漂走，想补都补不回来。
+    //
+    // 现在：失败时把**当时那份 prompt** 原样存进内存（不落盘，隐私不外泄），
+    // 同一轮队列跑完前再试一次；还不行就留到下一轮。
+    const saveReplay = (reason) => {
+      if (replay !== null) {
+        warn(`重放又失败了（${reason}），这一条放弃`);
+        return;
+      }
+      s.replayMaterial = {
+        system: built.system,
+        user: built.user,
+        at: Number.isFinite(s.lastUserAt) ? s.lastUserAt : Date.now(),
+        turn: s.turn,
+        extendTarget: extendTarget ? { id: extendTarget.id, text: extendTarget.text } : null,
+        reason,
+      };
+      log(`这一轮的素材留住了（${reason}），下一轮重放一次`);
+    };
+
     if (finishReason?.kind === 'error' || finishReason?.kind === 'aborted') {
-      warn(`模型调用失败：${finishReason?.failure?.code ?? 'unknown'} ${finishReason?.failure?.message ?? ''}`);
+      const code = finishReason?.failure?.code ?? 'unknown';
+      warn(`模型调用失败：${code} ${finishReason?.failure?.message ?? ''}`);
+      // 模型名没配这种，重放一百次也一样 —— 不占队列
+      if (code !== 'UNKNOWN_MODEL') saveReplay(`模型调用失败 ${code}`);
       return;
     }
     if (finishReason?.kind === 'max-tokens') {
       warn('输出被 maxTokens 截断，这次不记（宁可漏记，不要坏档）');
+      return;
+    }
+    if (text === '') {
+      saveReplay('模型没吐正文');
       return;
     }
 
@@ -2168,8 +2225,13 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
       archive,
       parsed,
       {
-        // 用他那句话的时刻，不用落盘的时刻 —— 见 session/event 里 lastUserAt 的说明
-        now: Number.isFinite(s.lastUserAt) ? s.lastUserAt : Date.now(),
+        // 用他那句话的时刻，不用落盘的时刻 —— 见 session/event 里 lastUserAt 的说明。
+        // 重放时用**那一轮**的时刻：补记的条目该待在它原本那几天里。
+        now: Number.isFinite(replay?.at)
+          ? replay.at
+          : Number.isFinite(s.lastUserAt)
+            ? s.lastUserAt
+            : Date.now(),
         session: sessionId,
         sessionDiaryCount: s.diaryCount,
         sessionTurn: s.turn,
@@ -2203,6 +2265,8 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
       log(`待重试队列 +1（现在 ${readPending(pendingFile()).length} 条）`);
     }
 
+    s.replayMaterial = null;
+    s.replayTries = 0;
     index = buildIndex(archive.diary);
     if (typeof s.renderCache === 'object') s.renderCache = { turn: -1, text: '' };
     await persist();
@@ -2210,6 +2274,42 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
     // 刚写进去的条目也还没有 summary —— 顺手补一口。
     // 不 await：补总结不该让这一轮变慢。有 running 闸，重复调不会打起来。
     void backfillSummaries();
+  }
+
+  /**
+   * 上一轮模型没吐正文 —— 拿当时那份素材重放一次。
+   *
+   * 为什么值得单独留一份素材：固化的输入是「最后 12 条消息」。
+   * 等下一轮再想补，transcript 已经往前滚了 —— 这一轮的对话漂出窗口，
+   * 补出来的东西跟原本要记的不是一件事。
+   *
+   * 只在内存里（`s.replayMaterial`），不落盘：那份 prompt 里有对话原文，
+   * 落一份就等于多一个不受隐私洗的地方。
+   *
+   * 给两次机会。第三次还在失败，就是这个模型/这条路当下不通，
+   * 认了，写进日志就好 —— 宁可漏记，不要卡住进程。
+   */
+  async function retryFailedTurn(sessionId, agent, signal) {
+    const s = stateOf(sessionId);
+    const material = s.replayMaterial;
+    if (material === null || material === undefined) return;
+
+    const tries = (Number.isFinite(s.replayTries) ? s.replayTries : 0) + 1;
+    if (tries > 2) {
+      warn(`这一轮的素材重放两次都没成（${material.reason ?? '未知'}），放弃`);
+      s.replayMaterial = null;
+      s.replayTries = 0;
+      return;
+    }
+    s.replayTries = tries;
+    //先清掉：重放内部若再失败，会重新写一份新的
+    s.replayMaterial = null;
+    log(`重放上一轮没写成的固化（第 ${tries} 次，原因：${material.reason ?? '未知'}）`);
+    try {
+      await consolidate(sessionId, agent, signal, material);
+    } catch (err) {
+      warn(`重放失败：${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   /**
@@ -2876,6 +2976,12 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
       label: '小纸条',
       hint: '他说的原话 · 一轮一行 · ★ 是钉住的（永不过期）',
     },
+    {
+      key: 'lesson',
+      file: LESSON_FILE,
+      label: '教训',
+      hint: '我重复踩的坑 · [N] 是踩过几次 · 两次以上的每轮提醒',
+    },
   ];
 
   /** 读这两个本子。文件不在就当空的 —— 那是"还没写"，不是错误。 */
@@ -3220,6 +3326,8 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
                 file = path.join(archiveDirectory, HANDNOTE_FILE);
               } else if (target === 'sticky') {
                 file = path.join(archiveDirectory, STICKY_FILE);
+              } else if (target === 'lesson') {
+                file = path.join(archiveDirectory, LESSON_FILE);
               } else if (target === 'feelings') {
                 file = path.join(archiveDirectory, FEELINGS_MD);
               }
@@ -3270,6 +3378,8 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
                 file = path.join(archiveDirectory, HANDNOTE_FILE);
               } else if (target === 'sticky') {
                 file = path.join(archiveDirectory, STICKY_FILE);
+              } else if (target === 'lesson') {
+                file = path.join(archiveDirectory, LESSON_FILE);
               } else if (target === 'feelings') {
                 file = path.join(archiveDirectory, FEELINGS_MD);
               }
@@ -4678,6 +4788,21 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
     log(`小纸条已注册：${path.join(archiveDirectory, STICKY_FILE)}`);
   } catch (err) {
     warn(`小纸条注册失败（不影响聊天）：${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // ── 教训：重复踩过的坑 ──
+  //
+  // 跟小纸条一样落在独立文件上（不参与写盘重建），但它回答的是另一个问题：
+  // 纸条记"他说了什么"，教训记"我这个人容易怎么错"。
+  try {
+    registerLesson(ctx, {
+      file: path.join(archiveDirectory, LESSON_FILE),
+      log,
+      enabled: () => config.lessonEnabled !== false,
+    });
+    log(`教训已注册：${path.join(archiveDirectory, LESSON_FILE)}`);
+  } catch (err) {
+    warn(`教训注册失败（不影响聊天）：${err instanceof Error ? err.message : String(err)}`);
   }
 
   log(`已加载，档案目录：${archiveDirectory}`);

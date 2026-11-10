@@ -16,6 +16,7 @@ import { HANDNOTE_FILE, MAX_LINE_CHARS, parseHandNote } from "./handnote.mjs";
 import { listDiaryPaths, readJsonOrNull, readTextOrNull } from "./fsx.mjs";
 import { SHALLOW_FILE } from "./shallow.mjs";
 import { STICKY_FILE } from "./sticky.mjs";
+import { LESSON_FILE } from "./lesson.mjs";
 import { findDuplicates, findValueConflicts } from "./conflicts.mjs";
 import { estimateTokens } from "./tokenize.mjs";
 import { pendingPath, readPending } from "./pending.mjs";
@@ -329,6 +330,7 @@ export function collectLayerReport(options = {}) {
   }
   push("人格手记", "handnote", readText(join(diaryDir, HANDNOTE_FILE)));
   push("小纸条", "sticky", readText(join(diaryDir, STICKY_FILE)));
+  push("教训", "lesson", readText(join(diaryDir, LESSON_FILE)));
   // 待重试队列：**积压了要看得见**。
   //
   // 2026-11-10 加。这队列是"暂时没写进去"的东西，正常应该一条两条就清掉；

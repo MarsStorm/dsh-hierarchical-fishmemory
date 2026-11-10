@@ -180,6 +180,12 @@ export const CONFIG_SPEC = [
     label: '「小纸条」每轮最多注入几条',
   },
   {
+    key: 'lessonEnabled',
+    type: 'boolean',
+    default: true,
+    label: '记住我重复踩的坑（踩过两次以上的每轮提醒）',
+  },
+  {
     key: 'maxShowPerTurn',
     type: 'number',
     default: 4,

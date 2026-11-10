@@ -2,5 +2,7 @@
   "meta": {
     "title": "Memories That Belong to Us",
     "description": "A new conversation still remembers you. Shared time (what happened), emotional diary (how I felt), persona notes, and short-term memory with a 7-day TTL — all local."
-  }
+  },
+  "fieldLessonEnabled": "Remember my own repeat mistakes",
+  "lessonEnabledHint": "Mistakes made twice or more get injected every turn"
 }

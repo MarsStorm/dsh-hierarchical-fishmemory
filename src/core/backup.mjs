@@ -22,6 +22,7 @@ import { listDiaryNames, readJsonOrNull, readTextOrNull } from "./fsx.mjs";
 import { HANDNOTE_FILE } from "./handnote.mjs";
 import { SHALLOW_FILE } from "./shallow.mjs";
 import { STICKY_FILE, STICKY_ARCHIVE_FILE } from "./sticky.mjs";
+import { LESSON_FILE } from "./lesson.mjs";
 
 /** 备份文件的格式标签，写在 `backup.meta.format` 里。 */
 export const BACKUP_FORMAT = "dsh-hierarchical-fishmemory/backup";
@@ -117,6 +118,7 @@ export function collectBackup(options = {}) {
     handnote: diaryDir ? readText(join(diaryDir, HANDNOTE_FILE)) ?? "" : "",
     sticky: diaryDir ? readText(join(diaryDir, STICKY_FILE)) ?? "" : "",
     stickyArchive: diaryDir ? readText(join(diaryDir, STICKY_ARCHIVE_FILE)) ?? "" : "",
+    lesson: diaryDir ? readText(join(diaryDir, LESSON_FILE)) ?? "" : "",
     shallow: shallowRaw ?? { version: 1, entries: [], expired: [] },
     archive: {
       relationship: diaryDir ? readJsonDefault(join(diaryDir, "relationship.json")) : null,
@@ -299,6 +301,10 @@ export function planRestore(backup, { memoryLayout, diaryDir, mode = "replace", 
     writes.push({ kind: "stickyArchive", file: join(diaryDir, STICKY_ARCHIVE_FILE), content: backup.stickyArchive });
   }
   if (merge) skipped.push({ kind: "stickyArchive", reason: "合并模式下小纸条旧档以本地为准" });
+  if (!merge && typeof backup?.lesson === "string" && backup.lesson !== "") {
+    writes.push({ kind: "lesson", file: join(diaryDir, LESSON_FILE), content: backup.lesson });
+  }
+  if (merge) skipped.push({ kind: "lesson", reason: "合并模式下教训以本地为准" });
   if (backup?.shallow && Array.isArray(backup.shallow.entries)) {
     const entries = merge
       ? mergeShallowEntries(local?.shallowEntries ?? [], backup.shallow.entries)
