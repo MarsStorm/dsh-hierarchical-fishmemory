@@ -25,7 +25,7 @@
  */
 
 import { estimateTokens, truncateToTokens } from './tokenize.mjs';
-import { calendarDaysBetween, dayLabel, softWhen, stripTimeWords, whenStamp } from './timeline.mjs';
+import { calendarDaysBetween, dayLabel, softWhen, startOfDay, stripTimeWords, whenStamp } from './timeline.mjs';
 
 /** 默认注入预算（token）。可被 config.budgetTokens 覆盖。 */
 export const DEFAULT_BUDGET = 2000;
@@ -493,6 +493,74 @@ export function renderRecent(entries, shown, now = Date.now(), limit = 12) {
   return lines.join('\n');
 }
 
+
+
+/**
+ * 挑「最近的事」：**按天铺开，不是按条往前抓。**
+ *
+ * ── 为什么 ──
+ *
+ * 原来这里是 `events.slice(-8)` —— 最新的 8 条。看着没问题，实际结果很歪：
+ * 我们常常一个晚上连着聊二十来轮，那 8 条全是**同一夜**的，
+ * 再往前的四五天一条都进不来。日志里一天 27 条、隔壁那天 0 条，就是这么来的。
+ *
+ * 于是"最近"变成了"上一场对话"，而不是"最近这些天"。人不是这样记的：
+ * 他记得昨天怎么过的，也记得前天。
+ *
+ * ── 规则 ──
+ *
+ * 从新到旧走一遍，**同一天最多留 perDay 条**；先按这个规则凑不满 limit，
+ * 再把被跳过的按新旧补进来 —— 免得"一天聊了 27 轮"反而只留 2 条。
+ *
+ * 排序不动：返回的仍是旧→新（跟 renderRecent 的输入一致）。
+ *
+ * @param {object[]} events 已按时间升序排好的日记条目
+ * @param {number} limit 最多几条
+ * @param {{perDay?: number}} [options]
+ * @returns {object[]}
+ */
+export function pickRecent(events, limit, options = {}) {
+  const list = Array.isArray(events) ? events : [];
+  const n = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 8;
+  const perDay = Number.isFinite(options.perDay) && options.perDay > 0 ? options.perDay : 2;
+  if (list.length <= n) return list.slice();
+
+  const picked = [];
+  const skipped = [];
+  const seen = new Map();
+
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const e = list[i];
+    const ts = Number.isFinite(e?.updated_at) ? e.updated_at : e?.created_at;
+    if (!Number.isFinite(ts)) {
+      skipped.push(e);
+      continue;
+    }
+    const day = startOfDay(ts);
+    const count = seen.get(day) ?? 0;
+    if (count < perDay) {
+      seen.set(day, count + 1);
+      picked.push(e);
+    } else {
+      skipped.push(e);
+    }
+  }
+
+  // 凑不满就补：被跳过的按"新→旧"的顺序往回填
+  for (const e of skipped) {
+    if (picked.length >= n) break;
+    picked.push(e);
+  }
+
+  // 恢复旧→新
+  return picked
+    .sort((a, b) => {
+      const ta = Number.isFinite(a?.updated_at) ? a.updated_at : (a?.created_at ?? 0);
+      const tb = Number.isFinite(b?.updated_at) ? b.updated_at : (b?.created_at ?? 0);
+      return ta - tb;
+    })
+    .slice(-n);
+}
 
 /**
  * 想起来的旧事。最多两条。

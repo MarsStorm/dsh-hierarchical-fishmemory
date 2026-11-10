@@ -18,6 +18,7 @@ import { SHALLOW_FILE } from "./shallow.mjs";
 import { STICKY_FILE } from "./sticky.mjs";
 import { findDuplicates, findValueConflicts } from "./conflicts.mjs";
 import { estimateTokens } from "./tokenize.mjs";
+import { pendingPath, readPending } from "./pending.mjs";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const readTextDefault = readTextOrNull;
@@ -328,6 +329,23 @@ export function collectLayerReport(options = {}) {
   }
   push("人格手记", "handnote", readText(join(diaryDir, HANDNOTE_FILE)));
   push("小纸条", "sticky", readText(join(diaryDir, STICKY_FILE)));
+  // 待重试队列：**积压了要看得见**。
+  //
+  // 2026-11-10 加。这队列是"暂时没写进去"的东西，正常应该一条两条就清掉；
+  // 要是攒到十几条，说明模型一直在把 JSON 写歪 —— 那是提示词的问题，
+  // 得有人看见才知道。放在体检页上，比埋在日志第 2043 行强。
+  try {
+    const waiting = readPending(pendingPath(diaryDir));
+    if (waiting.length > 0) {
+      push(
+        `待重试（${waiting.length} 条）`,
+        "pending",
+        waiting.map((w) => `- ${w.reason || "格式不合格"}（试过 ${w.tries ?? 0} 次）`).join("\n"),
+      );
+    }
+  } catch {
+    /* 队列坏了不影响体检 */
+  }
   push("情感日记", "feelings", readText(join(diaryDir, FEELINGS_MD)));
   try {
     const store = JSON.parse(String(readText(join(diaryDir, SHALLOW_FILE)) ?? "{}") || "{}");

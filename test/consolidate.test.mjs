@@ -111,3 +111,36 @@ test('normalizeDiaryEntry：未知 kind 退化成 chat', () => {
   assert.equal(normalizeDiaryEntry({ id: 'a', text: 'x', kind: '新类型' }).kind, 'chat');
   assert.equal(normalizeDiaryEntry({ id: 'a', text: 'x', kind: 'win' }).kind, 'win');
 });
+
+// ── 续写超长：按句子截，不再整段丢（2026-11-10）──
+//
+// 原来一句「续写后超过 400 字，丢弃」就把补充整段扔掉，而补充的往往是
+// "这件事的后半段"——前半句留了，重点没了。
+
+import { applyConsolidation, clipAtSentence } from '../src/core/consolidate.mjs';
+
+test('clipAtSentence：优先停在句号上', () => {
+  const text = '第一句说完了。第二句也说完了。第三句很长很长很长很长很长。';
+  const cut = clipAtSentence(text, 12);
+  assert.ok(cut.length <= 12);
+  assert.ok(cut.endsWith('。'), `应该断在句号：${cut}`);
+});
+
+test('clipAtSentence：找不到句号就硬截，但绝不超过长度', () => {
+  const cut = clipAtSentence('没有标点的一句话一直写下去写下去写下去', 8);
+  assert.equal(cut.length, 8);
+});
+
+test('续写超长：留下前半段，不整段丢', () => {
+  const base = '他让我查国内的额度。'.repeat(10); // 90 字
+  const a = archiveWith([entry('d1', { text: base, turn: 1 })]);
+  const parsed = {
+    diary: { append: '后来我发现是国内站的额度是 0，所以每个请求都先失败再翻到国际站。'.repeat(12), salience: 0.7 },
+  };
+  const r = applyConsolidation(a, parsed, { now, session: 's1', extendId: 'd1' });
+  assert.equal(r.appended, true, '应该续上了');
+  const text = r.archive.diary[0].text;
+  assert.ok(text.length > base.length, '正文确实变长了');
+  assert.ok(text.includes('额度是 0'), '关键的后半句留住了');
+  assert.ok(r.notes.some((n) => n.includes('按句子截')), `日志要说清楚截过：${r.notes.join(' / ')}`);
+});

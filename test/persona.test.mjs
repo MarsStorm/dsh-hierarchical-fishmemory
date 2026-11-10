@@ -56,3 +56,51 @@ test('预算够的时候一条都不少，也不报截断', () => {
   assert.equal(rendered.dropped.length, 0);
   assert.ok(rendered.text.includes('按你的想法来呗'));
 });
+
+// ── 「最近的事」按天铺开（2026-11-10）──
+//
+// 原来 slice(-8)：一晚上聊 20 轮，那 8 条全是同一夜，前几天一条进不来。
+// 于是"最近"变成了"上一场对话"。
+
+import { pickRecent } from '../src/core/persona.mjs';
+
+test('pickRecent：一晚上聊很多轮，也不会把前几天挤没', () => {
+  const now = at('2026-11-10', 23, 0);
+  const events = [];
+  // 11-10 那晚 20 条
+  for (let i = 0; i < 20; i += 1) {
+    events.push(entry(`n${i}`, now - i * 60_000, `今晚第 ${i} 件事`));
+  }
+  // 前面四天，每天 2 条
+  for (let d = 1; d <= 4; d += 1) {
+    for (let k = 0; k < 2; k += 1) {
+      events.push(entry(`d${d}_${k}`, now - d * 86_400_000 - k * 3600_000, `第 ${d} 天的事 ${k}`));
+    }
+  }
+  events.sort((a, b) => a.created_at - b.created_at);
+
+  const picked = pickRecent(events, 8);
+  assert.equal(picked.length, 8);
+
+  const days = new Set(picked.map((e) => new Date(e.created_at + TZ).toISOString().slice(0, 10)));
+  assert.ok(days.size >= 4, `应该铺到好几天：${[...days].join(',')}`);
+
+  const tonight = picked.filter((e) => e.id.startsWith('n')).length;
+  assert.equal(tonight, 2, '同一晚最多留 2 条');
+});
+
+test('pickRecent：全都发生在一天，就照旧填满', () => {
+  const now = at('2026-11-10', 23, 0);
+  const events = Array.from({ length: 20 }, (_, i) =>
+    entry(`n${i}`, now - i * 60_000, `今晚第 ${i} 件事`),
+  ).sort((a, b) => a.created_at - b.created_at);
+  const picked = pickRecent(events, 8);
+  assert.equal(picked.length, 8, '凑不满时要按新旧补回来');
+  assert.equal(picked[picked.length - 1].id, 'n0', '最新的必须在里面');
+});
+
+test('pickRecent：条数不够就原样返回', () => {
+  const now = at('2026-11-10', 23, 0);
+  const events = [entry('a', now - 1000, '一'), entry('b', now, '二')];
+  assert.equal(pickRecent(events, 8).length, 2);
+});

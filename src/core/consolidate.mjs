@@ -291,6 +291,73 @@ export function applySummaries(archive, map, now = Date.now()) {
  * @param {string} [input.recentDiary]     最近几条日记，避免写重
  * @returns {{system: string, user: string}}
  */
+/**
+ * 按**句子边界**截断，尽量把整句留下。
+ *
+ * 找不到句号就退回硬截断 —— 但硬截断也比整段丢掉好。
+ *
+ * @param {string} text
+ * @param {number} room 还能放多少字
+ * @returns {string}
+ */
+export function clipAtSentence(text, room) {
+  const s = String(text ?? '');
+  if (room <= 0) return '';
+  if (s.length <= room) return s;
+  const head = s.slice(0, room);
+  // 从后往前找最近的句末标点
+  const m = head.match(/^[\s\S]*[。！？…\n]/);
+  if (m && m[0].trim().length >= Math.min(40, room * 0.5)) return m[0].trimEnd();
+  return head.trimEnd();
+}
+
+/**
+ * 「把上次那段写歪的回答，重新整理成合法 JSON」。
+ *
+ * 为什么要单独一个提示词，而不是把原文重新走一遍固化：
+ * 原文是**模型自己读过整场对话之后写出来的东西** —— 那份理解已经在了，
+ * 缺的只是格式。重走一遍固化等于让它重新读一遍上下文、重新判断一次，
+ * 既慢又可能给出不同的结论（甚至这次直接 skip 掉）。
+ *
+ * 所以这里只做一件事：**照着它自己的意思，把话摆成 JSON。**
+ * 明确禁止新增、禁止删减、禁止改口 —— 它不是重新写日记，是把手稿抄正。
+ */
+export const RETRY_SYSTEM = `上一次你写过一段日记，但格式不合格，档案没能收下。
+
+现在只做一件事：**把它原样整理成合法 JSON**。
+
+- 不要新增事实，不要删掉信息，不要改口说"算了不值得记"。
+- 如果它本来就是一段可以收进日记的话，就放进 diary.text。
+- 如果它其实表示"这轮没什么可记的"，输出 {"skip":true}。
+- 只输出 JSON 本身。不要解释，不要 markdown 围栏。
+
+{
+  "skip": boolean,
+  "diary": {
+    "text": string,
+    "kind": "failure" | "win" | "chat" | "disclosure" | "grievance",
+    "salience": number,
+    "resolved": boolean | null
+  },
+  "relationship": { "nickname": string | null, "familiarityDelta": number }
+}
+
+text 一条 200 字以内，用「我」写，只写发生了什么，不写心情。
+不记可识别细节：真名、地址、电话、金额都不要。`;
+
+/**
+ * 重试用的输入。
+ *
+ * @param {string} raw 上次模型输出的原文
+ * @returns {{system: string, user: string}}
+ */
+export function buildRetryInput(raw) {
+  return {
+    system: RETRY_SYSTEM,
+    user: `【上次的输出】\n${String(raw ?? '').trim()}`,
+  };
+}
+
 export function buildConsolidationInput(input = {}) {
   const chunks = [];
 
@@ -539,20 +606,37 @@ export function applyConsolidation(archive, rawParsed, context = {}, options = {
     const i = next.diary.findIndex((e) => e.id === extendId);
     if (i < 0) {
       notes.push('要续写的那条找不到了，丢弃');
-    } else if (next.diary[i].text.length + 1 + appendText.length > appendMax) {
-      notes.push(`续写后超过 ${appendMax} 字，丢弃`);
     } else {
       const sal = clamp(rawDiary.salience, 0, 1, 0.5);
-      const merged = next.diary[i].text + '\n' + appendText;
-      next.diary[i] = {
-        ...next.diary[i],
-        text: merged,
-        salience: Math.max(next.diary[i].salience ?? 0, sal),
-        updated_at: now,
-      };
-      notes.push('续写到已有那条');
-      accepted = true;
-      appended = true;
+      const room = appendMax - next.diary[i].text.length - 1;
+      // 2026-11-10 改：超长不再整段丢。
+      //
+      // 原来一句「续写后超过 400 字，丢弃」就把整段补充扔了 —— 而补充的
+      // 往往正是"这件事的后半段"：前面记了"他开始折腾模型"，后面那句
+      // "最后发现是国内站额度是 0"才是重点。留前半句扔后半句，等于只记了一半。
+      //
+      // 现在按句子边界截到刚好装得下，装不下的才舍，并且明说舍了多少。
+      // （超长的根因在 appendMaxChars 这个配置上，那是另一件事。）
+      const kept = appendText.length <= room ? appendText : clipAtSentence(appendText, room);
+      if (kept === '') {
+        notes.push(`续写后超过 ${appendMax} 字，一句都装不下，丢弃`);
+      } else {
+        const merged = next.diary[i].text + '\n' + kept;
+        next.diary[i] = {
+          ...next.diary[i],
+          text: merged,
+          salience: Math.max(next.diary[i].salience ?? 0, sal),
+          updated_at: now,
+        };
+        if (kept.length < appendText.length) {
+          notes.push(
+            `续写太长，按句子截到 ${kept.length} 字（原 ${appendText.length} 字，上限 ${appendMax}）`,
+          );
+        }
+        notes.push('续写到已有那条');
+        accepted = true;
+        appended = true;
+      }
     }
   }
 

@@ -42,7 +42,14 @@ import {
 import { SUPPRESS_RE } from '../core/gate.mjs';
 import { buildIndex, selectMemories, searchScores, queryHasSubstance, looksLikeWork, parseTimeHint, DEFAULT_RECALL_OPTIONS } from '../core/recall.mjs';
 import { scrub } from '../core/privacy.mjs';
-import { renderMemoryBlock } from '../core/persona.mjs';
+import { pickRecent, renderMemoryBlock } from '../core/persona.mjs';
+import {
+  PENDING_FILE as PENDING_QUEUE_FILE,
+  pushPending,
+  readPending,
+  requeuePending,
+  takePending,
+} from '../core/pending.mjs';
 import { addLoop, doneLoop, loopsPath, openLoops, renderLoops } from '../core/loops.mjs';
 import { renderLoopsAnnotated } from '../core/loops.mjs';
 import { annotateLoops, buildMirror, renderMirror } from '../core/mirror.mjs';
@@ -61,6 +68,7 @@ import { buildJudgeInput, parseVerdict, JUDGE_MAX_TOKENS } from '../core/judge.m
 import { selectHandNotes, HANDNOTE_FILE, HANDNOTE_TEMPLATE } from '../core/handnote.mjs';
 import {
   buildConsolidationInput,
+  buildRetryInput,
   parseConsolidation,
   applyConsolidation,
   decayArchive,
@@ -364,6 +372,8 @@ export function apply(ctx, rawConfig) {
   const config = resolveConfig(rawConfig);
   /** 档案目录：在 apply 时一次算定，之后全程不变 */
   const archiveDirectory = resolveArchiveDir(config);
+  /** 「这次没写成，下次再试」的队列（不受写盘覆盖，见 pending.mjs 顶部） */
+  const pendingFile = () => path.join(archiveDirectory, PENDING_QUEUE_FILE);
   // 一行说清"档案到底落在哪"，**不受 debugLog 管**。
   //
   // 社区那个 [object Object] 的 bug：五秒钟的事，因为没有一行输出，
@@ -1224,7 +1234,9 @@ export function apply(ctx, rawConfig) {
       //
       // 取的是 **events**，不是整个日记 —— 判断（`kind: "note"`）那一栏已经下线，不渲染。
       const recentCount = Number.isFinite(config.recentEntries) ? config.recentEntries : 8;
-      const recent = recentCount > 0 ? events.slice(-recentCount) : [];
+      // 按天铺开，不是抓最新 8 条 —— 一晚上聊 20 轮的话，slice(-8) 会全是那一夜，
+      // 再往前几天一条都进不来。见 persona.mjs 的 pickRecent。
+      const recent = recentCount > 0 ? pickRecent(events, recentCount) : [];
       const recentIds = new Set(recent.map((e) => e.id));
 
       // ⚠️ **召回池里不能有「最近的事」那几条。**
@@ -1559,6 +1571,15 @@ export function apply(ctx, rawConfig) {
 
         s.turn += 1;
         s.lastUserText = text;
+        // 这句话**是他什么时候说的**，不是"我什么时候整理的"。
+        //
+        // 2026-11-10 加。原来日记条目一律用落盘那一刻当日期，于是通宵那晚
+        // 十一点半说的话，会被记成第二天凌晨 —— 而"凌晨两点他还在问我插件的事"
+        // 这件事本身，正是最该留下来的细节。跨天聊的时候差得最明显。
+        s.lastUserAt = Number.isFinite(event.data?.created_at)
+          ? event.data.created_at
+          : Date.now();
+        s.userAt = s.lastUserAt;
         s.renderCache = { turn: -1, text: '' }; // 新一轮，作废缓存
         if (SUPPRESS_RE.test(text)) s.suppressedUntil = s.turn;
         s.transcript.push({ role: 'user', text });
@@ -1660,6 +1681,8 @@ export function apply(ctx, rawConfig) {
         }, JOB_TIMEOUT_MS);
         try {
           await consolidate(job.sessionId, job.agent, jobAbort.signal);
+          // 顺手补一条上次被格式卡掉的。失败了不影响这一轮。
+          await retryPending(job.sessionId, job.agent, jobAbort.signal);
         } catch (err) {
           warn(`固化失败：${err instanceof Error ? err.message : String(err)}`);
         } finally {
@@ -2120,12 +2143,24 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
     try {
       parsed = parseConsolidation(text);
     } catch (err) {
-      // 解析失败就丢弃，绝不把半成品写进档案
-      warn(
-        err instanceof ConsolidationParseError
-          ? `日记解析失败，丢弃：${err.message}`
-          : `日记解析异常，丢弃：${String(err)}`,
-      );
+      // 半成品绝不写进档案 —— 但**也别扔**。
+      //
+      // 2026-11-10 改。原来这里一句 warn 就 return：模型明明读完了整场对话、
+      // 也写出来了，只因为格式差一点，那一整轮就从记忆里消失了。
+      // 日志 76 次「收到第一个 chunk」、26 次「字段不完整，丢弃」——
+      // 三分之一的轮次是这么没的。
+      //
+      // 现在把它的原文收进待重试队列，下一轮让模型把手稿抄成 JSON。
+      const reason =
+        err instanceof ConsolidationParseError ? err.message : String(err);
+      warn(`日记解析失败，先存进待重试队列：${reason}`);
+      const queued = pushPending(pendingFile(), {
+        raw: text,
+        reason,
+        at: Number.isFinite(s.lastUserAt) ? s.lastUserAt : Date.now(),
+        session: sessionId,
+      });
+      if (queued.item) log(`待重试队列 +1（现在 ${readPending(pendingFile()).length} 条）`);
       return;
     }
 
@@ -2133,7 +2168,8 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
       archive,
       parsed,
       {
-        now: Date.now(),
+        // 用他那句话的时刻，不用落盘的时刻 —— 见 session/event 里 lastUserAt 的说明
+        now: Number.isFinite(s.lastUserAt) ? s.lastUserAt : Date.now(),
         session: sessionId,
         sessionDiaryCount: s.diaryCount,
         sessionTurn: s.turn,
@@ -2155,6 +2191,17 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
       log('续写完成（没有新增条目）');
     }
     for (const n of applied.notes) log(n);
+    // 「字段不完整」不是解析错误，是解析成功了但 diary 那块缺东西 ——
+    // 同样别丢，原文进队列，下一轮抄正。
+    if (applied.notes.includes('日记字段不完整，丢弃')) {
+      pushPending(pendingFile(), {
+        raw: text,
+        reason: '日记字段不完整',
+        at: Number.isFinite(s.lastUserAt) ? s.lastUserAt : Date.now(),
+        session: sessionId,
+      });
+      log(`待重试队列 +1（现在 ${readPending(pendingFile()).length} 条）`);
+    }
 
     index = buildIndex(archive.diary);
     if (typeof s.renderCache === 'object') s.renderCache = { turn: -1, text: '' };
@@ -2163,6 +2210,101 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
     // 刚写进去的条目也还没有 summary —— 顺手补一口。
     // 不 await：补总结不该让这一轮变慢。有 running 闸，重复调不会打起来。
     void backfillSummaries();
+  }
+
+  /**
+   * 把队列里一条「上次没写成」的日记，请模型抄成合法 JSON 再收下。
+   *
+   * 为什么值得多花一次调用：那一条的内容是模型**读过整场对话**之后写出来的，
+   * 比丢掉的任何东西都贵。一次抄正的成本，远小于丢一轮。
+   *
+   * 一轮只试**一条**：不抢正常固化的窗口，也不在上下文紧张时雪上加霜。
+   */
+  async function retryPending(sessionId, agent, signal) {
+    const queued = readPending(pendingFile());
+    if (queued.length === 0) return;
+
+    const llm = ctx.get('llm');
+    if (llm === undefined) return;
+    const selection = ctx.get('agentDefaultModel')?.currentSelection?.() ?? undefined;
+    const provider = selection?.provider;
+    const model = config.model || selection?.model;
+    if (typeof provider !== 'string' || typeof model !== 'string') return;
+
+    const item = takePending(pendingFile());
+    if (!item) return;
+    const tries = (Number.isFinite(item.tries) ? item.tries : 0) + 1;
+    log(`重试一条没写成的日记（第 ${tries} 次，原因：${item.reason || '格式不合格'}）`);
+
+    const built = buildRetryInput(item.raw);
+    const opts = {
+      provider,
+      model,
+      system: built.system,
+      messages: [{ role: 'user', content: [{ type: 'text', text: built.user }] }],
+      maxTokens: config.maxTokens,
+      temperature: 0,
+      signal: signal ?? abort.signal,
+    };
+    if (typeof config.reasoningEffort === 'string' && config.reasoningEffort.trim() !== '') {
+      opts.reasoningEffort = config.reasoningEffort.trim();
+    }
+
+    let text = '';
+    try {
+      for await (const chunk of llm.stream(opts)) {
+        if (chunk?.type === 'text-delta') text += chunk.text;
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const back = requeuePending(pendingFile(), item);
+      warn(
+        back.kept
+          ? `重试失败，放回队列（第 ${back.tries} 次）：${msg}`
+          : `重试失败三次，这一条放弃：${msg}`,
+      );
+      return;
+    }
+
+    let parsed;
+    try {
+      parsed = parseConsolidation(text);
+    } catch (err) {
+      const back = requeuePending(pendingFile(), item);
+      warn(
+        back.kept
+          ? `抄正后仍不合格，放回队列（第 ${back.tries} 次）：${err instanceof Error ? err.message : String(err)}`
+          : '抄正三次仍不合格，这一条放弃',
+      );
+      return;
+    }
+
+    // 用**当时**的时间落账，不是现在 —— 补记的条目也该待在它原本那几天里
+    const applied = applyConsolidation(
+      archive,
+      parsed,
+      {
+        now: Number.isFinite(item.at) ? item.at : Date.now(),
+        session: item.session || sessionId,
+      },
+      {
+        minSalience: config.minSalience,
+        maxTraitConfidence: DEFAULT_CONSOLIDATION.maxTraitConfidence,
+      },
+    );
+    archive = applied.archive;
+    for (const n of applied.notes) log(n);
+
+    if (applied.notes.includes('日记字段不完整，丢弃')) {
+      requeuePending(pendingFile(), item);
+      return;
+    }
+
+    if (applied.accepted) {
+      log('补记成功（这一条上次被格式卡掉了）');
+      index = buildIndex(archive.diary);
+      await persist();
+    }
   }
 
   /* ── 回收站 ── */
