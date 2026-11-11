@@ -148,7 +148,13 @@ test('lookUnfinished：只看尾巴，不改他的话', () => {
   assert.deepEqual(lookUnfinished('当我没说'), { unfinished: true, kind: 'retracted' });
   assert.deepEqual(lookUnfinished('其实我想说…'), { unfinished: true, kind: 'trailing' });
   assert.deepEqual(lookUnfinished('我想说的是...'), { unfinished: true, kind: 'trailing' });
-  assert.deepEqual(lookUnfinished('那个'), { unfinished: true, kind: 'trailing' });
+  // 2026-11-11 改：孤零零一个「那个」不再算断句。
+  // 拿真实纸条对账过 —— 带「那个 / 就是 / 然后」的 12 条里，真断句的 0 条。
+  assert.deepEqual(lookUnfinished('那个'), { unfinished: false, kind: '' });
+  assert.deepEqual(lookUnfinished('那个……'), { unfinished: true, kind: 'trailing' });
+  assert.deepEqual(lookUnfinished('webdav那个不用修，其他的都修了吧'), { unfinished: false, kind: '' });
+  // 前面带一句开头的"算了"也要认出来（「那个……算了」以前漏判）
+  assert.deepEqual(lookUnfinished('那个算了'), { unfinished: true, kind: 'retracted' });
   assert.deepEqual(lookUnfinished('今天挺开心的'), { unfinished: false, kind: '' });
   assert.deepEqual(lookUnfinished(''), { unfinished: false, kind: '' });
   // 收回去的话不算"拖尾巴"，两者分得开

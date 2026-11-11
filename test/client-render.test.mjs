@@ -274,6 +274,9 @@ test('设置页能整棵树渲染出来（含云端表单）', async () => {
   assert.ok(flat.includes('fieldStickyEnabled'), '要有「小纸条」总开关');
   assert.ok(flat.includes('fieldStickyTtlDays'), '要有小纸条保留天数');
   assert.ok(flat.includes('fieldStickyMaxInject'), '要有小纸条每轮注入条数');
+  // 1.17.0 加的两项：半句话会自己回来
+  assert.ok(flat.includes('fieldUnfinishedEnabled'), '要有「半句话会自己回来」那条');
+  assert.ok(flat.includes('fieldUnfinishedPerTurn'), '要有「每轮最多浮几条」');
 });
 
 test('主面板四个页签都渲染得出来', async () => {

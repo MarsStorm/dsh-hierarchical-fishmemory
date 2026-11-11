@@ -88,6 +88,11 @@ import {
   registerSticky,
 } from '../core/sticky.mjs';
 import { LESSON_FILE, registerLesson } from '../core/lesson.mjs';
+import {
+  UNFINISHED_FILE,
+  harvest as harvestUnfinished,
+  registerUnfinished,
+} from '../core/unfinished.mjs';
 import { summarizeBackup, writeBackupFile, backupFileName, buildRegisteredBackup, restoreViaRegistered } from '../core/backup.mjs';
 import { collectLayerReport, collectReview, collectStatsFromDisk } from '../core/stats.mjs';
 import {
@@ -1859,6 +1864,7 @@ export function apply(ctx, rawConfig) {
 
   const stickyFile = () => path.join(archiveDirectory, STICKY_FILE);
   const stickyArchive = () => path.join(archiveDirectory, STICKY_ARCHIVE_FILE);
+  const unfinishedFile = () => path.join(archiveDirectory, UNFINISHED_FILE);
 
   /**
    * 这一轮我干了什么（一句话，给纸条当注解）。
@@ -1904,6 +1910,18 @@ export function apply(ctx, rawConfig) {
         enabled: true,
       });
       if (r.written) log(`小纸条记了一条：「${said.slice(0, 16)}」`);
+      // 顺手把"没说完的那几句"记进发酵册子。
+      // 放这儿是因为纸条刚写完、文件是热的，只读一次就够；失败不影响别的。
+      if (r.written && config.unfinishedEnabled !== false) {
+        try {
+          const added = harvestUnfinished(unfinishedFile(), readNotesSync(stickyFile()), {
+            at: Number.isFinite(s.lastUserAt) ? s.lastUserAt : Date.now(),
+          });
+          if (added > 0) log(`半句话收进册子 +${added}（下次夜里也许能想起来）`);
+        } catch (err) {
+          warn(`半句话收进册子失败（不影响别的）：${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
     } catch (err) {
       warn(`小纸条写失败（不影响别的）：${err instanceof Error ? err.message : String(err)}`);
     }
@@ -4803,6 +4821,22 @@ export function apply(ctx, rawConfig) {
     log(`教训已注册：${path.join(archiveDirectory, LESSON_FILE)}`);
   } catch (err) {
     warn(`教训注册失败（不影响聊天）：${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // ── 没说完的半句话，会自己发酵 ──
+  //
+  // 只做一件事：让当时没接住的半句话，过三五天在夜里自己浮上来一次。
+  // 问过就不问了 —— 追着问是骚扰，不是在意。
+  try {
+    registerUnfinished(ctx, {
+      file: path.join(archiveDirectory, UNFINISHED_FILE),
+      log,
+      enabled: () => config.unfinishedEnabled !== false,
+      config: () => ({ maxPerTurn: config.unfinishedPerTurn }),
+    });
+    log(`未说完已注册：${path.join(archiveDirectory, UNFINISHED_FILE)}`);
+  } catch (err) {
+    warn(`未说完注册失败（不影响聊天）：${err instanceof Error ? err.message : String(err)}`);
   }
 
   log(`已加载，档案目录：${archiveDirectory}`);

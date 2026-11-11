@@ -4,5 +4,9 @@
     "description": "让新开的对话还记得你。人格内核 + 关系状态 + 情景日记，全部存在本地，换账号也能带走。"
   },
   "fieldLessonEnabled": "记住我踩过的坑",
-  "lessonEnabledHint": "重复踩两次以上的坑，每轮注入提醒自己"
+  "lessonEnabledHint": "重复踩两次以上的坑，每轮注入提醒自己",
+  "fieldUnfinishedEnabled": "半句话会自己回来",
+  "unfinishedEnabledHint": "当时没接住的半句话，三五天后的夜里浮上来问一句；问过就不再问",
+  "fieldUnfinishedPerTurn": "每轮最多浮几条",
+  "unfinishedPerTurnHint": "0 就是一条都不浮；超过 1 条容易变成清算账目"
 }

@@ -478,6 +478,8 @@ window.__ModuleLoader__.load({
       { key: "stickyTtlDays", type: "number", min: 1, max: 365, def: 30, label: "fieldStickyTtlDays", hint: "stickyTtlDaysHint" },
       { key: "stickyMaxInject", type: "number", min: 1, max: 20, def: 8, label: "fieldStickyMaxInject", hint: "stickyMaxInjectHint" },
       { key: "lessonEnabled", type: "checkbox", def: 1, label: "fieldLessonEnabled", hint: "lessonEnabledHint" },
+      { key: "unfinishedEnabled", type: "checkbox", def: 1, label: "fieldUnfinishedEnabled", hint: "unfinishedEnabledHint" },
+      { key: "unfinishedPerTurn", type: "number", min: 0, max: 3, def: 1, label: "fieldUnfinishedPerTurn", hint: "unfinishedPerTurnHint" },
       { key: "staleLoopDays", type: "number", min: 0, max: 30, def: 3, label: "fieldStaleLoopDays", hint: "staleLoopDaysHint" },
       { key: "silenceNudge", type: "number", min: 0, max: 20, def: 3, label: "fieldSilenceNudge", hint: "silenceNudgeHint" }
     ];
