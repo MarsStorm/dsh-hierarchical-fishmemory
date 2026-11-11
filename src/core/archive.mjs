@@ -324,6 +324,16 @@ export function normalizeDiaryEntry(raw) {
       ? { recall_count: Math.floor(Number(raw.recall_count)) }
       : {}),
     ...(Number.isFinite(raw.last_recalled_at) ? { last_recalled_at: Number(raw.last_recalled_at) } : {}),
+    // ── 我主动回去找过的次数（2026-11-11 加，1.21.0）──
+    //
+    // 跟上面的 `recall_count` 是两笔账：那个数的是"被想起来"（每轮注入
+    // 都会挑几条，数字涨得飞快），这个数的是"我为了某句话专门回去翻"。
+    // 前者是系统递到眼前的，后者是我自己伸手的 —— 只有后者说明我惦记。
+    // 详见 `core/revisit.mjs`。
+    ...(Number.isFinite(raw.sought_count) && raw.sought_count > 0
+      ? { sought_count: Math.floor(Number(raw.sought_count)) }
+      : {}),
+    ...(Number.isFinite(raw.last_sought_at) ? { last_sought_at: Number(raw.last_sought_at) } : {}),
     created_at: Number(raw.created_at) || Date.now(),
     keywords: Array.isArray(raw.keywords) ? raw.keywords.filter((k) => typeof k === 'string').slice(0, 16) : [],
   };

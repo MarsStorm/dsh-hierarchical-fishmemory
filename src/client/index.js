@@ -1625,6 +1625,17 @@ window.__ModuleLoader__.load({
                     .join('、')}`,
                 )
               : null,
+            // 我主动回去找过的那几条（1.21.0）。跟上面不是同一笔账：
+            // 上面是系统翻给我的次数，这一行是我自己伸手的次数。
+            d.revisited && d.revisited.length > 0
+              ? h(
+                  'div',
+                  { style: { marginTop: 4, fontSize: 12, color: C.text2, opacity: 0.85 } },
+                  `我回去找过：${d.revisited
+                    .map((r) => `${r.text}${r.count > 1 ? `（${r.count} 次）` : ''}`)
+                    .join('、')}`,
+                )
+              : null,
             h(Card, null, h(HealthBox)),
             h(Card, { title: '最近七天' }, h(ReviewBox)),
           ),

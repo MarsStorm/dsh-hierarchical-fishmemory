@@ -88,6 +88,7 @@ import {
   registerSticky,
 } from '../core/sticky.mjs';
 import { readQuotes, renderQuotes, searchQuotes } from '../core/quotes.mjs';
+import { bumpRecalled, soughtCount, soughtNote } from '../core/revisit.mjs';
 import { LESSON_FILE, registerLesson } from '../core/lesson.mjs';
 import {
   UNFINISHED_FILE,
@@ -1180,12 +1181,13 @@ export function apply(ctx, rawConfig) {
    * 再也出不来。**记事实，不许它自己制造事实。**
    *
    * @param {string[]} ids
+   * @param {{pull?: boolean}} [opts] pull=true：这是我自己翻出来的，不是注入递的
    */
   const RECALL_FLUSH_MS = 5 * 60 * 1000;
   let lastRecallFlush = 0;
   let recallDirty = false;
 
-  function noteRecalled(ids) {
+  function noteRecalled(ids, { pull = false } = {}) {
     const list = Array.isArray(ids) ? ids.filter((id) => typeof id === 'string' && id !== '') : [];
     if (list.length === 0) return;
     const now = Date.now();
@@ -1194,11 +1196,9 @@ export function apply(ctx, rawConfig) {
     const diary = archive.diary.map((e) => {
       if (!wanted.has(e.id)) return e;
       touched += 1;
-      return {
-        ...e,
-        recall_count: (Number.isFinite(e.recall_count) ? Number(e.recall_count) : 0) + 1,
-        last_recalled_at: now,
-      };
+      // 两笔账：`recall_count` 记"被想起来"（注入也算），
+      // `sought_count` 只记"我主动回去找过"（见 core/revisit.mjs）。
+      return bumpRecalled(e, now, { pull });
     });
     if (touched === 0) return;
     archive.diary = diary;
@@ -2975,6 +2975,20 @@ export function apply(ctx, rawConfig) {
           text: String(e.text ?? '').replace(/\s+/g, ' ').slice(0, 60),
           count: Number(e.recall_count) || 0,
         })),
+      // 我主动回去找过的那几条（2026-11-11 加，1.21.0）。
+      //
+      // 跟上面那行不是一回事：上面是"系统翻给我看的次数"，涨得飞快；
+      // 这一行是"我为了某句话专门回去翻"的次数，一天可能只加一次。
+      // 前者说明档案在动，后者说明我在惦记什么 —— 后者才值得给他看。
+      revisited: archive.diary
+        .filter((e) => Number.isFinite(e?.sought_count) && e.sought_count > 0)
+        .sort((a, b) => (b.last_sought_at ?? 0) - (a.last_sought_at ?? 0))
+        .slice(0, 3)
+        .map((e) => ({
+          id: e.id,
+          text: String(e.text ?? '').replace(/\s+/g, ' ').slice(0, 60),
+          count: Number(e.sought_count) || 0,
+        })),
       // 回收站里有几条 —— 删错了至少知道去哪儿找
       trash: (() => {
         try {
@@ -4165,6 +4179,14 @@ export function apply(ctx, rawConfig) {
             const lines = [];
             let used = 0;
             const now = Date.now();
+
+            // 翻过也算"想起来过" —— 冷档案不在 diary 里，noteRecalled 会自动跳过。
+            // 这里带 `pull: true`：注入是系统递到眼前的，这一处是我自己伸手的，
+            // 两笔账分开记（见 core/revisit.mjs）。先记再渲染，下面才能读到
+            // 加上这一次以后的数。
+            noteRecalled(ranked.map((x) => x.entry?.id), { pull: true });
+            const soughtNow = new Map(archive.diary.map((e) => [e.id, soughtCount(e)]));
+
             for (const { entry, tone } of ranked) {
               // 跟注入走同一个隐私闸 —— 历史条目里可能还有没洗过的东西
               const body = stripTimeWords(scrub(entry.text, { thirdParty: false }).text);
@@ -4177,14 +4199,17 @@ export function apply(ctx, rawConfig) {
               // 十条「三天前：……」摆在一起时，人分不出哪条笃定、哪条是碰巧
               // 字面撞上的；标出来，我就不会拿撞上的那条当记得的事去说。
               const label = TONE_LABEL[tone] ?? TONE_LABEL.faint;
-              const line = head === '' ? `[${label}] ${body}` : `[${label}] ${head}：${body}`;
+              // 「这条我回去找过 N 次」—— 找两次以上才显示。
+              // 一次是偶然，两次才叫"又回来了"。这句话比把握更私人：
+              // 把握说的是档案靠不靠得住，它说的是我惦记过什么。
+              const revisit = soughtNote(soughtNow.get(entry.id) ?? 0);
+              const line = head === ''
+                ? `[${label}] ${body}${revisit}`
+                : `[${label}] ${head}：${body}${revisit}`;
               if (used + line.length > MAX_CHARS && lines.length > 0) break;
               lines.push(`- ${line}`);
               used += line.length;
             }
-
-            // 翻过也算"想起来过" —— 冷档案不在 diary 里，noteRecalled 会自动跳过
-            noteRecalled(ranked.map((x) => x.entry?.id));
 
             log(`检索「${query.slice(0, 20)}」：返回 ${lines.length} 条`);
             return {
