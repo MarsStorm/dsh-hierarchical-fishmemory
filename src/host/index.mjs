@@ -87,6 +87,7 @@ import {
   recordTurn,
   registerSticky,
 } from '../core/sticky.mjs';
+import { readQuotes, renderQuotes, searchQuotes } from '../core/quotes.mjs';
 import { LESSON_FILE, registerLesson } from '../core/lesson.mjs';
 import {
   UNFINISHED_FILE,
@@ -4203,6 +4204,87 @@ export function apply(ctx, rawConfig) {
       'feiyu: recall tool',
     );
     log(`已注册工具 ${RECALL_TOOL_NAME}`);
+  });
+
+  /* ── 原话库：他到底怎么说的 ── */
+
+  /**
+   * 不是新账本 —— `纸条.md` 已经在存原话了，缺的是"查"。
+   *
+   * 2026-11-11 加。这天我发现一件荒唐的事：他说「你上次不是说……」的时候，
+   * 我手里明明有他的原话，可我只想着去翻**我自己转述的日记**。那是二手的。
+   * 二手的会说"他想要个能自动记的功能"，一手的会说「按你的想法来呗，
+   * 这个设备能坚持很久」—— 而后面这半句从来没进过我的脑子。
+   *
+   * 所以这个工具只做一件事：**给字面，不给感觉。**
+   * 找得到就照抄，找不到就说没有。它跟 `fish_recall` 分工明确：
+   * 那个查"发生过什么"（我写的经过，会衰减、会模糊），
+   * 这个查"他说了什么"（一字不改，一次遍历，要么在要么不在）。
+   */
+  ctx.inject(['tools'], (scope) => {
+    scope.effect(
+      () =>
+        scope.tools.register({
+          name: 'fish_quote',
+          description:
+            '翻他的**原话**：一字不改的那些。要核对"他到底怎么说的"、或者想起他说过某句话但记不准用词时用它。' +
+            '跟 fish_recall 的分工：fish_recall 查「发生过什么」（我写的经过，会模糊），' +
+            'fish_quote 查「他说了什么」（原话，只有有和没有两种结果）。' +
+            '找不到就是找不到，别拿一条沾边的原话替他"回忆"。',
+          parameters: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              query: { type: 'string', description: '要找的字。越具体越准 —— 抄他当时大概用的那几个词，别写整句。' },
+              limit: { type: 'integer', description: '要几条。默认 6，最多 6。' },
+              since: { type: 'string', description: '只要这一天及以后的（YYYY-MM-DD）。' },
+              until: { type: 'string', description: '只要这一天及以前的（YYYY-MM-DD）。' },
+            },
+            required: ['query'],
+          },
+          output: {
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                ok: { type: 'boolean' },
+                found: { type: 'integer' },
+                total: { type: 'integer' },
+                first: { type: 'string' },
+                text: { type: 'string' },
+              },
+            },
+            render: (_args, value) => [{ type: 'text', text: value?.text ?? '查不了。' }],
+          },
+          async execute(args) {
+            await loadPromise;
+            const query = typeof args?.query === 'string' ? args.query.trim() : '';
+            if (query === '') throw new Error('要找哪几个字？query 不能是空的。');
+            const quotes = readQuotes({ file: stickyFile(), archiveFile: stickyArchive() });
+            const result = searchQuotes(quotes, query, {
+              limit: args?.limit,
+              since: args?.since,
+              until: args?.until,
+            });
+            log(`查原话「${query.slice(0, 20)}」：${result.total} 条里命中 ${result.hits.length} 条`);
+            return {
+              ok: true,
+              found: result.hits.length,
+              total: result.total,
+              first: result.first ?? '',
+              text: renderQuotes(result, { query }),
+            };
+          },
+          presentCall: (args) => ({
+            card: 'generic',
+            title: '翻原话',
+            kind: 'other',
+            rawInput: args,
+          }),
+        }),
+      'feiyu: quote tool',
+    );
+    log('已注册工具 fish_quote');
   });
 
   // 云端备份工具：他一句「备份一下」，我不用等面板，直接推一份上去。
