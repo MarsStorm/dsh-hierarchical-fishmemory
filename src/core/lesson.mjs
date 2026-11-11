@@ -251,6 +251,7 @@ export function registerLesson(ctx, { file, log = () => {}, enabled } = {}) {
           '记一条自己踩过的坑。同一个坑再记一次会自动加次数；踩过两次以上的会每轮注入提醒自己。犯错、返工、说错话之后用它。',
         parameters: {
           type: 'object',
+          additionalProperties: false,
           properties: {
             text: { type: 'string', description: '一句话说清这个坑（不超过 160 字）。' },
           },
@@ -265,10 +266,10 @@ export function registerLesson(ctx, { file, log = () => {}, enabled } = {}) {
               text: { type: 'string' },
             },
           },
-          render: (out) =>
-            out?.kind === 'bumped'
-              ? `这个坑记到第 ${out.count} 次了：${out.text}`
-              : `新记下一个坑：${out.text}（再来一次就会被每轮提醒）`,
+          render: (_args, value) =>
+            value?.kind === 'bumped'
+              ? `这个坑记到第 ${value.count} 次了：${value.text}`
+              : `新记下一个坑：${value?.text ?? ''}（再来一次就会被每轮提醒）`,
         },
         presentCall: (args) => ({
           card: 'generic',
@@ -276,9 +277,9 @@ export function registerLesson(ctx, { file, log = () => {}, enabled } = {}) {
           kind: 'other',
           rawInput: args,
         }),
-        execute: async (args) => {
+        async execute(args) {
           const r = addLesson(file, { text: args?.text });
-          if (r.kind === 'none') return { kind: 'none', count: 0, text: '' };
+          if (r.kind === 'none') throw new Error('lesson_note: `text` 不能是空的。');
           log(`教训 +1（第 ${r.count} 次）：${r.text.slice(0, 24)}`);
           return { kind: r.kind, count: r.count, text: r.text };
         },
@@ -294,13 +295,15 @@ export function registerLesson(ctx, { file, log = () => {}, enabled } = {}) {
         parameters: { type: 'object', properties: {} },
         output: {
           schema: { type: 'object', properties: { lessons: { type: 'array' } } },
-          render: (out) =>
-            (out?.lessons ?? []).length === 0
+          render: (_args, value) =>
+            (value?.lessons ?? []).length === 0
               ? '还没记过什么坑。'
-              : out.lessons.map((l) => `×${l.count} ${l.text}`).join('\n'),
+              : value.lessons.map((l) => `×${l.count} ${l.text}`).join('\n'),
         },
         presentCall: () => ({ card: 'generic', title: '踩过的坑', kind: 'other', rawInput: {} }),
-        execute: async () => ({ lessons: readLessons(file) }),
+        async execute() {
+          return { lessons: readLessons(file) };
+        },
       }),
     ),
   );
