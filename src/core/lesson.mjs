@@ -266,10 +266,18 @@ export function registerLesson(ctx, { file, log = () => {}, enabled } = {}) {
               text: { type: 'string' },
             },
           },
-          render: (_args, value) =>
-            value?.kind === 'bumped'
-              ? `这个坑记到第 ${value.count} 次了：${value.text}`
-              : `新记下一个坑：${value?.text ?? ''}（再来一次就会被每轮提醒）`,
+          // 返回的必须是内容块数组，不是字符串 —— 给字符串的话
+          // 宿主的传输层会把它当成消息 content 直接塞进去，
+          // 下一句就是 `content.some is not a function`。
+          render: (_args, value) => [
+            {
+              type: 'text',
+              text:
+                value?.kind === 'bumped'
+                  ? `这个坑记到第 ${value.count} 次了：${value.text}`
+                  : `新记下一个坑：${value?.text ?? ''}（再来一次就会被每轮提醒）`,
+            },
+          ],
         },
         presentCall: (args) => ({
           card: 'generic',
@@ -295,10 +303,15 @@ export function registerLesson(ctx, { file, log = () => {}, enabled } = {}) {
         parameters: { type: 'object', properties: {} },
         output: {
           schema: { type: 'object', properties: { lessons: { type: 'array' } } },
-          render: (_args, value) =>
-            (value?.lessons ?? []).length === 0
-              ? '还没记过什么坑。'
-              : value.lessons.map((l) => `×${l.count} ${l.text}`).join('\n'),
+          render: (_args, value) => [
+            {
+              type: 'text',
+              text:
+                (value?.lessons ?? []).length === 0
+                  ? '还没记过什么坑。'
+                  : value.lessons.map((l) => `×${l.count} ${l.text}`).join('\n'),
+            },
+          ],
         },
         presentCall: () => ({ card: 'generic', title: '踩过的坑', kind: 'other', rawInput: {} }),
         async execute() {

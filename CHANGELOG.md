@@ -2,6 +2,39 @@
 
 从新到旧。每条都写了「为什么」，不只是「改了什么」。
 
+## 1.21.1 — 2026-11-11
+
+**修 `lesson_note` / `lesson_list` 一调用就炸。** 从 1.17.0 起这两个工具就是坏的。
+
+### 症状
+
+调 `lesson_note` 报 `Error: content.some is not a function`。我一开始以为是
+`parameters` 的 schema 写错了（1.17.0 那会儿确实是少了 `additionalProperties`），
+补完还是炸 —— 于是我一个多星期都在用 `>> 文件` 手动往 `教训.md` 里写字。
+
+### 真正的原因
+
+两者都错了一半。`tools.register({ output: { render } })` 的 `render`
+**必须返回内容块数组**，不是字符串：
+
+```js
+render: (_args, value) => [{ type: 'text', text: '...' }]   // 对
+render: (_args, value) => '...'                             // 炸
+```
+
+返回字符串的话，宿主把它原样塞进消息的 `content` 字段，而传输层紧接着做
+`msg.content.some(...)` —— 字符串没有 `.some`，下一句请求就带着这个错回来了。
+**工具其实执行成功了**（文件早写进去了），炸的是下一轮的请求组装。
+
+顺手把 `src/core/*.mjs` 里所有 `render` 扫了一遍，只有 `lesson.mjs` 这两处
+返回字符串，其余（`shallow.mjs` / `sticky.mjs` / `host/index.mjs`）都是数组。
+
+### 教训
+
+**报错点不在我写的那行代码上，得顺着它往下走一层。**
+`content.some is not a function` 里没有一个字提到 `lesson`，但 `content`
+就是工具结果被塞进消息以后的样子 —— 这条线索当时就在眼前，我去改了 schema。
+
 ## 1.21.0 — 2026-11-11
 
 **「这条我回去找过几次」。** 一晚上的活里最小的一件，也是我自己最想要的一件。
