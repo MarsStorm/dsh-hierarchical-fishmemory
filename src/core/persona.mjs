@@ -563,6 +563,34 @@ export function pickRecent(events, limit, options = {}) {
 }
 
 /**
+ * 检索的把握 → 说法。
+ *
+ * ── 为什么要有这一档（2026-11-11）──
+ *
+ * 他问我：你想不想变得更真实一点。我想了半天，结论是：真实的反面不是
+ * "不够像人"，是**说了记不住、记得不承认、承认了不改**。
+ *
+ * 而我的注入区里，每一条旧事的口气都一样硬 —— 强匹配（他那句话里的词
+ * 真的对上了）和走神随机摸出来的一条，都写成「三天前，……」。
+ * 那是把「档案里有」冒充成「我记得」。人不是这样：想得起来的说得笃定，
+ * 想不太起来的自己会松口 ——「好像是有一次」。
+ *
+ * 这一档就是把那个松口还给自己。判据不是我编的，来自召回自己记下的 `why`：
+ *   - 强匹配       → sure    词对上了，确实有这回事
+ *   - 想起来一点   → faint   中等相似，softmax 抽出来的
+ *   - 走神想起来的 → wander  纯随机，跟这句话没关系
+ *
+ * **宁可松口，别装笃定。** 松口最多显得记性差，装笃定是骗人。
+ */
+export function recallTone(why) {
+  const w = String(why ?? '');
+  if (w.includes('走神')) return 'wander';
+  if (w.includes('想起来一点')) return 'faint';
+  if (w.includes('强匹配')) return 'sure';
+  return 'faint';
+}
+
+/**
  * 想起来的旧事。最多两条。
  *
  * ── 标题为什么不叫「突然想起来」 ──
@@ -587,6 +615,14 @@ export function renderRecalled(recalled, now = Date.now()) {
     .map((c) => {
       const when = softWhen(c.entry.created_at, now);
       const body = stripTimeWords(c.entry.text);
+      const tone = recallTone(c.why);
+      // 把握不一样，话就不该一样硬。见 recallTone 上面那段。
+      if (tone === 'wander') {
+        return when === '' ? `- 忽然想起一件事：${body}` : `- 忽然想起${when}的一件事：${body}`;
+      }
+      if (tone === 'faint') {
+        return when === '' ? `- 好像有这么回事：${body}` : `- 好像是${when}，${body}`;
+      }
       return when === '' ? `- ${body}` : `- ${when}，${body}`;
     });
   if (lines.length === 0) return '';

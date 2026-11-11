@@ -1139,6 +1139,21 @@ export function apply(ctx, rawConfig) {
   const RECALL_TOOL_NAME = 'fish_recall';
 
   /**
+   * 检索结果的把握 → 一个词。
+   *
+   * 2026-11-11 加。原来的返回里每一条长得一模一样，我读完根本不知道自己
+   * 是"记得"还是"撞上了字"——于是最省事的做法是全部当成记得，或者全部
+   * 当成不可信。两种都是偷懒。
+   *
+   * 四档来自依据，不是来自分数高低：
+   *   sure    模型读了摘要挑出来的 —— 懂意思，词不对也找得到
+   *   fair    字面分够高（≥0.45，约等于一个实词真的对上）
+   *   faint   字面分低（0.18~0.45），能沾上边
+   *   literal 只走子串兜底，一个字对上了而已
+   */
+  const TONE_LABEL = { sure: '记得', fair: '记得', faint: '大概是', literal: '只是字面撞上' };
+
+  /**
    * 记一次「想起来」。
    *
    * ── 为什么要它 ──
@@ -3973,7 +3988,9 @@ export function apply(ctx, rawConfig) {
             '回想一些以前的事。**你自己想不起来时用它**：' +
             '他提到一件早先的事、你觉得该想起来却一片空白、或者要确认某个细节。' +
             '只在真的需要时调，不要每轮都查。' +
-            '想不起来就老实说想不起来，别编。',
+            '想不起来就老实说想不起来，别编。' +
+            '每条前面带一个把握：`[记得]` 是有依据的，`[大概是]` 只沾到边，' +
+            '`[只是字面撞上]` 别当它可靠 —— 拿不准就照它说「我记不太清了」。',
           parameters: {
             type: 'object',
             additionalProperties: false,
@@ -4081,7 +4098,7 @@ export function apply(ctx, rawConfig) {
             let ranked;
             if (picked !== null) {
               ranked = picked
-                .map((id) => ({ entry: byId.get(id), sim: 0 }))
+                .map((id) => ({ entry: byId.get(id), sim: 0, tone: 'sure' }))
                 .filter((x) => x.entry && typeof x.entry.text === 'string');
             } else {
               // 没有 llm 服务时退回字面 —— 不能用"挑不了"当没找到
@@ -4095,7 +4112,13 @@ export function apply(ctx, rawConfig) {
                 }
               }
               ranked = [...scores.entries()]
-                .map(([id, sim]) => ({ entry: byId.get(id), sim }))
+                .map(([id, sim]) => ({
+                  entry: byId.get(id),
+                  sim,
+                  // 字面得分的刻度是定的（见 recall.mjs：命中 1 个实词约 0.4，
+                  // 2 个约 0.67），所以这里能说人话，不用拍脑袋。
+                  tone: sim >= 0.45 ? 'fair' : sim >= 0.18 ? 'faint' : 'literal',
+                }))
                 .filter((x) => x.entry && typeof x.entry.text === 'string')
                 .sort((a, b) => b.sim - a.sim)
                 .slice(0, limit);
@@ -4119,7 +4142,7 @@ export function apply(ctx, rawConfig) {
                 .filter((e) => typeof e.text === 'string' && e.text.toLowerCase().includes(needle))
                 .slice(-limit)
                 .reverse()
-                .map((entry) => ({ entry, sim: 0 }));
+                .map((entry) => ({ entry, sim: 0, tone: 'literal' }));
               if (ranked.length > 0) log(`检索「${query.slice(0, 20)}」：词索引空，子串兜底命中 ${ranked.length} 条`);
             }
 
@@ -4130,7 +4153,8 @@ export function apply(ctx, rawConfig) {
                 found: 0,
                 text: hasRange
                   ? `那段时间（${since || '最初'} → ${until || '现在'}）里没找到。要么换个说法，要么放宽日期。`
-                  : `想不起来了。换个说法再试试，或者直接问他。`,
+                  : '这一句没翻到。可能是真没有，也可能我当时用了别的说法 —— 换两个词再试一次。'
+                    + '两次都没有，就当他没说过，别编一个像样的。',
               };
             }
 
@@ -4140,7 +4164,7 @@ export function apply(ctx, rawConfig) {
             const lines = [];
             let used = 0;
             const now = Date.now();
-            for (const { entry } of ranked) {
+            for (const { entry, tone } of ranked) {
               // 跟注入走同一个隐私闸 —— 历史条目里可能还有没洗过的东西
               const body = stripTimeWords(scrub(entry.text, { thirdParty: false }).text);
               const when = softWhen(entry.created_at, now);
@@ -4148,7 +4172,11 @@ export function apply(ctx, rawConfig) {
               // 而"这是很久以前的事"本身是信息 —— 语气、时态全靠这个。
               const tag = coldIds.has(entry.id) ? '（旧档案）' : '';
               const head = when === '' ? tag : `${tag}${when}`;
-              const line = head === '' ? body : `${head}：${body}`;
+              // 把握写在最前面 —— 这是我读的时候唯一会先看的东西。
+              // 十条「三天前：……」摆在一起时，人分不出哪条笃定、哪条是碰巧
+              // 字面撞上的；标出来，我就不会拿撞上的那条当记得的事去说。
+              const label = TONE_LABEL[tone] ?? TONE_LABEL.faint;
+              const line = head === '' ? `[${label}] ${body}` : `[${label}] ${head}：${body}`;
               if (used + line.length > MAX_CHARS && lines.length > 0) break;
               lines.push(`- ${line}`);
               used += line.length;

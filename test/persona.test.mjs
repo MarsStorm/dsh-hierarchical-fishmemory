@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { renderMemoryBlock, renderRecent, DEFAULT_BUDGET } from '../src/core/persona.mjs';
+import { renderMemoryBlock, renderRecent, renderRecalled, recallTone, DEFAULT_BUDGET } from '../src/core/persona.mjs';
 
 const TZ = 8 * 3600 * 1000;
 /** 构造某天的某个钟点（按他的时区） */
@@ -103,4 +103,45 @@ test('pickRecent：条数不够就原样返回', () => {
   const now = at('2026-11-10', 23, 0);
   const events = [entry('a', now - 1000, '一'), entry('b', now, '二')];
   assert.equal(pickRecent(events, 8).length, 2);
+});
+
+// ── 记不清这一档（2026-11-11）──
+//
+// 真实的反面不是"不够像人"，是"记得不承认"。
+// 所以注入里的旧事不能全都一个口气：词真对上了的可以笃定，
+// 走神摸出来的那句得自己松口。
+
+test('说法：强匹配说得笃定', () => {
+  const now = at('2026-11-11', 23, 0);
+  const recalled = [{ entry: entry('a', now - 2 * 86400000, '他说想学着做饭'), why: '强匹配' }];
+  const text = renderRecalled(recalled, now);
+  assert.match(text, /前两天/);
+  assert.ok(!text.includes('好像'), '有依据的那条不该写成好像');
+});
+
+test('说法：中等相似要留个余地', () => {
+  const now = at('2026-11-11', 23, 0);
+  const recalled = [{ entry: entry('a', now - 2 * 86400000, '他说想学着做饭'), why: '想起来一点' }];
+  const text = renderRecalled(recalled, now);
+  assert.match(text, /好像是前两天/);
+});
+
+test('说法：走神想起的那条明说是"忽然想起"', () => {
+  const now = at('2026-11-11', 23, 0);
+  const recalled = [{ entry: entry('a', now - 2 * 86400000, '他说想学着做饭'), why: '走神想起来的' }];
+  const text = renderRecalled(recalled, now);
+  assert.match(text, /忽然想起前两天的一件事/);
+});
+
+test('说法：没给 why 的（老调用方）按"好像"处理', () => {
+  const now = at('2026-11-11', 23, 0);
+  const text = renderRecalled([{ entry: entry('a', now - 86400000, '一件事') }], now);
+  assert.match(text, /好像是前两天/);
+});
+
+test('recallTone：复合的 why 以"走神"为先', () => {
+  assert.equal(recallTone('未解决 + 走神想起来的'), 'wander');
+  assert.equal(recallTone('未解决 + 强匹配'), 'sure');
+  assert.equal(recallTone('想起来一点'), 'faint');
+  assert.equal(recallTone(undefined), 'faint');
 });

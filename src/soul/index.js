@@ -38,6 +38,7 @@ import { resolveDshHome } from "@deepseek-ai/dsh-home-paths";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { createMemoryLayout, normalizeMemoryTopic, retainMemoryEnds } from "./memory-layout.js";
 import { diffLines } from "./card-diff.mjs";
+import { countRetired, retireMatch, splitRetired } from "../core/retire.mjs";
 import { planCardSnapshots } from "./card-watch.mjs";
 import { applyRestore, backupFileName, collectBackup, parseBackup, planRestore, registerBackupBuilder, registerRestoreHandler, summarizeBackup, writeBackupFile } from "../core/backup.mjs";
 import { readDiaryEntries } from "../core/stats.mjs";
@@ -293,7 +294,14 @@ function apply(ctx, config) {
     const c = cfg();
     if (!c.memory?.inject) return "";
     if (skipsSubagentSections(c, assembly?.agent)) return "";
-    const { text, index: fullIndex } = memoryReadChain(assembly?.agent);
+    const { text: rawText, index: fullIndex } = memoryReadChain(assembly?.agent);
+    // 2026-11-11：**作废的行不进注入。**
+    //
+    // 深层记忆原来只往上加，于是「我当时的判断」和「后来推翻它的判断」
+    // 并排站着、一样粗一样黑。我读到的时候只能靠日期猜哪个算数，
+    // 猜错就是拿一个已经不成立的说法跟他讲道理，而我自己不知道。
+    // 退场的那些仍然留在文件里（memory_read 还看得见），只是不再摆到眼前。
+    const text = rawText ? splitRetired(rawText).live : rawText;
     const index = c.memory.layered && c.memory.recall === "keyword" && c.memory.indexMode === "recall"
       ? "Use memory_search(query) to find topic keys and summaries; memory_read(topic) retrieves full text."
       : fullIndex;
@@ -695,6 +703,7 @@ function apply(ctx, config) {
           truncated: { type: "boolean" },
           source: { type: "string" },
           topic: { type: "string" },
+          retired: { type: "integer" },
           content: { type: "string" },
         },
       },
@@ -702,6 +711,9 @@ function apply(ctx, config) {
         type: "text",
         text: value.exists
           ? `Memory from "${value.source}"${value.topic ? ` topic "${value.topic}"` : ""} (${value.bytes} bytes${value.truncated ? ", truncated" : ""}):\n${value.content}`
+            + (value.retired > 0
+              ? `\n\n（里面有 ${value.retired} 条后面挂着 ⟪作废 …⟫ —— 那些已经不算数了，不再进注入。留着是为了让我看得见自己改过口。）`
+              : "")
           : `Memory is empty or missing (scope: "${value.source}").`,
       }],
     },
@@ -713,7 +725,8 @@ function apply(ctx, config) {
       }
       const { exists, text, index, source, topic: resolvedTopic = "" } = memoryReadChain(agentOf(exec), topic);
       const full = [text, index].filter(Boolean).join("\n\n");
-      if (!exists || !full) return { exists: false, bytes: 0, truncated: false, source, topic: resolvedTopic, content: "" };
+      const retired = countRetired(text ?? "");
+      if (!exists || !full) return { exists: false, bytes: 0, truncated: false, source, topic: resolvedTopic, retired: 0, content: "" };
       rememberTopic(agentOf(exec), source, resolvedTopic);
       const MAX = 20000;
       const truncated = full.length > MAX;
@@ -726,6 +739,7 @@ function apply(ctx, config) {
         truncated,
         source,
         topic: resolvedTopic,
+        retired,
         content: truncated ? `${excerpt}\n…(truncated; beginning and end of core retained when layered; use a topic or file read for complete memory)…` : full,
       };
     },
@@ -797,6 +811,69 @@ function apply(ctx, config) {
       fileCache.delete(target.file);
       rememberTopic(agentOf(exec), target.scope, target.topic);
       return { bytes, scope: target.scope, topic: target.topic };
+    },
+  }));
+
+  ctx.tools.register(defineTool({
+    name: "memory_retire",
+    description:
+      "Mark one line of deep memory as NO LONGER TRUE, without deleting it. Use this when you have changed your mind about something you once wrote: instead of appending a contradicting line next to the old one (which leaves two equally loud claims), retire the old line — it disappears from the injected memory but stays readable here. Give a short phrase from that line as `match`; give `by` to say what replaced it. Retiring is not the same as being wrong: it only says this claim does not count any more.",
+    parameters: {
+      match: { type: "string", required: true, description: "A short phrase from the line to retire. It must appear in exactly the line(s) you mean — read the file first." },
+      by: { type: "string", description: "Optional: what replaced it, in one short clause. This is what makes the retirement readable later." },
+      topic: { type: "string", description: "Optional topic key in layered mode. Omit or pass core/core.md for core.md." },
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          hit: { type: "integer" },
+          scope: { type: "string" },
+          topic: { type: "string" },
+          text: { type: "string" },
+        },
+      },
+      render: (_args, value) => [{ type: "text", text: value.text }],
+    },
+    isConcurrencySafe: () => false,
+    async execute(args, exec) {
+      const match = String(args.match ?? "").trim();
+      if (!match) throw new Error("memory_retire: `match` must be non-empty");
+      const topic = normalizeMemoryTopic(args.topic);
+      if (topic && !cfg().memory?.layered) {
+        throw new Error("memory_retire: `topic` requires memory.layered to be enabled");
+      }
+      const target = memoryTarget(agentOf(exec), topic);
+      let before = "";
+      try {
+        before = await readFile(target.file, "utf8");
+      } catch {
+        return { hit: 0, scope: target.scope, topic: target.topic, text: "那个文件还不存在，没东西可以作废。" };
+      }
+      const { text, hit, lines } = retireMatch(before, { match, by: args.by });
+      if (hit === 0) {
+        const already = countRetired(before);
+        return {
+          hit: 0,
+          scope: target.scope,
+          topic: target.topic,
+          text: already > 0
+            ? `没找到「${match}」。这个文件里已经有 ${already} 条作废的了 —— 要么这段话抄错了，要么它已经退场了。`
+            : `没找到「${match}」。先把文件读一遍，抄一段里面真有的字。`,
+        };
+      }
+      await writeFile(target.file, text, "utf8");
+      fileCache.delete(target.file);
+      rememberTopic(agentOf(exec), target.scope, target.topic);
+      const list = lines.map((l) => l.replace(/^\s*[-*]\s*/, "")).join("\n");
+      return {
+        hit,
+        scope: target.scope,
+        topic: target.topic,
+        text: `作废了 ${hit} 行（scope "${target.scope}"${target.topic ? ` topic "${target.topic}"` : ""}）。`
+          + " 它不再进注入，但原文还在，memory_read 看得见。\n" + list,
+      };
     },
   }));
 
