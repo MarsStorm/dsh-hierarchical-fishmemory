@@ -117,7 +117,7 @@ test('normalizeDiaryEntry：未知 kind 退化成 chat', () => {
 // 原来一句「续写后超过 400 字，丢弃」就把补充整段扔掉，而补充的往往是
 // "这件事的后半段"——前半句留了，重点没了。
 
-import { applyConsolidation, clipAtSentence } from '../src/core/consolidate.mjs';
+import { applyConsolidation, clipAtSentence, parseSummaryResult } from '../src/core/consolidate.mjs';
 
 test('clipAtSentence：优先停在句号上', () => {
   const text = '第一句说完了。第二句也说完了。第三句很长很长很长很长很长。';
@@ -143,4 +143,49 @@ test('续写超长：留下前半段，不整段丢', () => {
   assert.ok(text.length > base.length, '正文确实变长了');
   assert.ok(text.includes('额度是 0'), '关键的后半句留住了');
   assert.ok(r.notes.some((n) => n.includes('按句子截')), `日志要说清楚截过：${r.notes.join(' / ')}`);
+});
+
+// ── 2026-11-13：整段 JSON 坏掉时把写完整的那几条捞回来 ──
+//
+// 日志里连着几天「这批一条都没解析出来（连续 3 次）」，一批 10 条全废。
+// 最常见的坏法是输出被 maxTokens 截在半路，`JSON.parse` 必失败，但前面每一条都是好的。
+
+test('parseSummaryResult：被截断的 JSON 也要把完整的条目捞回来', () => {
+  const cut = '{"items":[{"id":"a1","summary":"第一条"},{"id":"a2","summary":"第二条"},{"id":"a3","summ';
+  const map = parseSummaryResult(cut);
+  assert.equal(map.size, 2);
+  assert.equal(map.get('a1'), '第一条');
+  assert.equal(map.get('a2'), '第二条');
+  assert.equal(map.has('a3'), false, '半条不要');
+});
+
+test('parseSummaryResult：完整 JSON 的结果不变', () => {
+  const map = parseSummaryResult('{"items":[{"id":"a1","summary":"一"}]}');
+  assert.equal(map.size, 1);
+  assert.equal(map.get('a1'), '一');
+});
+
+test('parseSummaryResult：一句人话都捞不出来时，就是空的（不编）', () => {
+  assert.equal(parseSummaryResult('好的，我来总结一下这几条。').size, 0);
+  assert.equal(parseSummaryResult('').size, 0);
+  assert.equal(parseSummaryResult(null).size, 0);
+});
+
+test('parseSummaryResult：summary 里有引号、换行也不会切坏', () => {
+  const raw = '{"items":[{"id":"a1","summary":"他说\\"别改了\\"\\n然后就睡了"}]}';
+  const map = parseSummaryResult(raw);
+  assert.equal(map.size, 1);
+  assert.equal(map.get('a1'), '他说"别改了" 然后就睡了');
+});
+
+test('parseSummaryResult：截断 + 转义引号同时出现，捞回来的话仍然是原话', () => {
+  const cut = '{"items":[{"id":"a1","summary":"他说\\"别改了\\""},{"id":"a2","summ';
+  const map = parseSummaryResult(cut);
+  assert.equal(map.get('a1'), '他说"别改了"');
+});
+
+test('parseSummaryResult：超长的 summary 截到 80 字', () => {
+  const long = '很'.repeat(200);
+  const map = parseSummaryResult(`{"items":[{"id":"a1","summary":"${long}"}]}`);
+  assert.equal(map.get('a1').length, 80);
 });

@@ -669,7 +669,10 @@ export function apply(ctx, rawConfig) {
             model,
             system: built.system,
             messages: [{ role: 'user', content: [{ type: 'text', text: built.user }] }],
-            maxTokens: 600,
+            // 2026-11-13：600 太小。一批 10 条 × 每条 ≤80 字 + JSON 外壳，
+            // 加上推理模型的思考也算进这个预算，输出常被截在半路 ——
+            // 截一半的 JSON 解析必失败，于是「这批一条都没解析出来」。
+            maxTokens: 1200,
             temperature: 0,
             // 空字符串是非法档位 —— 实测会让 stream 直接不返回。
             // 跟固化那边保持一致：只有配置里真有值才传。
@@ -688,7 +691,13 @@ export function apply(ctx, rawConfig) {
         const map = parseSummaryResult(text);
         if (map.size === 0) {
           fails += 1;
-          warn(`补总结：这批一条都没解析出来（连续 ${fails} 次）`);
+          // 分开说：模型压根没吐正文 ≠ 吐了但格式坏。两者的下一步不一样，
+          // 只报「一条都没解析出来」的话，明天我还是不知道该怎么办。
+          if (text.trim() === '') {
+            warn(`补总结：模型没吐正文（连续 ${fails} 次）`);
+          } else {
+            warn(`补总结：这批一条都没解析出来（连续 ${fails} 次）｜原文前 160 字：${text.replace(/\s+/g, ' ').slice(0, 160)}`);
+          }
           if (fails >= 3) {
             warn('补总结：连着 3 批空，停手，下次启动再试');
             markBackfill(total, done, 'error');

@@ -334,6 +334,21 @@ export function normalizeDiaryEntry(raw) {
       ? { sought_count: Math.floor(Number(raw.sought_count)) }
       : {}),
     ...(Number.isFinite(raw.last_sought_at) ? { last_sought_at: Number(raw.last_sought_at) } : {}),
+    // ── 一句话摘要（2026-11-13 补回，1.25.1）──
+    //
+    // **这里曾经漏了 `summary`，于是「补总结」这个功能从上线起就没生效过。**
+    // 它算出来的摘要在内存里好好地写进了 archive，`persist()` 一出门就被这个
+    // 白名单吃掉 —— 磁盘上 114 条一条 summary 都没有。表现是每次启动都
+    // 重新报「N 条还没有，后台分批补」，补完看着成功（日志 +10 条），
+    // 下次启动又全都没有。**没报错，也没有任何一处提示，纯白干。**
+    //
+    // 跟 `sought_count` 当时（1.21.0）栽的是同一个坑：白名单式的归一化，
+    // 新字段不加一句就静默丢失。加字段的时候记得来这里加一行。
+    ...(() => {
+      if (typeof raw.summary !== 'string') return {};
+      const one = raw.summary.replace(/\s+/g, ' ').trim().slice(0, 80);
+      return one === '' ? {} : { summary: one };
+    })(),
     created_at: Number(raw.created_at) || Date.now(),
     keywords: Array.isArray(raw.keywords) ? raw.keywords.filter((k) => typeof k === 'string').slice(0, 16) : [],
   };

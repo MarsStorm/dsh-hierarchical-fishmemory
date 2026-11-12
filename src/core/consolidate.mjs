@@ -171,21 +171,46 @@ export function buildSummaryInput(entries = []) {
 export function parseSummaryResult(raw) {
   const out = new Map();
   const s = String(raw ?? '');
+  const put = (id, summary) => {
+    if (typeof id !== 'string' || typeof summary !== 'string') return;
+    const key = id.trim();
+    const val = summary.replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (key !== '' && val !== '') out.set(key, val);
+  };
+
   const a = s.indexOf('{');
   const b = s.lastIndexOf('}');
-  if (a < 0 || b <= a) return out;
-  let parsed;
-  try {
-    parsed = JSON.parse(s.slice(a, b + 1));
-  } catch {
-    return out;
+  if (a >= 0 && b > a) {
+    let parsed;
+    try {
+      parsed = JSON.parse(s.slice(a, b + 1));
+    } catch {
+      parsed = null;
+    }
+    if (parsed) {
+      for (const it of Array.isArray(parsed?.items) ? parsed.items : []) put(it?.id, it?.summary);
+      return out;
+    }
   }
-  const items = Array.isArray(parsed?.items) ? parsed.items : [];
-  for (const it of items) {
-    if (!it || typeof it.id !== 'string' || typeof it.summary !== 'string') continue;
-    const id = it.id.trim();
-    const summary = it.summary.replace(/\s+/g, ' ').trim().slice(0, 80);
-    if (id !== '' && summary !== '') out.set(id, summary);
+
+  // 2026-11-13：整段 JSON 坏掉时**别整批丢掉**，把已经写完整的那几条捞回来。
+  //
+  // 起因：日志里连着几天「这批一条都没解析出来（连续 3 次）」，一批 10 条全废、
+  // 重试三遍还是废、然后停手等下次启动 —— 而模型其实写了大半。
+  // 最常见的坏法是输出被 maxTokens 截在半路（最后一条 summary 断掉），
+  // 这时 `JSON.parse` 必失败，但前面的条目一条都不缺。
+  const pair = /"id"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"summary"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+  let m;
+  while ((m = pair.exec(s)) !== null) {
+    let id = m[1];
+    let summary = m[2];
+    try {
+      id = JSON.parse(`"${m[1]}"`);
+      summary = JSON.parse(`"${m[2]}"`);
+    } catch {
+      /* 转义坏了就用原样 */
+    }
+    put(id, summary);
   }
   return out;
 }
