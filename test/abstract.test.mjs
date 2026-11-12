@@ -214,3 +214,56 @@ test('跨节归并时，规律行落在第一节的开头', () => {
   assert.equal(lines[0], '## 2026-11-10 — 主题');
   assert.ok(isRuleLine(lines[2]), '紧跟标题与空行之后');
 });
+
+// ── 1.27.0：归并之前先看见"对不上的地方" ──
+//
+// 归并是单向的：盖章之后那几句就不再进注入了。要是规律句里把「不要」写成「要」，
+// 以后再没人翻开那几十行去发现它。所以归并前后各提示一次。
+const CONFLICT_DOC = `
+# 记忆
+## 坑：会静默失败的那些
+- 自动合并相似记忆要小心措辞
+- 不要自动合并相似记忆，宁可少并
+- 上限 200 字的时候先看日志
+- 上限 400 字的时候先看日志
+- 先看日志再动代码
+- 提交之前先跑一遍测试
+- 报缺陷之前先找证据
+- 报告成功和真的成功是两件事
+`;
+
+test('planSections：数出这一节里有几处否定/数字对不上', () => {
+  const plan = planSections(CONFLICT_DOC, { minCount: 3 });
+  const sec = plan.find((s) => s.section.includes('坑'));
+  assert.ok(sec, '应该找到那一节');
+  assert.ok(sec.conflicts.length >= 2, `至少数出两处，实际 ${sec.conflicts.length}`);
+  const marks = sec.conflicts.flatMap((c) => c.marks);
+  assert.ok(marks.includes('negation_difference'), '否定差异要数出来');
+  assert.ok(marks.includes('number_difference'), '数字差异要数出来');
+});
+
+test('planSections：不相干的两条不算差别（不然全是噪音）', () => {
+  const plan = planSections(CONFLICT_DOC, { minCount: 3 });
+  const sec = plan.find((s) => s.section.includes('坑'));
+  // 「先看日志再动代码」和「提交之前先跑一遍测试」都不含数字，也不该互相报
+  const words = sec.conflicts.map((c) => `${c.a}|${c.b}`);
+  assert.equal(
+    words.some((w) => w.includes('先看日志再动代码') && w.includes('提交之前')),
+    false,
+    '不相干的两条不该出现在差别清单里',
+  );
+});
+
+test('renderSuggestion：攒够的时候把差别一起说出来', () => {
+  const out = renderSuggestion(CONFLICT_DOC, { minCount: 3 });
+  assert.match(out, /攒了/);
+  assert.match(out, /对不上/);
+  assert.match(out, /别把差别抹平/);
+});
+
+test('mergeSection：归完把差别带回来', () => {
+  const r = mergeSection(CONFLICT_DOC, { section: '坑', rule: '先验再报', at: '2026-11-13', minCount: 3 });
+  assert.equal(r.hit, true);
+  assert.ok(Array.isArray(r.conflicts));
+  assert.ok(r.conflicts.length > 0, '归并结果里要带着差别，别让我事后才知道');
+});

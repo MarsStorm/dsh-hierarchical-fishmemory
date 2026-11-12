@@ -92,6 +92,23 @@ export function renderFragments({
         at,
       });
       if (text) parts.push(text);
+    } else {
+      // ── 整段被预算挤掉了，得说一声（1.27.0）──
+      //
+      // 1.23.0 起，`fragmentsMaxChars` 不够时纸条是**安静消失**的：
+      // 我那一轮读到的注入里一条纸条都没有，而我不知道是因为"没有纸条"
+      // 还是因为"没地方放"。两种都是"没有"，但一种要改预算，一种不用。
+      // 先看看是不是真有内容会被丢 —— 空的就别冤枉预算了。
+      const wouldHave = stickySectionText(stickyFile, {
+        ttlDays: c.stickyTtlDays,
+        maxInject: c.stickyMaxInject,
+        maxChars: 4000,
+        at,
+      });
+      if (wouldHave) {
+        parts.push(`（纸条这一段这次没地方放（只剩 ${Math.max(0, room)} 字）—— 用 sticky_list 看。）`);
+        log(`零碎记忆：纸条整段被预算挤掉（剩 ${Math.max(0, room)} 字 < ${STICKY_MIN_CHARS}）`);
+      }
     }
   }
 

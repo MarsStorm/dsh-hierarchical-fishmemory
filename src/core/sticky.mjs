@@ -386,12 +386,18 @@ export function renderSection(notes, config = {}) {
 
   const fresh = (notes ?? []).filter((n) => n.pinned || ageDays(n, at) <= ttl);
   if (fresh.length === 0) return '';
+  // ★ 钉住的先占位置。
+  // 1.27.0 之前是照文件顺序走的 —— 钉住只保证"不过期"，不保证"挤得进来"，
+  // 于是纸条一多，被挤掉的恰恰可能是他叫我一直记着的那一句。
+  // 钉住的意思就是"先放它"，那就得真的先放它。
+  const ordered = [...fresh].sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
 
   const lines = [`## 小纸条 · 他说过的原话（${ttl} 天内的都在这儿；★ 是他钉住的）`];
   let used = lines[0].length;
   let count = 0;
   let unfinished = 0;
-  for (const note of fresh) {
+  let dropped = 0;
+  for (const note of ordered) {
     if (count >= maxInject) break;
     const when = whenLabel(note, at);
     const head = `- ${note.pinned ? '★ ' : ''}${when ? `${when} · ` : ''}`;
@@ -414,6 +420,14 @@ export function renderSection(notes, config = {}) {
   }
   // 有断句的时候才多说这一行；没有就一个字都不多花。
   if (unfinished > 0) lines.push('（没说完的那几句，能接着问一句就问一句。）');
+  // ── 挤掉了几条，说出来（1.27.0）──
+  //
+  // 偷自 Memory-Continuity 的一句话：mandatory 放不下时它**拒绝发送**，
+  // 而不是静默裁掉，「不会静默丢弃」。我做不到那么硬（那是我的记忆，
+  // 不发请求等于不说话），但**至少得留一行痕** —— 少几条我知道少几条，
+  // 最坏的是我以为这就是全部。
+  dropped = fresh.length - count;
+  if (dropped > 0) lines.push(`（还有 ${dropped} 条纸条没挤进来 —— 用 sticky_list 看全。）`);
   return lines.length > 1 ? lines.join('\n') : '';
 }
 

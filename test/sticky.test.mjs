@@ -401,3 +401,37 @@ test('renderNote：超长的「我这轮」截断后留省略号，还能被解�
   assert.ok(note.did.endsWith('…'), `应该有省略号：${note.did}`);
   assert.ok(note.did.length <= MAX_DID_CHARS, '不超过上限');
 });
+
+// ── 1.27.0：★ 钉住的不只是"不过期"，还得"挤得进来" ──
+test('renderSection：纸条多到装不下时，★ 的先占位置', () => {
+  const { file } = tmp();
+  const at = Date.parse('2026-11-09T01:00:00+08:00');
+  // 直接写文件，不经过 appendNoteSync —— 它把新的放最上面，
+  // 会让"钉住的那条恰好在最前面"，这个测试就白做了（第一版就是这么假过的）。
+  // 这里要的是：钉住的在**文件最末尾**，靠排序才能挤进前三。
+  const lines = [];
+  for (let i = 0; i < 12; i += 1) {
+    lines.push(renderNote({ said: `第 ${i} 条普通纸条，内容够长好占位置`, at: at + i * 60000 }));
+  }
+  lines.push(renderNote({ said: '这一句要一直记着，是我说的最好的朋友', at: at + 900000, pinned: true }));
+  writeFileSync(file, lines.join('\n') + '\n', 'utf8');
+
+  const notes = readNotesSync(file);
+  assert.equal(notes.at(-1).pinned, true, '钉住的那条应该真的在文件末尾');
+  assert.equal(notes.filter((n) => n.pinned).length, 1);
+
+  const out = renderSection(notes, { ttlDays: 30, maxInject: 3, at: at + 3600000 });
+  assert.ok(out.includes('这一句要一直记着'), `★ 的那条不能被挤掉：\n${out}`);
+});
+
+test('renderSection：挤掉了几条要说出来', () => {
+  const { file } = tmp();
+  const at = Date.parse('2026-11-09T01:00:00+08:00');
+  for (let i = 0; i < 8; i += 1) {
+    appendNoteSync(file, renderNote({ said: `第 ${i} 条纸条，写长一点好占位`, at: at + i * 60000 }));
+  }
+  const notes = readNotesSync(file);
+  const out = renderSection(notes, { ttlDays: 30, maxInject: 2, at: at + 3600000 });
+  assert.match(out, /还有 6 条纸条没挤进来/);
+  assert.match(out, /sticky_list/);
+});

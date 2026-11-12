@@ -132,3 +132,29 @@ test('findSimilar：太短的句子不判相似', () => {
   const lessons = [{ count: 1, date: '2026-11-10', text: '慢' }];
   assert.equal(findSimilar(lessons, '快'), null);
 });
+
+// ── 1.27.0：措辞相近、但意思相反的不许并 ──
+test('措辞像、否定对不上：不并，各记各的，并说清为什么', () => {
+  const file = tmpFile();
+  addLesson(file, { text: '自动合并相似记忆要小心', at: T1 });
+  const r = addLesson(file, { text: '不要自动合并相似记忆', at: T2 });
+  assert.equal(r.kind, 'added', '意思反的两条不能合成一条');
+  assert.equal(readLessons(file).length, 2);
+  assert.match(r.note ?? '', /否定/);
+});
+
+test('措辞像、数字对不上：不并', () => {
+  const file = tmpFile();
+  addLesson(file, { text: '纸条注入上限 200 字够用', at: T1 });
+  const r = addLesson(file, { text: '纸条注入上限 400 字够用', at: T2 });
+  assert.equal(r.kind, 'added');
+  assert.match(r.note ?? '', /数字/);
+});
+
+test('只是补充了半句：照旧加次数（别把机制弄哑）', () => {
+  const file = tmpFile();
+  addLesson(file, { text: '报告成功和真的成功是两件事', at: T1 });
+  const r = addLesson(file, { text: '报告成功和真的成功是两件事，别急着报平安，先跑一遍', at: T2 });
+  assert.equal(r.kind, 'bumped', '补一句不算矛盾，不然同一个坑永远到不了 2 次');
+  assert.equal(r.count, 2);
+});

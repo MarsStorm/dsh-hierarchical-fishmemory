@@ -19,6 +19,8 @@
  *   `memory_abstract(topic, section, rule)` 由我调，脚本只负责盖章和写规律行。
  */
 
+import { describeMarks, reviewPair, scanDifferences } from './diffcheck.mjs';
+
 /** 行尾的归并标记。`→ 后面写去处` 可省。 */
 export const MERGE_RE = /⟪归并\s*(\d{4}-\d{2}-\d{2})(?:\s*→\s*([^⟫\n]*))?⟫/u;
 
@@ -97,22 +99,40 @@ export function stripMerged(text) {
 export function planSections(text, options = {}) {
   const minCount = Number.isFinite(options.minCount) ? options.minCount : MERGE_MIN;
   const out = [];
-  let current = { section: '', live: 0, merged: 0, rules: 0, need: false };
+  let current = { section: '', live: 0, merged: 0, rules: 0, need: false, lines: [] };
   const flush = () => {
     if (!current.section) return;
     current.need = current.live >= minCount;
+    // ── 归并之前先看差别（1.27.0）──
+    //
+    // 归并最怕的不是归错节，是**把反的说成正的**：
+    // 一节里既有「不要自动合并」又有「要自动合并」，压成一句就只剩一边。
+    // 所以这里把"否定词/数字/日子对不上"的对数出来，写进建议里 ——
+    // 规律还是我写，但写之前我得看见那些坎。
+    const scan = scanDifferences(current.lines);
+    current.conflicts = scan.pairs.map((p) => ({
+      a: current.lines[p.a],
+      b: current.lines[p.b],
+      marks: p.marks,
+    }));
+    current.scanComplete = scan.complete;
+    delete current.lines;
     out.push(current);
   };
   for (const line of String(text ?? '').split('\n')) {
     const head = /^##\s+(.+?)\s*$/.exec(line);
     if (head) {
       flush();
-      current = { section: head[1], live: 0, merged: 0, rules: 0, need: false };
+      current = { section: head[1], live: 0, merged: 0, rules: 0, need: false, lines: [] };
       continue;
     }
     if (isRuleLine(line)) current.rules += 1;
     else if (isMergedLine(line)) current.merged += 1;
-    else if (ITEM_RE.test(line)) current.live += 1;
+    else if (ITEM_RE.test(line)) {
+      current.live += 1;
+      // 去掉列表符号和行尾标记，只比正文 —— 记号本身不算内容差别
+      current.lines.push(line.replace(ITEM_RE, '').replace(MERGE_RE_G, '').trim());
+    }
   }
   flush();
   return out.sort((a, b) => b.live - a.live);
@@ -132,9 +152,15 @@ export function renderSuggestion(text, options = {}) {
   const label = options.label ?? '这一节';
   const hot = planSections(text, { minCount: options.minCount }).filter((s) => s.need).slice(0, limit);
   if (hot.length === 0) return '';
-  const parts = hot.map(
-    (s) => `${label}「${s.section}」攒了 ${s.live} 条还没归过`,
-  );
+  const parts = hot.map((s) => {
+    let piece = `${label}「${s.section}」攒了 ${s.live} 条还没归过`;
+    const conflicts = Array.isArray(s.conflicts) ? s.conflicts : [];
+    if (conflicts.length > 0) {
+      const first = conflicts[0];
+      piece += `，里面有 ${conflicts.length} 处在否定/数字上对不上（比如${describeMarks(first.marks, { a: first.a, b: first.b })}）—— 写规律时别把差别抹平`;
+    }
+    return piece;
+  });
   return `（${parts.join('；')} —— 值得压成一句规律，用 \`memory_abstract\`。原文不会被删，归并后照样读得到。）`;
 }
 
@@ -179,11 +205,14 @@ export function mergeSection(text, { section, rule, at, minCount } = {}) {
 
   const min = Number.isFinite(minCount) ? minCount : MERGE_MIN;
   let merged = 0;
+  // 先记下要归的正文（去掉列表符号与标记），归完还能回头查差别。
+  const bodies = [];
   for (const h of hits) {
     for (let i = h.start + 1; i < h.end; i += 1) {
       const line = lines[i];
       if (!ITEM_RE.test(line)) continue;
       if (isRuleLine(line) || isMergedLine(line)) continue;
+      bodies.push(line.replace(ITEM_RE, '').replace(MERGE_RE_G, '').trim());
       lines[i] = mergeLine(line, { at: at ?? today() });
       merged += 1;
     }
@@ -203,13 +232,31 @@ export function mergeSection(text, { section, rule, at, minCount } = {}) {
     };
   }
 
+  // 归并是**单向**的：盖上章之后，被归的那几句就不再进注入了。
+  // 所以最后再提醒一次哪些地方对不上 —— 规律句里要是把「不要」写成「要」，
+  // 以后再没有第二个人翻开这几十行去发现它。
+  const scan = scanDifferences(bodies);
+  const conflicts = scan.pairs.map((p) => ({
+    a: bodies[p.a],
+    b: bodies[p.b],
+    marks: p.marks,
+    said: describeMarks(p.marks, { a: bodies[p.a], b: bodies[p.b] }),
+  }));
+
   const day = at ?? today();
   const ruleLine = `${RULE_PREFIX}${ruleText}（${day} 由下面 ${merged} 条归并而来）`;
   // 插在第一节标题后面、空行之后 —— 规律先说，原文在后（注入时看不见，但读得到）。
   let insertAt = hits[0].start + 1;
   while (insertAt < hits[0].end && lines[insertAt].trim() === '') insertAt += 1;
   lines.splice(insertAt, 0, ruleLine, '');
-  return { text: lines.join('\n'), hit: true, section: title, merged };
+  return {
+    text: lines.join('\n'),
+    hit: true,
+    section: title,
+    merged,
+    conflicts,
+    scanComplete: scan.complete,
+  };
 }
 
 /** 他那边的一天。 */

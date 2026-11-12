@@ -29,6 +29,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { tokenize } from './keywords.mjs';
+import { describeMarks, reviewPair } from './diffcheck.mjs';
 
 /** 文件名（档案目录下，和 纸条.md 同级） */
 export const LESSON_FILE = '教训.md';
@@ -145,7 +146,18 @@ export function findSimilar(lessons, text) {
     const theirs = tokenSet(lessons[i]?.text);
     if (theirs.size < MIN_TOKENS) continue;
     const score = dice(mine, theirs);
-    if (score >= SIMILAR && (best === null || score > best.score)) best = { index: i, score };
+    if (score >= SIMILAR && (best === null || score > best.score)) {
+      // ── 像，但先看看"不能含糊"的地方对不对得上（1.27.0）──
+      //
+      // Dice 只管字面重合。「不要自动合并」和「要自动合并」能到 0.8 以上，
+      // 「上限 200 字」和「上限 400 字」也差不多。这两种要是被当成同一个坑、
+      // 把次数加到一起，我就等于亲手把最该警惕的那条稀释掉了。
+      //
+      // 所以差异只挡「并」，不挡「记」：判成新起一条，两条都在。
+      // **宁可多一条，不能把反的并成正的。**
+      const pair = reviewPair(lessons[i]?.text, text);
+      best = { index: i, score, diff: pair.marks, conflict: pair.conflict };
+    }
   }
   return best;
 }
@@ -170,7 +182,12 @@ export function addLesson(file, input = {}) {
   const hit = findSimilar(lessons, body);
   let kind = 'added';
   let count = 1;
-  if (hit !== null) {
+  let note = '';
+  if (hit !== null && hit.conflict === true) {
+    // 措辞相近，但否定或数字对不上 —— 不并，各记各的，并留一句为什么。
+    note = `措辞相近，但${describeMarks(hit.diff, { a: lessons[hit.index]?.text, b: body })}，没算成同一个坑`;
+  }
+  if (hit !== null && hit.conflict !== true) {
     kind = 'bumped';
     const prev = lessons[hit.index];
     count = (Number.isFinite(prev.count) ? prev.count : 1) + 1;
@@ -188,7 +205,7 @@ export function addLesson(file, input = {}) {
   writeFileSync(tmp, renderLessons(sorted), 'utf8');
   renameSync(tmp, file);
 
-  return { kind, count, text: body, lessons: sorted };
+  return { kind, count, text: body, lessons: sorted, ...(note ? { note } : {}) };
 }
 
 /**
@@ -204,18 +221,23 @@ export function addLesson(file, input = {}) {
 export function renderSection(lessons, options = {}) {
   const limit = Number.isFinite(options.limit) ? options.limit : MAX_INJECT;
   const minCount = Number.isFinite(options.minCount) ? options.minCount : REPEAT_TO_INJECT;
-  const hit = (lessons ?? [])
+  const eligible = (lessons ?? [])
     .filter((l) => Number.isFinite(l.count) && l.count >= minCount)
-    .sort((a, b) => b.count - a.count || String(b.date).localeCompare(String(a.date)))
-    .slice(0, limit);
+    .sort((a, b) => b.count - a.count || String(b.date).localeCompare(String(a.date)));
+  const hit = eligible.slice(0, limit);
   if (hit.length === 0) return '';
   const lines = hit.map((l) => `- 这个坑踩过 ${l.count} 次：${l.text}`);
+  // 挤掉了几条就说一声（1.27.0）。踩过两次以上的坑本身就少，
+  // 真有第 6 条被挤掉的时候，那一条很可能正是我最需要看见的那条。
+  const dropped = eligible.length - hit.length;
+  const tail = ['（不是提醒你别犯错 —— 是提醒你，这一类你上次就已经犯过了。）'];
+  if (dropped > 0) tail.push(`（还有 ${dropped} 条同样踩过两次以上，这次没位置 —— 用 lesson_list 看全。）`);
   return [
     '## 踩过的坑（重复犯的，先看一眼再动手）',
     '',
     ...lines,
     '',
-    '（不是提醒你别犯错 —— 是提醒你，这一类你上次就已经犯过了。）',
+    ...tail,
   ].join('\n');
 }
 

@@ -916,6 +916,7 @@ function apply(ctx, config) {
           merged: { type: "integer" },
           scope: { type: "string" },
           topic: { type: "string" },
+          conflicts: { type: "integer" },
           text: { type: "string" },
         },
       },
@@ -953,15 +954,22 @@ function apply(ctx, config) {
       await writeFile(target.file, r.text, "utf8");
       fileCache.delete(target.file);
       rememberTopic(agentOf(exec), target.scope, target.topic);
+      const conflicts = Array.isArray(r.conflicts) ? r.conflicts : [];
       return {
         hit: true,
         section: r.section,
         merged: r.merged,
         scope: target.scope,
         topic: target.topic,
+        conflicts: conflicts.length,
         text: `把「${r.section}」里 ${r.merged} 条压成了一句话（scope "${target.scope}"${target.topic ? ` topic "${target.topic}"` : ""}）：\n`
           + `- ⭐ ${rule}\n`
-          + "原文一条没删，只是不再进注入 —— memory_read 还看得见它们是从哪来的。",
+          + "原文一条没删，只是不再进注入 —— memory_read 还看得见它们是从哪来的。"
+          + (conflicts.length === 0
+            ? ""
+            : `\n\n⚠ 这一节里有 ${conflicts.length} 处在否定/数字上对不上，规律句别把它们抹平：\n`
+              + conflicts.slice(0, 3).map((c) => `- ${c.said}`).join("\n")
+              + (r.scanComplete === false ? "\n（条数太多，只查了一部分 —— 别把「查过」当成「都对得上」。）" : "")),
       };
     },
   }));
