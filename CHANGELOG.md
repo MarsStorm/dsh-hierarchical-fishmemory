@@ -12,8 +12,9 @@
 return { id, date, text, tags, kind, salience, ... , created_at, keywords };
 ```
 
-`applySummaries` 把摘要好好写进内存里的 `archive`，`persist()` 一出门就过这个函数，
-不认识的字段一律丢掉，一声不吭。于是磁盘上永远没有 summary，下次启动又「N 条还没有」。
+`applySummaries` 把摘要好好写进内存里的 `archive`，`persist()` 也确实把它写进了 jsonl——
+可**下一次加载**时这个函数不认它，直接丢掉；随手一次 persist 重写 jsonl，磁盘上那批摘要
+就被抹平了。于是磁盘上永远没有 summary，下次启动又「N 条还没有」。
 **跟 1.21.0 的 `sought_count` 是同一个坑**：加字段的时候忘了来白名单里加一行。
 
 修：
