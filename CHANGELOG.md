@@ -1,3 +1,32 @@
+## 1.25.2 — 2026-11-13
+
+**把故障原因拿回来。**
+
+1.25.1 修完白名单之后，磁盘上仍然一条 summary 都没有 —— 但日志变了：
+从「这批一条都没解析出来」变成「模型没吐正文」。**故障点挪了，消息更准了，可原因还是不知道。**
+
+原因就在手里，被我扔了：补总结那段 `for await` 只收 `text-delta`，
+`chunk.type === 'finish'` 直接掉在地上。而固化那边收着它，日志里写着：
+
+```
+finish={"kind":"error","failure":{"message":"upstream returned reasoning without content","code":"PI_AI_ERROR"}}
+```
+
+修：
+
+- `callSummary(extra)` 独立出来，收 `finish`；`describeFinish()` 把它压成
+  `finish=error PI_AI_ERROR upstream returned reasoning without content`。
+- 空正文且上游说 reasoning → **显式带 `reasoningEffort: 'off'` 再试一次**
+  （配置默认已是 off，但 provider 未必认；认不认这一试就知道）。
+- 「模型没吐正文」这条日志现在带着 finish，不再只有五个字。
+
+**教训（比这个 bug 大）**：我把"错误分类做细了"当成了"问题解决了"。1.25.1 让消息从
+「解析失败」变成「没吐正文」，我签收的时候以为自己往前走了 —— 其实只是把一句模糊的
+错误换成了一句准确的错误，**根因一个字都没多知道**。细则该做，但它不是解药。
+
+测试 437 全过（这条改动是日志与重试路径，没有加测试 —— 说清楚）。
+
+---
 ## 1.25.1 — 2026-11-13
 
 **「补总结」从上线起就没生效过。**

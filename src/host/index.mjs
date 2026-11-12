@@ -662,8 +662,14 @@ export function apply(ctx, rawConfig) {
         }
 
         const built = buildSummaryInput(todo);
-        let text = '';
-        try {
+
+        // 一次调用。把 finish 也收下 —— 2026-11-13 之前这里只收 text-delta，
+        // 模型不吐正文时日志只剩「模型没吐正文」五个字，finish 里那句
+        // `upstream returned reasoning without content`（PI_AI_ERROR）全被扔了。
+        // **故障原因就在手边，我却只能靠别处的日志倒推。**
+        const callSummary = async (extra) => {
+          let t = '';
+          let f;
           for await (const chunk of llmP.stream({
             provider,
             model,
@@ -679,8 +685,40 @@ export function apply(ctx, rawConfig) {
             ...(typeof config.reasoningEffort === 'string' && config.reasoningEffort.trim() !== ''
               ? { reasoningEffort: config.reasoningEffort.trim() }
               : {}),
+            ...extra,
           })) {
-            if (chunk?.type === 'text-delta') text += chunk.text;
+            if (chunk?.type === 'text-delta') t += chunk.text;
+            else if (chunk?.type === 'finish') f = chunk;
+          }
+          return { text: t, finish: f?.reason ?? f ?? null };
+        };
+
+        const describeFinish = (fr) => {
+          if (!fr) return 'finish=null';
+          const kind = fr.kind ?? '?';
+          const code = fr.failure?.code ?? '';
+          const msg = fr.failure?.message ?? '';
+          return `finish=${kind}${code ? ` ${code}` : ''}${msg ? ` ${msg}` : ''}`.slice(0, 240);
+        };
+
+        let text = '';
+        let finishInfo = null;
+        try {
+          let run = await callSummary({});
+          text = run.text;
+          finishInfo = run.finish;
+
+          // 空正文 + 上游说「只给了思考」→ 强行关掉思考再试一次。
+          //
+          // 2026-11-13 加。magpie 这条链上的模型会给 `reasoning without content`：
+          // 思考阶段照常跑，正文一个字不吐。配置里 reasoningEffort 默认已是 'off'，
+          // 可 provider 可能没认这个档位 —— 那就显式再发一次 'off'，说不定生效。
+          // 再不行就是上游的事，日志里得能看出来（下面 describeFinish 会打出来）。
+          if (text.trim() === '' && /reasoning/i.test(JSON.stringify(finishInfo ?? {}))) {
+            warn(`补总结：只拿到思考没有正文（${describeFinish(finishInfo)}），显式关掉思考重试一次`);
+            run = await callSummary({ reasoningEffort: 'off' });
+            text = run.text;
+            finishInfo = run.finish;
           }
         } catch (err) {
           warn(`补总结失败：${err instanceof Error ? err.message : String(err)}`);
@@ -694,7 +732,7 @@ export function apply(ctx, rawConfig) {
           // 分开说：模型压根没吐正文 ≠ 吐了但格式坏。两者的下一步不一样，
           // 只报「一条都没解析出来」的话，明天我还是不知道该怎么办。
           if (text.trim() === '') {
-            warn(`补总结：模型没吐正文（连续 ${fails} 次）`);
+            warn(`补总结：模型没吐正文（连续 ${fails} 次）｜${describeFinish(finishInfo)}`);
           } else {
             warn(`补总结：这批一条都没解析出来（连续 ${fails} 次）｜原文前 160 字：${text.replace(/\s+/g, ' ').slice(0, 160)}`);
           }
