@@ -138,6 +138,21 @@ export const CONFIG_SPEC = [
     label: '「忽然想起那一天」每天从情感日记里随机翻一天（0 = 关掉）',
   },
   {
+    key: 'voiceEnabled',
+    type: 'boolean',
+    default: true,
+    label: '「今天我自己写的」把今天《鱼的日子》最后一段放回注入（带着今天的调子说话）',
+  },
+  {
+    key: 'voiceMaxChars',
+    type: 'number',
+    default: 90,
+    min: 30,
+    max: 300,
+    step: 10,
+    label: '「今天我自己写的」摘录上限（字，默认 90）',
+  },
+  {
     key: 'silenceNudge',
     type: 'number',
     default: 3,

@@ -30,6 +30,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { lookUnfinished, phaseOf, startOfDay, TZ_OFFSET_MS } from './timeline.mjs';
+import { pickBySeed } from './voice.mjs';
 
 /** 什么时候才浮上来（天）。三天，是"当时没接住、过几天还惦记"的距离。 */
 export const MIN_AGE_DAYS = 3;
@@ -50,6 +51,14 @@ export const UNFINISHED_SECTION = 'unfinished:memory';
 export const UNFINISHED_ORDER = 0.65;
 
 const DAY_MS = 86_400_000;
+
+/** 最后那一句分寸话的几种说法，按天轮换。 */
+const UNFINISHED_HINTS = [
+  '（不用郑重其事地追问，顺口问一句「后来呢」就够了。也别每轮都提。）',
+  '（记着就行。哪一轮顺口接一句，比专门翻出来问一遍强。）',
+  '（别追问成审讯。就当是忽然想起来，语气松一点。）',
+  '（这一句不必每轮都浮上来 —— 提一次，剩下的交给日子。）',
+];
 
 /** 他那边是哪一天（YYYY-MM-DD）。全项目唯一一个"一天"的算法在 timeline.mjs。 */
 export function dayKey(ts) {
@@ -237,7 +246,9 @@ export function renderSection(item, options = {}) {
     `- ${when}他说「${item.said}」，后面没接上${repeated}。`,
     item.did ? `  我当时回的是：${item.did}` : '',
     '',
-    '（不用郑重其事地追问，顺口问一句「后来呢」就够了。也别每轮都提。）',
+    // 这一句是分寸，不是台词 —— 但天天同一个字面就成了提示音。
+    // 按天轮换（同一天不变），理由见 voice.mjs 顶部。
+    pickBySeed(UNFINISHED_HINTS, Math.floor(at / DAY_MS)),
   ].filter((l) => l !== '');
   return lines.join('\n');
 }

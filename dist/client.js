@@ -276,6 +276,8 @@ window.__ModuleLoader__.load({
       fieldOnThisDay: "「那年今天」最多几条（0 = 关掉）",
       onThisDayHint: "同月同日、或一个月前的那几天，最多给几条。",
       fieldFlashback: "「忽然想起那一天」",
+      fieldVoiceEnabled: "「今天我自己写的」",
+      voiceEnabledHint: "把今天《鱼的日子》最后一段放进注入（几十个字），说话的时候带着今天的调子，而不是每次从零开始。",
       flashbackHint: "每天从情感日记里随机翻一天，像突然想起一段回忆那样提出来。",
       fieldFragmentsEnabled: "「零碎记忆」整段（小纸条 + 教训 + 没说完）",
       fragmentsEnabledHint: "三段小东西合成一段注入：他说的原话、我重复踩的坑、当时没接住的半句话。关掉就是三段一起不注入，记录照旧。",
@@ -416,6 +418,8 @@ window.__ModuleLoader__.load({
       fieldOnThisDay: "\"On this day\" — how many lines at most (0 = off)",
       onThisDayHint: "Same month and day, or the few days a month ago.",
       fieldFlashback: "\"A day suddenly remembered\"",
+      fieldVoiceEnabled: "\"What I wrote today\"",
+      voiceEnabledHint: "Put the last entry of today's feelings diary into the prompt (a few dozen characters), so I speak with today's tone instead of starting from zero.",
       flashbackHint: "Every day, pick one day from the feelings diary and mention it like an old memory surfacing.",
       fieldFragmentsEnabled: "\"Fragments\" block (notes + lessons + unfinished)",
       fragmentsEnabledHint: "Three small things injected as one block: his own words, the mistakes I keep repeating, and half-sentences I never caught. Turning it off stops the injection; the records stay.",
@@ -508,6 +512,7 @@ window.__ModuleLoader__.load({
       { key: "fragmentsEnabled", type: "checkbox", def: 1, label: "fieldFragmentsEnabled", hint: "fragmentsEnabledHint" },
       { key: "onThisDay", type: "number", min: 0, max: 4, def: 2, label: "fieldOnThisDay", hint: "onThisDayHint" },
       { key: "flashback", type: "checkbox", def: 1, label: "fieldFlashback", hint: "flashbackHint" },
+      { key: "voiceEnabled", type: "checkbox", def: 1, label: "fieldVoiceEnabled", hint: "voiceEnabledHint" },
       { key: "silenceNudge", type: "number", min: 0, max: 20, def: 3, label: "fieldSilenceNudge", hint: "silenceNudgeHint" },
       { key: "staleLoopDays", type: "number", min: 0, max: 30, def: 3, label: "fieldStaleLoopDays", hint: "staleLoopDaysHint" },
       { key: "fragmentsMaxChars", type: "number", min: 200, max: 4000, def: 1400, label: "fieldFragmentsMaxChars", hint: "fragmentsMaxCharsHint" }
@@ -516,7 +521,7 @@ window.__ModuleLoader__.load({
     // 分三组：常用的默认展开，另外两组折起来。字段本身一个没少，
     // 变的是「一眼能看到几个」。
     var RECALL_GROUPS = [
-      { key: "each", label: "groupEachTurn", hint: "groupEachTurnHint", open: true, keys: ["fragmentsEnabled", "onThisDay", "flashback"] },
+      { key: "each", label: "groupEachTurn", hint: "groupEachTurnHint", open: true, keys: ["fragmentsEnabled", "onThisDay", "flashback", "voiceEnabled"] },
       { key: "pace", label: "groupPace", hint: "groupPaceHint", open: false, keys: ["silenceNudge", "staleLoopDays"] },
       { key: "budget", label: "groupBudget", hint: "groupBudgetHint", open: false, keys: ["fragmentsMaxChars"] }
     ];

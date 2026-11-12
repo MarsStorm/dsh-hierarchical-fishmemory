@@ -139,8 +139,20 @@ test('渲染出来像我自己想起来的，不像系统提醒', () => {
   assert.match(text, /忽然想起来一句/);
   assert.match(text, /「那个……」/);
   assert.match(text, /3 天前/);
-  assert.match(text, /后来呢/);
+  // 分寸话从 2026-11-13 起按天轮换，不再写死「后来呢」那一句
+  assert.match(text, /（.+）$/, '末尾得有一句分寸话');
   assert.doesNotMatch(text, /检测到|未完成语句|系统/);
+});
+
+test('分寸话按天轮换：同一天不变，换天换口气', () => {
+  const item = { said: '那个……', at: NIGHT - 3 * DAY_MS, days: 3, times: 1, did: '在帮他调插件' };
+  const a = renderSection(item, { at: NIGHT });
+  const b = renderSection(item, { at: NIGHT });
+  assert.equal(a, b, '同一天必须同字面，否则每轮打碎前缀缓存');
+  const seen = new Set(
+    [0, 1, 2, 3].map((d) => renderSection(item, { at: NIGHT + d * DAY_MS }).split('\n').pop()),
+  );
+  assert.ok(seen.size >= 2, '连着四天不该是同一句');
 });
 
 test('空记录：new 一个空 store，不炸', () => {

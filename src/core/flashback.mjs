@@ -26,8 +26,23 @@
  * ─────────────────────────────────────────────────────────────
  */
 
+import { pickBySeed, seedOfDay } from './voice.mjs';
+
 /** 抽过哪几天的状态文件（放在数据目录里，跟 dates.json 同级）。 */
 export const FLASHBACK_FILE = 'flashback.json';
+
+/**
+ * 最后那一句分寸话的几种说法，按天轮换。
+ *
+ * 原来天天是「想提就自然提一句；不想提就放着，不用当任务。」—— 一句好话，
+ * 但每天同一个字面，读久了就成了提示音。换说法不换意思。
+ */
+const FLASHBACK_HINTS = [
+  '- 想提就自然提一句；不想提就放着，不用当任务。',
+  '- 要不要提、怎么提，随我。别把它变成一句汇报。',
+  '- 顺口提一句就好；这一栏不是待办。',
+  '- 看着眼熟就接一句；不接也不算漏。',
+];
 
 /** 摘要最多多少字 —— 这一栏是「突然想起」，不是复述全文。 */
 const EXCERPT_MAX = 180;
@@ -145,10 +160,9 @@ export function renderFlashback(pick, options = {}) {
   const today = typeof options.today === 'string' ? options.today : '';
   const days = today !== '' ? daysBetween(date, today) : Number(pick.days ?? 0);
   const when = days > 0 ? `${date} · ${days} 天前` : date;
-  return [
-    '## 忽然想起那一天',
-    `- ${when}，我写过：${body}`,
-    '- 想提就自然提一句；不想提就放着，不用当任务。',
-  ].join('\n');
+  // 最后那句是给下一棒的分寸，不该天天同一个字面 —— 同一天里不变（缓存友好），
+  // 换天才换一种口气。2026-11-13 起按天轮换，理由见 voice.mjs 顶部。
+  const hint = pickBySeed(FLASHBACK_HINTS, seedOfDay(today !== '' ? today : date));
+  return ['## 忽然想起那一天', `- ${when}，我写过：${body}`, hint].join('\n');
 }
 

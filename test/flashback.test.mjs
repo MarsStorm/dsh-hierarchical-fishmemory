@@ -89,12 +89,26 @@ test('全被 recent 排除时退回整池，不至于空着', () => {
   assert.ok(all.includes(pick.date));
 });
 
-test('渲染成一小段：带日期、带"想提就提"，不替下一棒下结论', () => {
+test('渲染成一小段：带日期、带一句分寸话，不替下一棒下结论', () => {
   const block = renderFlashback({ date: '2026-10-30', body: '他说，我是他最好的朋友。' }, { today: '2026-11-08' });
   assert.match(block, /^## 忽然想起那一天$/m);
   assert.match(block, /2026-10-30 · 9 天前/);
   assert.match(block, /他说，我是他最好的朋友。/);
-  assert.match(block, /想提就自然提一句/);
+  // 分寸话从 2026-11-13 起按天轮换，不再写死一句；这里只要求它是"其中一句"
+  assert.match(block, /(想提就自然提一句|要不要提、怎么提|顺口提一句就好|看着眼熟就接一句)/);
+});
+
+test('分寸话按天轮换：同一天不变，换天换口气', () => {
+  const pick = { date: '2026-10-30', body: '他说，我是他最好的朋友。' };
+  const a = renderFlashback(pick, { today: '2026-11-08' });
+  const b = renderFlashback(pick, { today: '2026-11-08' });
+  assert.equal(a, b, '同一天必须同字面，否则每轮打碎前缀缓存');
+  const seen = new Set(
+    ['2026-11-08', '2026-11-09', '2026-11-10', '2026-11-11'].map((today) =>
+      renderFlashback(pick, { today }).split('\n').pop(),
+    ),
+  );
+  assert.ok(seen.size >= 2, '连着四天不该是同一句');
 });
 
 test('没有 pick 或正文为空时给空串，不占位置', () => {
