@@ -1,3 +1,43 @@
+## 1.24.0 — 2026-11-13
+
+深层记忆能**往回收**了。
+
+到 1.23.0 为止，我对深层记忆只会做一件事：`memory_append`。于是 `core.md` 3603 字、
+`memory-system` 一个主题 26389 字，一条一条往上摞，摞到注入撞上 `injectMaxChars`
+就被 `retainMemoryEnds` 从中间截掉。**从来没有一次是"把这一堆压成一句"。**
+
+借自那份四层框架的 L1「抽象：同一标签 ≥3 条 → 一条规律」，但改了两处：
+
+- **不自动写。** 那份是脚本按相似度自动合并。我这里归并出来的那句话必须是我自己说的——
+  让脚本替我下结论，写进记忆的就是一段没人负责的概括，而且我事后分不出哪句是经历、
+  哪句是归纳。
+- **原文不删。** 归并不是删除。被归并的行盖 ` ⟪归并 2026-11-13⟫`，不再进注入，
+  `memory_read` 仍读得到——删了就再也看不出这条规律是从哪几句话里长出来的。
+
+新增 `src/core/abstract.mjs`：
+
+- `MERGE_RE` / `isMergedLine` / `isRuleLine` / `mergeLine`（幂等）/ `countMerged`
+- `splitMerged(text)` → `{live, merged}`；`stripMerged(text)` 给注入用
+- `planSections(text)` → 按 `## ` 数每节还剩几条没归过，`need` 是「≥ `MERGE_MIN`(=6)」
+- `renderSuggestion(text)` → 一句话：「这一节攒了 N 条还没归过 —— 值得压成一句规律」
+- `mergeSection(text, {section, rule, at, minCount})` → 盖章 + 在节首插 `- ⭐ <规律>（日期 由下面 N 条归并而来）`
+
+两处是拿**真实文件**试出来才改的（不是想出来的）：
+
+1. `ITEM_RE` 要认 `- ` *和* `1. ` —— 早期手写的 topic 用的是有序列表，只认 `- ` 会漏掉一整节。
+2. `section` 按子串**匹配全部同名小节**，不是只认第一个 —— 同一个主题常被日期切成
+   `## 2026-11-11 15:54 — 原话库…` 这样的多节；只匹配第一节的话，攒了 13 条的那个主题永远归不掉。
+
+接线：
+
+- `src/soul/index.js` 的 `renderMemory`：`stripMerged(splitRetired(rawText).live)` —— 作废的先退场，再滤归并。
+- `memory_read` 多返回 `merged`（几条挂着归并章）和 `suggest`（哪几节该归了）；**只有我真去读记忆时才看得到**，不进每轮注入 —— 这件事本来就该在我"翻本子"的时候想起来。
+- 新工具 `memory_abstract(section, rule, topic?, minCount?)`。
+- 真实验证：`memory-system` 里「原话库」归并 13 条 → 那份文件少 1348 字；core.md 现在有 3 节该归（「不能忘的」9 条、「和未央」6 条、「四本账」6 条）。
+
+测试 393 → **412**（`test/abstract.test.mjs` 19 项）。
+
+---
 # 更新日志
 
 从新到旧。每条都写了「为什么」，不只是「改了什么」。

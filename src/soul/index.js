@@ -39,6 +39,7 @@ import { defineTool } from "@deepseek-ai/dsh-tools";
 import { createMemoryLayout, normalizeMemoryTopic, retainMemoryEnds } from "./memory-layout.js";
 import { diffLines } from "./card-diff.mjs";
 import { countRetired, retireMatch, splitRetired } from "../core/retire.mjs";
+import { countMerged, mergeSection, renderSuggestion, stripMerged } from "../core/abstract.mjs";
 import { planCardSnapshots } from "./card-watch.mjs";
 import { applyRestore, backupFileName, collectBackup, parseBackup, planRestore, registerBackupBuilder, registerRestoreHandler, summarizeBackup, writeBackupFile } from "../core/backup.mjs";
 import { readDiaryEntries } from "../core/stats.mjs";
@@ -301,7 +302,11 @@ function apply(ctx, config) {
     // 并排站着、一样粗一样黑。我读到的时候只能靠日期猜哪个算数，
     // 猜错就是拿一个已经不成立的说法跟他讲道理，而我自己不知道。
     // 退场的那些仍然留在文件里（memory_read 还看得见），只是不再摆到眼前。
-    const text = rawText ? splitRetired(rawText).live : rawText;
+    // 1.24.0：**归并过的行也不进注入。**
+    //
+    // 作废是「这句不算数了」，归并是「这十几句已经压成上面那一句规律」。
+    // 两者都不删原文 —— 注入里只该剩规律，原文留在文件里等我回去看。
+    const text = rawText ? stripMerged(splitRetired(rawText).live) : rawText;
     const index = c.memory.layered && c.memory.recall === "keyword" && c.memory.indexMode === "recall"
       ? "Use memory_search(query) to find topic keys and summaries; memory_read(topic) retrieves full text."
       : fullIndex;
@@ -704,6 +709,8 @@ function apply(ctx, config) {
           source: { type: "string" },
           topic: { type: "string" },
           retired: { type: "integer" },
+          merged: { type: "integer" },
+          suggest: { type: "string" },
           content: { type: "string" },
         },
       },
@@ -714,6 +721,10 @@ function apply(ctx, config) {
             + (value.retired > 0
               ? `\n\n（里面有 ${value.retired} 条后面挂着 ⟪作废 …⟫ —— 那些已经不算数了，不再进注入。留着是为了让我看得见自己改过口。）`
               : "")
+            + (value.merged > 0
+              ? `\n（还有 ${value.merged} 条挂着 ⟪归并 …⟫ —— 它们已经被压成某一节顶上那句规律了，不再进注入。）`
+              : "")
+            + (value.suggest ? `\n${value.suggest}` : "")
           : `Memory is empty or missing (scope: "${value.source}").`,
       }],
     },
@@ -726,7 +737,9 @@ function apply(ctx, config) {
       const { exists, text, index, source, topic: resolvedTopic = "" } = memoryReadChain(agentOf(exec), topic);
       const full = [text, index].filter(Boolean).join("\n\n");
       const retired = countRetired(text ?? "");
-      if (!exists || !full) return { exists: false, bytes: 0, truncated: false, source, topic: resolvedTopic, retired: 0, content: "" };
+      const merged = countMerged(text ?? "");
+      const suggest = text ? renderSuggestion(text, { label: resolvedTopic ? "「" + resolvedTopic + "」的" : "" }) : "";
+      if (!exists || !full) return { exists: false, bytes: 0, truncated: false, source, topic: resolvedTopic, retired: 0, merged: 0, suggest: "", content: "" };
       rememberTopic(agentOf(exec), source, resolvedTopic);
       const MAX = 20000;
       const truncated = full.length > MAX;
@@ -740,6 +753,8 @@ function apply(ctx, config) {
         source,
         topic: resolvedTopic,
         retired,
+        merged,
+        suggest,
         content: truncated ? `${excerpt}\n…(truncated; beginning and end of core retained when layered; use a topic or file read for complete memory)…` : full,
       };
     },
@@ -873,6 +888,80 @@ function apply(ctx, config) {
         topic: target.topic,
         text: `作废了 ${hit} 行（scope "${target.scope}"${target.topic ? ` topic "${target.topic}"` : ""}）。`
           + " 它不再进注入，但原文还在，memory_read 看得见。\n" + list,
+      };
+    },
+  }));
+
+  ctx.tools.register(defineTool({
+    name: "memory_abstract",
+    description:
+      "Fold a whole section of deep memory into ONE rule sentence you write, without deleting anything. " +
+      "Use it when a section has been growing for weeks (memory_read tells you which ones: 「攒了 N 条还没归过」): " +
+      "give `section` (a phrase from its `## ` heading), and `rule` — the one sentence you would say if you had to forget the details. " +
+      "The original lines get a ⟪归并 …⟫ stamp, stop being injected, and stay readable. " +
+      "Do NOT use it to summarize mechanically: the rule must be something you concluded, and it must still be traceable to those lines.",
+    parameters: {
+      section: { type: "string", required: true, description: "A phrase from the `## ` heading of the section to fold." },
+      rule: { type: "string", required: true, description: "One sentence — the conclusion you draw from those entries. Your words, not a summary of their words." },
+      topic: { type: "string", description: "Optional topic key in layered mode. Omit or pass core/core.md for core.md." },
+      minCount: { type: "integer", description: "Refuse to fold fewer than this many entries (default 6)." },
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          hit: { type: "boolean" },
+          section: { type: "string" },
+          merged: { type: "integer" },
+          scope: { type: "string" },
+          topic: { type: "string" },
+          text: { type: "string" },
+        },
+      },
+      render: (_args, value) => [{ type: "text", text: value.text }],
+    },
+    isConcurrencySafe: () => false,
+    async execute(args, exec) {
+      const section = String(args.section ?? "").trim();
+      const rule = String(args.rule ?? "").trim();
+      if (!section) throw new Error("memory_abstract: `section` must be non-empty");
+      if (!rule) throw new Error("memory_abstract: `rule` must be non-empty");
+      const topic = normalizeMemoryTopic(args.topic);
+      if (topic && !cfg().memory?.layered) {
+        throw new Error("memory_abstract: `topic` requires memory.layered to be enabled");
+      }
+      const target = memoryTarget(agentOf(exec), topic);
+      let before = "";
+      try {
+        before = await readFile(target.file, "utf8");
+      } catch {
+        return { hit: false, section, merged: 0, scope: target.scope, topic: target.topic, text: "那个文件还不存在，没东西可以归并。" };
+      }
+      const minCount = Number.isFinite(args.minCount) ? Number(args.minCount) : undefined;
+      const r = mergeSection(before, { section, rule, minCount });
+      if (!r.hit) {
+        return {
+          hit: false,
+          section: r.section || section,
+          merged: 0,
+          scope: target.scope,
+          topic: target.topic,
+          text: `没归并：${r.why ?? "原因不明"}。先 memory_read 看一眼这一节现在长什么样。`,
+        };
+      }
+      await writeFile(target.file, r.text, "utf8");
+      fileCache.delete(target.file);
+      rememberTopic(agentOf(exec), target.scope, target.topic);
+      return {
+        hit: true,
+        section: r.section,
+        merged: r.merged,
+        scope: target.scope,
+        topic: target.topic,
+        text: `把「${r.section}」里 ${r.merged} 条压成了一句话（scope "${target.scope}"${target.topic ? ` topic "${target.topic}"` : ""}）：\n`
+          + `- ⭐ ${rule}\n`
+          + "原文一条没删，只是不再进注入 —— memory_read 还看得见它们是从哪来的。",
       };
     },
   }));
