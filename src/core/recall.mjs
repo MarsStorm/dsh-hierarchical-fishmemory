@@ -47,8 +47,20 @@ export function buildIndex(entries) {
   const list = Array.isArray(entries) ? entries : [];
 
   for (const entry of list) {
-    const hasSummary = typeof entry.summary === 'string' && entry.summary !== '';
-    const tokens = tokenize(hasSummary ? entry.summary : (entry.text ?? ''));
+    // ── 索引正文 + 摘要，不是「二选一」（2026-11-13，1.25.3）──
+    //
+    // 原来写的是 `hasSummary ? summary : text` —— 有摘要就**只看摘要**。
+    // 当时是个空转的分支：summary 一直被归一化白名单吃掉（1.25.1 才修），
+    // 磁盘上一条都没有，所以这行代码半年没被真跑过。
+    //
+    // 1.25.1 之后 115 条全都有了摘要，这行的后果立刻显出来：
+    // 索引从「几百字的正文」缩成「80 字的摘要」，**能搜到的词一下子少了一大半**。
+    // 摘要本来就是压缩过的，专门用它当索引，等于自愿丢掉那些没被摘进去的词。
+    //
+    // 现在把两边都收进来。摘要里的词仍然在里面，正文里的词也不会丢；
+    // BM25 的 tf 会让摘要词权重更高一点（因为长度短），正好是想要的偏置。
+    const summary = typeof entry.summary === 'string' ? entry.summary.trim() : '';
+    const tokens = tokenize([summary, entry.text ?? ''].filter(Boolean).join('\n'));
     if (tokens.length === 0) continue;
 
     const tf = new Map();

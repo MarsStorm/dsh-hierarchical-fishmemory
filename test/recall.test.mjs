@@ -30,13 +30,18 @@ test('buildIndex：空列表建出 N=0 的索引', () => {
   assert.equal(idx.postings.size, 0);
 });
 
-test('buildIndex：有 summary 就用 summary 建索引', () => {
+// 2026-11-13 改：从「有 summary 就只看 summary」改成「两边都收」。
+//
+// 原来那版是空转的：summary 一直被归一化白名单吃掉，磁盘上一条都没有，
+// 这个分支半年没被真跑过。1.25.1 修好之后 115 条全有摘要，后果立刻显出来 ——
+// 索引从几百字正文缩成 80 字摘要，能搜到的词少了一大半。
+test('buildIndex：summary 和正文都进索引，不是二选一', () => {
   const withSummary = [
     { id: 'a', text: '正文里没有的词', summary: '端口 3080', salience: 0.8, created_at: now },
   ];
   const idx = buildIndex(withSummary);
-  assert.ok(searchScores(idx, '端口').get('a') > 0);
-  assert.equal(searchScores(idx, '正文').size, 0);
+  assert.ok(searchScores(idx, '端口').get('a') > 0, '摘要里的词能搜到');
+  assert.ok(searchScores(idx, '正文').get('a') > 0, '正文里的词也能搜到');
 });
 
 test('buildIndex：没有 summary 时退回正文', () => {
