@@ -85,6 +85,7 @@ import {
   STICKY_ARCHIVE_FILE,
   patchDid,
   recordTurn,
+  readNotesSync,
   registerSticky,
 } from '../core/sticky.mjs';
 import { readQuotes, renderQuotes, searchQuotes } from '../core/quotes.mjs';

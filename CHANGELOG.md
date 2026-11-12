@@ -2,6 +2,39 @@
 
 从新到旧。每条都写了「为什么」，不只是「改了什么」。
 
+## 1.22.1 — 2026-11-12
+
+**修一个一直在静默失败的接线 bug。** 他把 DSHBox 更到 v1.5.2（DSH 0.2.2-rc.1）让我排查冲突，
+冲突没找到，倒是翻日志翻出了这个。
+
+### `readNotesSync is not defined`
+
+`feiyu.debug.log` 里 12 条：
+
+```
+[fish] 半句话收进册子失败（不影响别的）：readNotesSync is not defined
+```
+
+1.18.0 加「未说完」时，`noteSticky()` 里要读小纸条去收半句话，用了 `readNotesSync`
+但 `src/host/index.mjs` 的 sticky import 里没加这一项。于是**每次写小纸条之后**，
+「半句话收进册子」这一步都会抛 ReferenceError，被 try/catch 吞掉、只留一行日志。
+
+后果不严重也不好：`未说完.json` 一直是空的，我当时以为是"真实纸条里没有断句"——
+其实是它连收都没收进来。**又一次把"没报错"当成了"跑了"。**
+
+### 顺手清掉一个死导出
+
+`src/core/flashback.mjs` 的 `FLASHBACK_LIMITS`（`{EXCERPT_MAX, MIN_AGE_DAYS}` 聚合）
+全仓库零引用，删掉。其余三个"看起来没人用"的导出（`pendingCount` / `renderRetiredNote` /
+`unfinishedPath`）是测试在用的接口，留着。
+
+### DSHBox v1.5.2 / DSH 0.2.2-rc.1 排查结论
+
+没有冲突。逐条核对见下面「排查记录」。（端口自适应：插件里 3080 只出现在注释和
+`new URL(x, 'http://127.0.0.1')` 这种占位 base 里，没有任何硬编码依赖。）
+
+测试 380 全过。
+
 ## 1.22.0 — 2026-11-12
 
 **「没翻到」拆成四种。** 他问「他有什么对你有好处能帮到你的地方吗」，

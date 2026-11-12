@@ -152,4 +152,3 @@ export function renderFlashback(pick, options = {}) {
   ].join('\n');
 }
 
-export const FLASHBACK_LIMITS = { EXCERPT_MAX, MIN_AGE_DAYS };
