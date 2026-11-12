@@ -72,6 +72,9 @@
 - `trash_list` / `trash_restore`：回收站。忘掉一条、删掉记忆层里的一行、手记被整篇覆盖之前，都会先在这儿留一份，30 天。
 - `shallow_promote`：浅层快到期时把它升格成共度时光或深层记忆，然后从浅层删掉——不用等它默默消失。
 - `memory_abstract`：**让深层记忆能往回收。** 一节攒够 6 条，就归成**我写的一句话规律**；原条目挂上 ` ⟪归并 日期⟫` 不再进注入，但一条不删——`memory_read` 还看得见那条规律是从哪十几句里长出来的。脚本只盖章和数数，**不替你总结**：让脚本归纳，写进去的就是一段没人负责的概括。`memory_read` 结尾会告诉你哪几节该归了。
+- `fish_weekly`：**一周压成一份。** 先不带 `lines` 调一次，拿回那一周的素材（每天几条经过、那天我写过什么小标题、哪几天是空白的）；
+  写完一天一行再落成 `周结/2026-W46.md`。**脚本只备料，不代笔** —— 模板化的「本周共完成 X 项」不是回忆，是周报。
+  空白的天照样标出来：那一周连着四天没记，本身就是那四天发生了什么。不进每轮注入。
 - `fish_layer_check`：体检「同一句写了两遍」（深层 / 手记 / 情感日记 / 浅层）与「同一样东西写了两个值」（端口、版本）。
 - `loop_add` / `loop_done` / `loop_list`：答应过、挂着没做的事记一笔，每轮注入「还挂着 N 件事」。**只摆出来、不自动销账**——误杀比漏记更让人不敢信。
 - `fish_mirror`：今天这一天的横切面——他说了几句我记下的原话、我记住几段经过、账上哪几件陈了、鱼的日子写没写。**只读**，不改任何一本账，也不进每轮注入。跟体检页分工不同：体检页看系统健不健康，镜子看「今天陪得怎么样」。
@@ -234,6 +237,7 @@ dsh plugin --profile web add link:/abs/path/to/dsh-hierarchical-fishmemory
 | `fish_mirror` | 今天这一天的横切面（原话 / 经过 / 陈了的账 / 心里写没写），只读 |
 | `memory_read(topic)` · `memory_append` · `memory_rewrite` · `memory_search` | 深层事实与坑，按主题取、按主题写 |
 | `memory_abstract` · `memory_retire` | 把一节压成一句规律 / 把不算数的一行作废——都不删原文，只是不再进注入 |
+| `fish_weekly` | 拿一周的素材 / 把一天一行落成周结（`周结/YYYY-Www.md`） |
 | `soul_read` · `soul_update` | 读 / 改当前人设卡 |
 | `shallow_note` · `shallow_touch` · `shallow_list` · `shallow_forget` · `shallow_sweep` | 浅层记忆；再提到就自动续期 |
 | `shallow_promote` | 浅层升格成共度时光或深层记忆，成功后从浅层删掉 |

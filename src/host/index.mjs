@@ -64,6 +64,7 @@ import { readJsonOrNull } from '../core/fsx.mjs';
 import { silentStreak, renderSilenceNudge } from '../core/nudge.mjs';
 import { renderDiaryFile } from '../core/render-diary.mjs';
 import { DIARY_MD, FEELINGS_MD } from '../core/files.mjs';
+import { buildMaterial, feelingsOfWeek, groupByDay, previousWeekKey, renderWeekly, weekKey, weekRange, weeklyPath } from '../core/weekly.mjs';
 import { buildJudgeInput, parseVerdict, JUDGE_MAX_TOKENS } from '../core/judge.mjs';
 import { selectHandNotes, HANDNOTE_FILE, HANDNOTE_TEMPLATE } from '../core/handnote.mjs';
 import {
@@ -4888,6 +4889,118 @@ export function apply(ctx, rawConfig) {
           },
         }),
       'fish: mirror tool',
+    );
+
+    // ── 周结：七天压成一份 ──
+    //
+    // 2026-11-13 加。借自那份四层框架的 L2「周结」，但改了一处：
+    // 那份是脚本写好模板（每天一行），人只需要确认。我这里反过来 ——
+    // 脚本只**备料**（把那一周摊开），一天一行由我写。
+    //
+    // 为什么非得我自己写：「本周共完成 3 项工作」谁都能生成，可那不是回忆，
+    // 那是周报。真正能记住的是"那三天我们一直在改同一个东西，改到凌晨"。
+    //
+    // 用法：先 `fish_weekly({week})` 拿素材，我写完一天一行，
+    // 再 `fish_weekly({week, lines, summary})` 落成文件。
+    scope.effect(
+      () =>
+        scope.tools.register({
+          name: 'fish_weekly',
+          description:
+            '把一周压成一份周结。先不带 lines 调用，拿回那一周的素材（每天发生了什么、' +
+            '那天我写过什么小标题、哪几天是空白的）；写完一天一行，再用 lines 落成文件。' +
+            'week 用 ISO 周（如 2026-W46），省略就是上一周。' +
+            '落成之后建议再 memory_append 写一条记忆 —— 那是这份周结能被人想起的地方。',
+          parameters: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              week: { type: 'string', description: 'ISO 周，YYYY-Www。省略就是上一周。' },
+              lines: {
+                type: 'array',
+                description: '一天一行。省略就是只拿素材；给了才落文件。',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    day: { type: 'string', description: 'YYYY-MM-DD，必须落在那一周里。' },
+                    text: { type: 'string', description: '那一天的一句话。' },
+                  },
+                },
+              },
+              summary: { type: 'string', description: '这一周的一句话，可选，写在周结最上面。' },
+            },
+          },
+          output: {
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                ok: { type: 'boolean' },
+                week: { type: 'string' },
+                saved: { type: 'boolean' },
+                path: { type: 'string' },
+                text: { type: 'string' },
+              },
+            },
+            isConcurrencySafe: () => false,
+            render: (_a, v) => [{ type: 'text', text: v?.text ?? '' }],
+          },
+          async execute(args) {
+            const raw = String(args?.week ?? '').trim();
+            const key = raw || previousWeekKey(Date.now());
+            const range = weekRange(key);
+            if (!range) {
+              return { ok: false, week: key, saved: false, path: '', text: `不认识的周「${key}」。要用 ISO 周的写法，比如 2026-W46。` };
+            }
+            const span = { from: Date.parse(`${range.start}T00:00:00Z`) - 8 * 3600 * 1000 };
+            const entries = (archive?.diary ?? []).filter((e) => {
+              const ts = Number(e?.created_at ?? e?.at ?? 0);
+              return ts >= span.from && ts < span.from + 7 * 24 * 3600 * 1000;
+            });
+            let feelings = [];
+            try {
+              feelings = feelingsOfWeek(await readFile(path.join(archiveDirectory, FEELINGS_MD), 'utf8'), key);
+            } catch {
+              feelings = [];
+            }
+
+            const lines = Array.isArray(args?.lines) ? args.lines : null;
+            if (!lines) {
+              const days = groupByDay(entries, key);
+              const material = buildMaterial({ key, days, feelings });
+              return {
+                ok: true,
+                week: key,
+                saved: false,
+                path: '',
+                text: material
+                  ? `这是 ${key}（${range.start} ~ ${range.end}）的素材。\n\n${material}\n\n`
+                    + `写完一天一行，再调一次带 lines。写不出来的那天就别写 —— 空着也是答案。`
+                  : `这一周我什么都没记下来（${key}）。那就不写。`,
+              };
+            }
+
+            const bad = lines.find((l) => !range.days.includes(String(l?.day ?? '').trim()));
+            if (bad) {
+              return { ok: false, week: key, saved: false, path: '', text: `「${bad?.day}」不在 ${key} 这一周里（${range.start} ~ ${range.end}）。` };
+            }
+            const md = renderWeekly({ key, lines, summary: String(args?.summary ?? '') });
+            const file = weeklyPath(archiveDirectory, key);
+            await writeFileAtomic(file, md);
+            const wrote = lines.length;
+            return {
+              ok: true,
+              week: key,
+              saved: true,
+              path: file,
+              text: `周结写好了：${file}\n`
+                + `（${wrote} 天写了字。这一周一共 ${range.days.length} 天。）\n`
+                + `接下来建议 memory_append 写一条记忆 —— 不然这文件只有我翻本子时才看得到。`,
+            };
+          },
+        }),
+      'fish: weekly tool',
     );
 
     log('已注册工具 loop_add / loop_done / loop_list / fish_compact');
