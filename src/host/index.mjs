@@ -92,6 +92,7 @@ import { readQuotes, renderQuotes, searchQuotes } from '../core/quotes.mjs';
 import { bumpRecalled, soughtCount, soughtNote } from '../core/revisit.mjs';
 import { diagnoseMiss } from '../core/miss.mjs';
 import { LESSON_FILE, registerLesson } from '../core/lesson.mjs';
+import { FRAGMENTS_SECTION, registerFragments } from '../core/fragments.mjs';
 import {
   UNFINISHED_FILE,
   harvest as harvestUnfinished,
@@ -4960,6 +4961,8 @@ export function apply(ctx, rawConfig) {
       file: path.join(archiveDirectory, STICKY_FILE),
       archiveFile: path.join(archiveDirectory, STICKY_ARCHIVE_FILE),
       log,
+      // 1.23.0：注入段改由 fragments.mjs 统一注册，这里只要它的工具。
+      section: false,
       config: () => ({
         enabled: config.stickyEnabled !== false,
         ttlDays: config.stickyTtlDays,
@@ -4980,6 +4983,7 @@ export function apply(ctx, rawConfig) {
       file: path.join(archiveDirectory, LESSON_FILE),
       log,
       enabled: () => config.lessonEnabled !== false,
+      section: false,
     });
     log(`教训已注册：${path.join(archiveDirectory, LESSON_FILE)}`);
   } catch (err) {
@@ -4996,10 +5000,38 @@ export function apply(ctx, rawConfig) {
       log,
       enabled: () => config.unfinishedEnabled !== false,
       config: () => ({ maxPerTurn: config.unfinishedPerTurn }),
+      section: false,
     });
     log(`未说完已注册：${path.join(archiveDirectory, UNFINISHED_FILE)}`);
   } catch (err) {
     warn(`未说完注册失败（不影响聊天）：${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // ── 三段零碎，合回一段 ──
+  //
+  // 小纸条 / 教训 / 未说完以前是三个注入段、三套开关。内容没动，
+  // 只是搬进同一个抽屉：一段、一个总开关、一个总字数（1.23.0）。
+  try {
+    registerFragments(ctx, {
+      stickyFile: path.join(archiveDirectory, STICKY_FILE),
+      lessonFile: path.join(archiveDirectory, LESSON_FILE),
+      unfinishedFile: path.join(archiveDirectory, UNFINISHED_FILE),
+      log,
+      config: () => ({
+        fragmentsEnabled: config.fragmentsEnabled,
+        fragmentsMaxChars: config.fragmentsMaxChars,
+        // 旧的三个开关照样认：他设过的值不该因为换了个抽屉就失效
+        stickyEnabled: config.stickyEnabled,
+        stickyTtlDays: config.stickyTtlDays,
+        stickyMaxInject: config.stickyMaxInject,
+        lessonEnabled: config.lessonEnabled,
+        unfinishedEnabled: config.unfinishedEnabled,
+        unfinishedPerTurn: config.unfinishedPerTurn,
+      }),
+    });
+    log(`零碎记忆已注册（一段装三段）：${FRAGMENTS_SECTION}`);
+  } catch (err) {
+    warn(`零碎记忆注册失败（不影响聊天）：${err instanceof Error ? err.message : String(err)}`);
   }
 
   log(`已加载，档案目录：${archiveDirectory}`);

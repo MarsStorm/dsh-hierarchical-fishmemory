@@ -270,13 +270,15 @@ test('设置页能整棵树渲染出来（含云端表单）', async () => {
   assert.ok(flat.includes('recallTitle'), '长期记忆页要有「回忆开关」那块');
   assert.ok(flat.includes('fieldOnThisDay'), '要有「那年今天」那条');
   assert.ok(flat.includes('fieldFlashback'), '要有「忽然想起那一天」那条');
-  // 1.10.0 加的三项小纸条配置（同一块，同一个 scope）
-  assert.ok(flat.includes('fieldStickyEnabled'), '要有「小纸条」总开关');
-  assert.ok(flat.includes('fieldStickyTtlDays'), '要有小纸条保留天数');
-  assert.ok(flat.includes('fieldStickyMaxInject'), '要有小纸条每轮注入条数');
-  // 1.17.0 加的两项：半句话会自己回来
-  assert.ok(flat.includes('fieldUnfinishedEnabled'), '要有「半句话会自己回来」那条');
-  assert.ok(flat.includes('fieldUnfinishedPerTurn'), '要有「每轮最多浮几条」');
+  // 1.23.0：字段还是那些，但分了三组，默认只展开第一组。
+  // 所以这里守两件事：三组的标题都在（点得到），第一组的字段真的画出来了。
+  assert.ok(flat.includes('groupEachTurn'), '要有「每轮都会注入的」这一组');
+  assert.ok(flat.includes('groupPace'), '要有「什么时候开口」这一组');
+  assert.ok(flat.includes('groupBudget'), '要有「占多少地方」这一组');
+  assert.ok(flat.includes('fieldFragmentsEnabled'), '第一组里要露「零碎记忆」总开关');
+  // 小纸条 / 教训 / 没说完 现在并进一段，旧的三个开关不摆在页面上，
+  // 但配置里仍然认（服务端照旧读 stickyEnabled / lessonEnabled / unfinishedEnabled）。
+  assert.equal(flat.includes('fieldStickyEnabled'), false, '旧的三个开关不再占页面位置');
 });
 
 test('主面板四个页签都渲染得出来', async () => {

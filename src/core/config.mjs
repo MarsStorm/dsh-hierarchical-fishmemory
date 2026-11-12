@@ -156,10 +156,25 @@ export const CONFIG_SPEC = [
     label: '「小闹钟」还挂着的事几天没动就标一句陈了（0 = 不标）',
   },
   {
+    key: 'fragmentsEnabled',
+    type: 'boolean',
+    default: true,
+    label: '「零碎记忆」整段：小纸条 + 教训 + 没说完（关掉 = 三段一起不注入）',
+  },
+  {
+    key: 'fragmentsMaxChars',
+    type: 'number',
+    default: 1400,
+    min: 200,
+    max: 4000,
+    step: 50,
+    label: '「零碎记忆」整段最多注入多少字（三段共用这一个数，先紧着教训和没说完）',
+  },
+  {
     key: 'stickyEnabled',
     type: 'boolean',
     default: true,
-    label: '「小纸条」记他说的原话（每轮自动记一行原话 + 注入）',
+    label: '（旧开关，1.23.0 起并入「零碎记忆」）「小纸条」记他说的原话',
   },
   {
     key: 'stickyTtlDays',
@@ -168,7 +183,7 @@ export const CONFIG_SPEC = [
     min: 1,
     max: 365,
     step: 1,
-    label: '「小纸条」注入保留天数（★ 钉住的不受这个限制）',
+    label: '（旧开关）「小纸条」注入保留天数（★ 钉住的不受这个限制）',
   },
   {
     key: 'stickyMaxInject',
@@ -177,19 +192,19 @@ export const CONFIG_SPEC = [
     min: 1,
     max: 20,
     step: 1,
-    label: '「小纸条」每轮最多注入几条',
+    label: '（旧开关）「小纸条」每轮最多注入几条',
   },
   {
     key: 'lessonEnabled',
     type: 'boolean',
     default: true,
-    label: '记住我重复踩的坑（踩过两次以上的每轮提醒）',
+    label: '（旧开关）记住我重复踩的坑（踩过两次以上的每轮提醒）',
   },
   {
     key: 'unfinishedEnabled',
     type: 'boolean',
     default: true,
-    label: '没说完的半句话，过几天夜里浮上来问一句',
+    label: '（旧开关）没说完的半句话，过几天夜里浮上来问一句',
   },
   {
     key: 'unfinishedPerTurn',

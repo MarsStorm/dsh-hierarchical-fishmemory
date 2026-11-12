@@ -249,6 +249,33 @@ function hourOf(ts) {
 }
 
 /**
+ * 「没说完」那一段的正文 —— 有就一句话，没有就空串。
+ *
+ * 副作用：浮上来的那一刻就 `markAsked`（注入里出现了，我就该接住它）。
+ * 1.23.0 起默认由 `fragments.mjs` 调它。
+ *
+ * @param {string} file
+ * @param {{enabled?:boolean, at?:number, limit?:number, log?:(m:string)=>void}} [options]
+ */
+export function unfinishedSectionText(file, options = {}) {
+  if (options?.enabled === false) return '';
+  const at = Number.isFinite(options?.at) ? options.at : Date.now();
+  const log = typeof options?.log === 'function' ? options.log : () => {};
+  try {
+    const item = pickRipe(loadStore(file), {
+      at,
+      limit: Number.isFinite(options?.limit) ? options.limit : MAX_PER_TURN,
+    });
+    if (item === null) return '';
+    markAsked(file, item, { at });
+    log(`半句话浮上来了：「${item.said.slice(0, 16)}」（${item.days} 天前）`);
+    return renderSection(item, { at });
+  } catch {
+    return '';
+  }
+}
+
+/**
  * 注册：每轮跑一次「有没有该浮上来的」，有就注入一段。
  *
  * 跟其它层的区别：那一节的内容**每轮都可能不同**（谁浮上来由时间决定），
@@ -257,34 +284,29 @@ function hourOf(ts) {
  * @param {any} ctx
  * @param {{file:string, log?:(m:string)=>void, enabled?:()=>boolean, config?:()=>object}} options
  */
-export function registerUnfinished(ctx, { file, log = () => {}, enabled, config } = {}) {
+export function registerUnfinished(ctx, { file, log = () => {}, enabled, config, section = true } = {}) {
   const cfg = () => (typeof config === 'function' ? config() || {} : {});
   const on = () => (typeof enabled === 'function' ? enabled() !== false : true);
 
-  ctx.effect(
-    () =>
-      ctx.systemPrompt.section({
-        name: UNFINISHED_SECTION,
-        order: UNFINISHED_ORDER,
-        text: () => {
-          if (!on()) return '';
-          const c = cfg();
-          const at = Date.now();
-          const store = loadStore(file);
-          const item = pickRipe(store, {
-            at,
-            limit: Number.isFinite(c.maxPerTurn) ? c.maxPerTurn : MAX_PER_TURN,
-          });
-          if (item === null) return '';
-          // 浮上来就算问了：这一刻注入里出现过，我就该接住它
-          markAsked(file, item, { at });
-          log(`半句话浮上来了：「${item.said.slice(0, 16)}」（${item.days} 天前）`);
-          return renderSection(item, { at });
-        },
-        interpolate: false,
-      }),
-    'fish: unfinished section',
-  );
+  // 1.23.0 起默认不自己注册段：三段零碎合成 `fragments:memory`，见 fragments.mjs。
+  if (section) {
+    ctx.effect(
+      () =>
+        ctx.systemPrompt.section({
+          name: UNFINISHED_SECTION,
+          order: UNFINISHED_ORDER,
+          text: () =>
+            unfinishedSectionText(file, {
+              enabled: on(),
+              at: Date.now(),
+              limit: Number.isFinite(cfg().maxPerTurn) ? cfg().maxPerTurn : MAX_PER_TURN,
+              log,
+            }),
+          interpolate: false,
+        }),
+      'fish: unfinished section',
+    );
+  }
 }
 
 /** 路径小工具。 */

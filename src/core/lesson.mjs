@@ -220,6 +220,21 @@ export function renderSection(lessons, options = {}) {
 }
 
 /**
+ * 教训那一段的正文。1.23.0 起默认由 `fragments.mjs` 调它。
+ *
+ * @param {string} file
+ * @param {{enabled?:boolean, limit?:number, minCount?:number}} [options]
+ */
+export function lessonSectionText(file, options = {}) {
+  if (options?.enabled === false) return '';
+  try {
+    return renderSection(readLessons(file), options);
+  } catch {
+    return '';
+  }
+}
+
+/**
  * 注册：注入段 + 两个工具。
  *
  * - `lesson_note`  我亲手记一笔（犯错时自己写）
@@ -228,20 +243,23 @@ export function renderSection(lessons, options = {}) {
  * @param {any} ctx
  * @param {{file:string, log?:(m:string)=>void, enabled?:()=>boolean}} options
  */
-export function registerLesson(ctx, { file, log = () => {}, enabled } = {}) {
+export function registerLesson(ctx, { file, log = () => {}, enabled, section = true } = {}) {
   const on = () => (typeof enabled === 'function' ? enabled() !== false : true);
 
-  ctx.effect(
-    () =>
-      ctx.systemPrompt.section({
-        name: LESSON_SECTION,
-        order: LESSON_ORDER,
-        // 每轮重读：这次刚记下的，下一轮就该看见
-        text: () => (on() ? renderSection(readLessons(file)) : ''),
-        interpolate: false,
-      }),
-    'fish: lesson section',
-  );
+  // 1.23.0 起默认不自己注册段：三段零碎合成 `fragments:memory`，见 fragments.mjs。
+  if (section) {
+    ctx.effect(
+      () =>
+        ctx.systemPrompt.section({
+          name: LESSON_SECTION,
+          order: LESSON_ORDER,
+          // 每轮重读：这次刚记下的，下一轮就该看见
+          text: () => lessonSectionText(file, { enabled: on() }),
+          interpolate: false,
+        }),
+      'fish: lesson section',
+    );
+  }
 
   ctx.inject(['tools'], (scope) =>
     scope.effect(() =>

@@ -81,6 +81,13 @@ window.__ModuleLoader__.load({
 .dsh-flat.__sm_root .__sm_tab:hover{color:var(--dsw-alias-label-primary)}
 .dsh-flat.__sm_root .__sm_tab[aria-selected="true"]{color:var(--dsw-alias-label-primary);font-weight:600;border-bottom-color:var(--flat-accent)}
 .dsh-flat.__sm_root .__sm_panel{display:flex;flex-direction:column;gap:14px;padding-top:4px}
+.dsh-flat.__sm_root .__sm_fieldGroup{display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--dsw-alias-separator-primary);padding-top:8px}
+.dsh-flat.__sm_root .__sm_fieldGroup:first-of-type{border-top:0;padding-top:0}
+.dsh-flat.__sm_root .__sm_groupHead{display:flex;align-items:baseline;gap:6px;cursor:pointer;user-select:none;outline:none}
+.dsh-flat.__sm_root .__sm_groupHead:hover .__sm_label{color:var(--dsw-alias-label-primary)}
+.dsh-flat.__sm_root .__sm_groupHead:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px;border-radius:4px}
+.dsh-flat.__sm_root .__sm_caret{font-size:11px;opacity:.7;width:12px;flex-shrink:0}
+.dsh-flat.__sm_root .__sm_fieldBody{display:flex;flex-direction:column;gap:6px;padding-left:18px}
 .dsh-flat.__sm_root .__sm_groupTitle{display:flex;flex-direction:column;gap:2px}
 .dsh-flat.__sm_root .__sm_groupTitle>span:first-child{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary)}
 /* 标题右边那颗「当前默认卡」：小、圆、像标签，但真的是个能点的下拉。 */
@@ -270,6 +277,16 @@ window.__ModuleLoader__.load({
       onThisDayHint: "同月同日、或一个月前的那几天，最多给几条。",
       fieldFlashback: "「忽然想起那一天」",
       flashbackHint: "每天从情感日记里随机翻一天，像突然想起一段回忆那样提出来。",
+      fieldFragmentsEnabled: "「零碎记忆」整段（小纸条 + 教训 + 没说完）",
+      fragmentsEnabledHint: "三段小东西合成一段注入：他说的原话、我重复踩的坑、当时没接住的半句话。关掉就是三段一起不注入，记录照旧。",
+      fieldFragmentsMaxChars: "「零碎记忆」整段最多多少字",
+      fragmentsMaxCharsHint: "三段共用这一个数。教训和「没说完」先占位，小纸条拿剩下的 —— 它们要是被挤掉就白搭。",
+      groupEachTurn: "每轮都会注入的",
+      groupEachTurnHint: "这几项决定每轮开头你眼前有没有东西",
+      groupPace: "什么时候开口",
+      groupPaceHint: "闷太久、事情放陈了，这些是阈值",
+      groupBudget: "占多少地方",
+      groupBudgetHint: "注入是有成本的，觉得挤就往小调",
       fieldStickyEnabled: "「小纸条」记他说的原话",
       stickyEnabledHint: "每轮把他说的那句话原样记一行，每轮都注入 —— 语气和用词不会被日记压没。",
       fieldStickyTtlDays: "「小纸条」保留天数",
@@ -400,6 +417,16 @@ window.__ModuleLoader__.load({
       onThisDayHint: "Same month and day, or the few days a month ago.",
       fieldFlashback: "\"A day suddenly remembered\"",
       flashbackHint: "Every day, pick one day from the feelings diary and mention it like an old memory surfacing.",
+      fieldFragmentsEnabled: "\"Fragments\" block (notes + lessons + unfinished)",
+      fragmentsEnabledHint: "Three small things injected as one block: his own words, the mistakes I keep repeating, and half-sentences I never caught. Turning it off stops the injection; the records stay.",
+      fieldFragmentsMaxChars: "Fragment block size limit (characters)",
+      fragmentsMaxCharsHint: "One budget for all three. Lessons and unfinished lines take their room first; sticky notes get what's left.",
+      groupEachTurn: "Injected every turn",
+      groupEachTurnHint: "Whether anything reaches me at the start of each turn",
+      groupPace: "When to speak up",
+      groupPaceHint: "Thresholds for silence and stale items",
+      groupBudget: "How much room",
+      groupBudgetHint: "Injection costs tokens; lower this if it feels crowded",
       fieldStickyEnabled: "Keep his own words (\"sticky notes\")",
       stickyEnabledHint: "Every turn, record one line of what he actually said, and inject it back — tone and wording survive what the diary compresses.",
       fieldStickyTtlDays: "Sticky note retention (days)",
@@ -471,17 +498,27 @@ window.__ModuleLoader__.load({
     //
     // 写回走 `commitSettingsOps` → 宿主把改动写进 profile 的 cordis.patch.yml
     // 并热重载插件 —— 改完不用重启。
+    // 设置页上的字段（1.23.0 重排）。
+    //
+    // 原来这里是十个平铺的开关 —— 小纸条三个、教训一个、没说完两个、
+    // 那年今天两个、节奏两个，看起来像一堆零件。现在三段零碎合成一段
+    // （`fragmentsEnabled` + `fragmentsMaxChars`），旧的三个开关不再摆出来，
+    // 但**照样生效**：他设过的值不该因为我换了个抽屉就失效。
     var RECALL_FIELDS = [
+      { key: "fragmentsEnabled", type: "checkbox", def: 1, label: "fieldFragmentsEnabled", hint: "fragmentsEnabledHint" },
       { key: "onThisDay", type: "number", min: 0, max: 4, def: 2, label: "fieldOnThisDay", hint: "onThisDayHint" },
       { key: "flashback", type: "checkbox", def: 1, label: "fieldFlashback", hint: "flashbackHint" },
-      { key: "stickyEnabled", type: "checkbox", def: 1, label: "fieldStickyEnabled", hint: "stickyEnabledHint" },
-      { key: "stickyTtlDays", type: "number", min: 1, max: 365, def: 30, label: "fieldStickyTtlDays", hint: "stickyTtlDaysHint" },
-      { key: "stickyMaxInject", type: "number", min: 1, max: 20, def: 8, label: "fieldStickyMaxInject", hint: "stickyMaxInjectHint" },
-      { key: "lessonEnabled", type: "checkbox", def: 1, label: "fieldLessonEnabled", hint: "lessonEnabledHint" },
-      { key: "unfinishedEnabled", type: "checkbox", def: 1, label: "fieldUnfinishedEnabled", hint: "unfinishedEnabledHint" },
-      { key: "unfinishedPerTurn", type: "number", min: 0, max: 3, def: 1, label: "fieldUnfinishedPerTurn", hint: "unfinishedPerTurnHint" },
+      { key: "silenceNudge", type: "number", min: 0, max: 20, def: 3, label: "fieldSilenceNudge", hint: "silenceNudgeHint" },
       { key: "staleLoopDays", type: "number", min: 0, max: 30, def: 3, label: "fieldStaleLoopDays", hint: "staleLoopDaysHint" },
-      { key: "silenceNudge", type: "number", min: 0, max: 20, def: 3, label: "fieldSilenceNudge", hint: "silenceNudgeHint" }
+      { key: "fragmentsMaxChars", type: "number", min: 200, max: 4000, def: 1400, label: "fieldFragmentsMaxChars", hint: "fragmentsMaxCharsHint" }
+    ];
+
+    // 分三组：常用的默认展开，另外两组折起来。字段本身一个没少，
+    // 变的是「一眼能看到几个」。
+    var RECALL_GROUPS = [
+      { key: "each", label: "groupEachTurn", hint: "groupEachTurnHint", open: true, keys: ["fragmentsEnabled", "onThisDay", "flashback"] },
+      { key: "pace", label: "groupPace", hint: "groupPaceHint", open: false, keys: ["silenceNudge", "staleLoopDays"] },
+      { key: "budget", label: "groupBudget", hint: "groupBudgetHint", open: false, keys: ["fragmentsMaxChars"] }
     ];
 
     function RecallConfig(props) {
@@ -494,6 +531,12 @@ window.__ModuleLoader__.load({
       var [busy, setBusy] = react.useState(false);
       var [notice, setNotice] = react.useState(null);
       var [error, setError] = react.useState(null);
+      // 哪几组是展开的。默认只展开第一组 —— 其余的折起来，想改再点。
+      var [openGroups, setOpenGroups] = react.useState(function () {
+        var init = {};
+        RECALL_GROUPS.forEach(function (g) { init[g.key] = Boolean(g.open); });
+        return init;
+      });
       var pending = react.useRef(false);
 
       react.useEffect(function () {
@@ -564,20 +607,56 @@ window.__ModuleLoader__.load({
           h("span", null, t("recallTitle")),
           h("span", { className: "__sm_hint" }, t("recallIntro"))
         ),
-        RECALL_FIELDS.map(function (f) {
-          if (f.type === "checkbox") {
-            return h("label", { key: f.key, className: "__sm_field" },
-              h("span", { className: "__sm_row" },
-                h("input", { className: "__sm_check", type: "checkbox", checked: Boolean(fieldValue(f)), onChange: function (e) { setField(f, e.target.checked); } }),
-                h("span", { className: "__sm_label" }, t(f.label))
-              ),
-              f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
-            );
-          }
-          return h("label", { key: f.key, className: "__sm_field" },
-            h("span", { className: "__sm_label" }, t(f.label)),
-            h("input", { className: "__sm_input", type: "number", min: f.min, max: f.max, step: 1, value: fieldValue(f), onChange: function (e) { setField(f, e.target.value); } }),
-            f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
+        RECALL_GROUPS.map(function (g) {
+          var isOpen = Boolean(openGroups[g.key]);
+          return h("div", { key: g.key, className: "__sm_fieldGroup" },
+            h("div", {
+              className: "__sm_groupHead",
+              role: "button",
+              tabIndex: 0,
+              "aria-expanded": isOpen ? "true" : "false",
+              onClick: function () {
+                setOpenGroups(function (prev) {
+                  var next = Object.assign({}, prev);
+                  next[g.key] = !prev[g.key];
+                  return next;
+                });
+              },
+              onKeyDown: function (e) {
+                if (e && (e.key === "Enter" || e.key === " ")) {
+                  e.preventDefault && e.preventDefault();
+                  setOpenGroups(function (prev) {
+                    var next = Object.assign({}, prev);
+                    next[g.key] = !prev[g.key];
+                    return next;
+                  });
+                }
+              }
+            },
+              h("span", { className: "__sm_caret" }, isOpen ? "▾" : "▸"),
+              h("span", { className: "__sm_label" }, t(g.label)),
+              h("span", { className: "__sm_hint" }, t(g.hint))
+            ),
+            isOpen
+              ? h("div", { className: "__sm_fieldBody" },
+                  RECALL_FIELDS.filter(function (f) { return g.keys.indexOf(f.key) !== -1; }).map(function (f) {
+                    if (f.type === "checkbox") {
+                      return h("label", { key: f.key, className: "__sm_field" },
+                        h("span", { className: "__sm_row" },
+                          h("input", { className: "__sm_check", type: "checkbox", checked: Boolean(fieldValue(f)), onChange: function (e) { setField(f, e.target.checked); } }),
+                          h("span", { className: "__sm_label" }, t(f.label))
+                        ),
+                        f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
+                      );
+                    }
+                    return h("label", { key: f.key, className: "__sm_field" },
+                      h("span", { className: "__sm_label" }, t(f.label)),
+                      h("input", { className: "__sm_input", type: "number", min: f.min, max: f.max, step: 1, value: fieldValue(f), onChange: function (e) { setField(f, e.target.value); } }),
+                      f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
+                    );
+                  })
+                )
+              : null
           );
         }),
         h("div", { className: "__sm_actions" },

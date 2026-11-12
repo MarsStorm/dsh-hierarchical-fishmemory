@@ -642,6 +642,26 @@ export async function setPinned(file, index, pinned) {
 }
 
 /**
+ * 小纸条那一段的正文。
+ *
+ * 1.23.0 起默认由 `fragments.mjs` 调它 —— 三段零碎合成一段，但预算还是各算各的：
+ * 小纸条拿剩下的，教训和未说完先占位（它们条数少、每一条都比一张纸条重）。
+ *
+ * @param {string} file
+ * @param {{enabled?:boolean, ttlDays?:number, maxInject?:number, maxChars?:number, at?:number}} [config]
+ */
+export function stickySectionText(file, config = {}) {
+  try {
+    if (config?.enabled === false) return '';
+    const raw = readFileSyncSafe(file);
+    if (raw === null) return '';
+    return renderSection(parseNotes(raw), config);
+  } catch {
+    return '';
+  }
+}
+
+/**
  * 注册「小纸条」这一层：注入段 + 三个工具。
  *
  * · `sticky_note` —— 手动补一条（原话 + 我这轮干了什么）
@@ -655,7 +675,10 @@ export async function setPinned(file, index, pinned) {
  * @param {(msg:string)=>void} opts.log
  * @param {()=>object} opts.config 取当前配置（ttlDays / maxInject）
  */
-export function registerSticky(ctx, { file, archiveFile = null, log = () => {}, config = () => ({}) }) {
+export function registerSticky(
+  ctx,
+  { file, archiveFile = null, log = () => {}, config = () => ({}), section = true } = {},
+) {
   const cfg = () => {
     try {
       return config() ?? {};
@@ -665,24 +688,18 @@ export function registerSticky(ctx, { file, archiveFile = null, log = () => {}, 
   };
 
   // ── 注入段 ──
-  ctx.effect(() =>
-    ctx.systemPrompt.section({
-      name: STICKY_SECTION,
-      order: STICKY_ORDER,
-      // 每轮重新读文件 —— 他刚在面板里改过，下一轮就该生效。
-      text: () => {
-        try {
-          if (cfg().enabled === false) return '';
-          const raw = readFileSyncSafe(file);
-          if (raw === null) return '';
-          return renderSection(parseNotes(raw), cfg());
-        } catch {
-          return '';
-        }
-      },
-      interpolate: false,
-    }),
-  );
+  // 1.23.0 起默认不自己注册：三段零碎（小纸条 / 教训 / 未说完）合进一个
+  // `fragments:memory` 段，由 fragments.mjs 统一渲染。传 section:false 即可。
+  if (section) {
+    ctx.effect(() =>
+      ctx.systemPrompt.section({
+        name: STICKY_SECTION,
+        order: STICKY_ORDER,
+        text: () => stickySectionText(file, cfg()),
+        interpolate: false,
+      }),
+    );
+  }
 
   // ── 工具 ──
   ctx.inject(['tools'], (scope) => {
