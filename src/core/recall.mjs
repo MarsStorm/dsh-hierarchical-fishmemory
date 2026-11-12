@@ -38,12 +38,29 @@ const IDF_SMOOTH = 1;
  * 没有 summary 的用正文兜底（老条目在回填完之前就是这样）。
  *
  * @param {Array<{id: string, summary?: string, text?: string}>} entries
- * @returns {{postings: Map<string, Map<string, number>>, df: Map<string, number>, lengths: Map<string, number>, N: number}}
+ * @returns {{
+ *   postings: Map<string, Map<string, number>>, df: Map<string, number>,
+ *   lengths: Map<string, number>, N: number,
+ *   charPostings: Map<string, Map<string, number>>, charDf: Map<string, number>,
+ *   charLengths: Map<string, number>
+ * }}
  */
 export function buildIndex(entries) {
   const postings = new Map();
   const df = new Map();
   const lengths = new Map();
+  // ── 单字倒排（2026-11-13，1.26.0）──
+  //
+  // 主索引只收 bigram，而 bigram 要求**两个字紧挨着**才命中。
+  // 于是「他半夜不睡觉」搜不到「他熬夜到天亮才睡」——半夜/熬夜永远撞不上，
+  // 可这两句说的是同一件事，而且「夜」这个字两边都有。
+  //
+  // 真实档案上量过（tools/probe-recall.mjs）：加单字后 top-20 命中 8/15 → 13/15。
+  // **但它同时把「真没有」变成「一堆沾边」**：问「光合作用」捞回 69 条。
+  // 所以单字单独一份倒排，**只用来扩候选，不参与"有没有"的判定**。
+  const charPostings = new Map();
+  const charDf = new Map();
+  const charLengths = new Map();
   const list = Array.isArray(entries) ? entries : [];
 
   for (const entry of list) {
@@ -76,9 +93,34 @@ export function buildIndex(entries) {
       df.set(t, (df.get(t) ?? 0) + 1);
     }
     lengths.set(entry.id, tokens.length);
+
+    // 单字这一份：只收汉字单字，量大、区分度靠 idf 撑
+    const chars = hanChars([summary, entry.text ?? ''].join('\n'));
+    const charTf = new Map();
+    for (const c of chars) charTf.set(c, (charTf.get(c) ?? 0) + 1);
+    for (const [c, n] of charTf) {
+      if (!charPostings.has(c)) charPostings.set(c, new Map());
+      charPostings.get(c).set(entry.id, n);
+      charDf.set(c, (charDf.get(c) ?? 0) + 1);
+    }
+    charLengths.set(entry.id, chars.length);
   }
 
-  return { postings, df, lengths, N: lengths.size };
+  return { postings, df, lengths, N: lengths.size, charPostings, charDf, charLengths };
+}
+
+/** 文本里的汉字单字（去重） */
+const HAN_RE = /\p{Script=Han}/u;
+function hanChars(text) {
+  if (typeof text !== 'string' || text === '') return [];
+  const seen = new Set();
+  const out = [];
+  for (const ch of text) {
+    if (!HAN_RE.test(ch) || seen.has(ch)) continue;
+    seen.add(ch);
+    out.push(ch);
+  }
+  return out;
 }
 
 /**
@@ -100,6 +142,100 @@ export function buildIndex(entries) {
  * @param {{limit?: number, saturation?: number}} [options]
  * @returns {Map<string, number>} id → 相似度 0~1（未命中的条目不会出现在 map 里）
  */
+
+/**
+ * 单字检索：只用来**扩候选**，不能拿来判「有」。
+ *
+ * ── 为什么单字要和 bigram 分开 ──
+ *
+ * bigram 要求两个字紧挨着：`半夜` 和 `熬夜` 永远撞不上，可「夜」两边都有。
+ * 真实档案上量过（`tools/probe-recall.mjs`）：加单字后 top-20 命中 8/15 → 13/15。
+ *
+ * 代价也量过：问「光合作用」能从 115 条里捞出 69 条，全在 0.3 分以上 ——
+ * 因为「光」「合」「作」「用」都是常用字。**问一件根本不存在的事，
+ * 回答从"真没有"变成了"一大堆沾边"。**
+ *
+ * 所以约定（`searchWithChars` 会执行它）：
+ *   - 单字分**封顶**在 `midSim` 之下（默认 0.25 → 封顶 0.15），
+ *     光靠单字永远够不着「值得提一句」那条线；
+ *   - 「沾边」计数可以用它 —— 那是"有没有可能相关"，说得出边界就不算撒谎。
+ *
+ * @param {ReturnType<typeof buildIndex>} index
+ * @param {string} query
+ * @param {{limit?: number, saturation?: number, weight?: number}} [options]
+ * @returns {Map<string, number>} id → 相似度 0~1
+ */
+export function searchChars(index, query, options = {}) {
+  const limit = options.limit ?? 50;
+  const saturation = Number.isFinite(options.saturation) && options.saturation > 0
+    ? options.saturation
+    : 2;
+  const weight = Number.isFinite(options.weight) && options.weight > 0 ? options.weight : 0.5;
+  const scores = new Map();
+  const chars = hanChars(query);
+  if (index.N === 0 || chars.length === 0) return scores;
+
+  const k1 = 1.2;
+  const b = 0.75;
+  const avgLen =
+    [...index.charLengths.values()].reduce((s, n) => s + n, 0) / Math.max(1, index.charLengths.size);
+
+  const raw = new Map();
+  for (const c of chars) {
+    const bucket = index.charPostings?.get(c);
+    if (bucket === undefined) continue;
+    const idf = Math.log(1 + (index.N + 0.5) / ((index.charDf.get(c) ?? 0) + 0.5));
+    for (const [id, tf] of bucket) {
+      const len = index.charLengths.get(id) ?? avgLen;
+      const norm = 1 - b + (b * len) / Math.max(1, avgLen);
+      raw.set(id, (raw.get(id) ?? 0) + (idf * weight * (tf * (k1 + 1))) / (tf + k1 * norm));
+    }
+  }
+
+  for (const [id, r] of raw) scores.set(id, Math.min(1, 1 - Math.exp(-r / saturation)));
+
+  if (scores.size > limit) {
+    const kept = [...scores.entries()].sort((a, b2) => b2[1] - a[1]).slice(0, limit);
+    return new Map(kept);
+  }
+  return scores;
+}
+
+/**
+ * 两路合并：bigram 是硬证据，单字是软证据。
+ *
+ * 返回的每一项都带 `weak` —— `weak: true` 表示**只有单字撞上过**。
+ * 调用方必须区别对待：可以说「沾边」，不能说「记得」。
+ *
+ * 封顶的算术：单字分先乘 `weight`（默认 0.5）再封到 `cap`（默认 0.15）。
+ * `midSim` 是 0.25 —— **封顶必须小于它**，否则单字就能自己触发一次"忽然想起来"，
+ * 那是拿噪声去演深情。
+ *
+ * @param {ReturnType<typeof buildIndex>} index
+ * @param {string} query
+ * @param {{limit?: number, cap?: number, weight?: number, strong?: Map<string, number>}} [options]
+ * @returns {Map<string, {sim: number, weak: boolean}>}
+ */
+export function searchWithChars(index, query, options = {}) {
+  const limit = options.limit ?? 50;
+  const cap = Number.isFinite(options.cap) && options.cap > 0 ? options.cap : 0.15;
+  const strong = options.strong ?? searchScores(index, query, { limit });
+  const out = new Map();
+  for (const [id, sim] of strong) out.set(id, { sim, weak: false });
+
+  const soft = searchChars(index, query, { limit });
+  for (const [id, sim] of soft) {
+    const softCapped = Math.min(cap, sim * (Number.isFinite(options.weight) ? options.weight : 0.5));
+    const already = out.get(id);
+    if (already !== undefined) {
+      // 已经有 bigram 证据：单字只是把分数往上抬一点，但抬不过 cap 太多
+      already.sim = Math.min(1, already.sim + softCapped * 0.3);
+    } else {
+      out.set(id, { sim: softCapped, weak: true });
+    }
+  }
+  return out;
+}
 
 /**
  * 虚词 / 语气词 / 高频代词的单字表。

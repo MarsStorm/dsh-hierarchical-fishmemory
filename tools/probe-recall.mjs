@@ -17,7 +17,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { buildIndex, searchScores } from '../src/core/recall.mjs';
+import { buildIndex, searchChars, searchScores } from '../src/core/recall.mjs';
 import { tokenize } from '../src/core/keywords.mjs';
 
 const DIR = process.env.FEISH_PROBE_DIR ?? '/root/projects/.dsh/feiyu-diary/diary';
@@ -165,5 +165,38 @@ for (const q of NOISE) {
 }
 
 const best = variants.reduce((a, b) => (b[1][2] > a[1][2] ? b : a));
-console.log(`\n结论：加单字把 top-20 从 ${base[2]}/${CASES.length} 抬到 ${best[1][2]}/${CASES.length}，`);
-console.log('但它同时把「真没有」变成「一堆沾边」。单字只能扩候选，不能拿来判「有」。');
+console.log(`\n加单字把 top-20 从 ${base[2]}/${CASES.length} 抬到 ${best[1][2]}/${CASES.length}，`);
+console.log('但它同时把「真没有」变成「一堆沾边」—— 单字只能扩候选，不能拿来判「有」。');
+
+// ── 四、线上那版（1.26.0 之后真的在跑的）：单字封顶当候选 ──
+//
+// 这一段量的是**已经上线的那套**，不是候选方案：
+// `searchChars` 分封在 0.15（midSim 是 0.25），只有单字撞上的标 weak。
+// 判据：正确那条在不在候选里（放宽到 30），以及噪声查询有没有冒到 midSim 以上。
+const MID_SIM = 0.25;
+console.log('\n【上线版】bigram + 单字候选（封顶 0.15）');
+const shipped = CASES.map(([q, want]) => {
+  const merged = new Map([...searchScores(idxPlain, q)]);
+  for (const [id, sim] of searchChars(idxPlain, q, { limit: 30 })) {
+    if (merged.has(id)) continue;
+    merged.set(id, Math.min(0.15, sim * 0.5));
+  }
+  const ids = [...merged.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
+  const r = ids.indexOf(want);
+  return [q, r < 0 ? '—' : r + 1, merged.get(want) ?? 0];
+});
+const shippedHits = [5, 10, 20, 30].map((k) => shipped.filter(([, r]) => r !== '—' && r <= k).length);
+console.log(`   top-K 命中：${[5, 10, 20, 30].map((k, i) => `top-${k} ${shippedHits[i]}/${CASES.length}`).join('  ')}`);
+console.log(`   名次：${shipped.map(([, r]) => r).join(' ')}`);
+
+console.log('\n【上线版 噪声】这些分数全部必须 < 0.25（否则单字能自己触发一次「忽然想起来」）');
+let worst = 0;
+let worstQ = '';
+for (const q of NOISE) {
+  const merged = new Map();
+  for (const [id, sim] of searchChars(idxPlain, q, { limit: 30 })) merged.set(id, Math.min(0.15, sim * 0.5));
+  const top = Math.max(0, ...merged.values());
+  if (top > worst) { worst = top; worstQ = q; }
+  console.log(`   ${q.padEnd(8)} ${merged.size} 条候选，最高 ${top.toFixed(3)}`);
+}
+console.log(`   最高的一条：${worstQ} ${worst.toFixed(3)} —— ${worst < MID_SIM ? 'OK，够不着 midSim' : '✗ 超了，噪声会自己浮上来'}`);

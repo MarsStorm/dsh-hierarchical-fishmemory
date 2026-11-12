@@ -6,7 +6,9 @@ import {
   looksLikeWork,
   parseTimeHint,
   queryHasSubstance,
+  searchChars,
   searchScores,
+  searchWithChars,
   selectMemories,
   softmaxPick,
 } from '../src/core/recall.mjs';
@@ -200,4 +202,49 @@ test('softmaxPick：温度极低时基本取最高分', () => {
 
 test('softmaxPick：空列表返回 undefined', () => {
   assert.equal(softmaxPick([], 0.15, Math.random), undefined);
+});
+
+// ── 单字层（1.26.0）──
+//
+// bigram 要求两个字紧挨着才命中，于是「半夜」搜不到「熬夜」。
+// 单字能补上这段，代价是把「真没有」变成「一堆沾边」。
+// 下面这组测试守的就是那条线：**能扩候选，不能判「有」。**
+
+test('buildIndex：单字单独一份倒排，不混进 bigram 那份', () => {
+  const idx = buildIndex([{ id: 'a', text: '他熬夜到天亮才睡', salience: 0.5, created_at: now }]);
+  assert.ok(idx.charPostings.get('夜'), '「夜」在单字倒排里');
+  assert.equal(idx.postings.get('夜'), undefined, 'bigram 那份里不该有单字');
+});
+
+test('searchChars：「半夜」能找到「熬夜」，bigram 找不到', () => {
+  const entries2 = [
+    { id: 'a', text: '他熬夜到天亮才睡', salience: 0.5, created_at: now },
+    { id: 'b', text: '端口固定 3080', salience: 0.5, created_at: now },
+  ];
+  const idx = buildIndex(entries2);
+  assert.equal(searchScores(idx, '他半夜不睡觉').size, 0, 'bigram 一个都撞不上');
+  const chars = searchChars(idx, '他半夜不睡觉');
+  assert.ok(chars.get('a') > 0, '单字能撞上「夜」「睡」');
+});
+
+test('searchChars：问根本不存在的事，分数也压得很低', () => {
+  const idx = buildIndex(entries);
+  const chars = searchChars(idx, '量子纠缠');
+  for (const [, sim] of chars) assert.ok(sim <= 0.25, '单字分不该顶到「值得提一句」那条线');
+});
+
+test('searchWithChars：只有单字撞上的标 weak', () => {
+  const idx = buildIndex([
+    { id: 'a', text: '他熬夜到天亮才睡', salience: 0.5, created_at: now },
+  ]);
+  const got = searchWithChars(idx, '他半夜不睡觉');
+  assert.equal(got.get('a').weak, true);
+  assert.ok(got.get('a').sim < 0.25, '封顶必须在 midSim 之下，否则单字能自己触发一次"忽然想起来"');
+});
+
+test('searchWithChars：bigram 撞上的不算 weak', () => {
+  const idx = buildIndex([{ id: 'a', text: '端口 3080 固定', salience: 0.5, created_at: now }]);
+  const got = searchWithChars(idx, '端口');
+  assert.equal(got.get('a').weak, false);
+  assert.ok(got.get('a').sim > 0.15);
 });

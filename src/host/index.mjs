@@ -40,7 +40,7 @@ import {
 // 原来的 evaluateGate 那套关键词闸门拆了（见 turn-stopping 里的注释）。
 // SUPPRESS_RE 留着 —— "别记"是用户的控制，不是启发式。
 import { SUPPRESS_RE } from '../core/gate.mjs';
-import { buildIndex, selectMemories, searchScores, queryHasSubstance, looksLikeWork, parseTimeHint, DEFAULT_RECALL_OPTIONS } from '../core/recall.mjs';
+import { buildIndex, selectMemories, searchScores, searchChars, queryHasSubstance, looksLikeWork, parseTimeHint, DEFAULT_RECALL_OPTIONS } from '../core/recall.mjs';
 import { scrub } from '../core/privacy.mjs';
 import { pickRecent, renderMemoryBlock } from '../core/persona.mjs';
 import {
@@ -4177,6 +4177,18 @@ export function apply(ctx, rawConfig) {
                   if (coldIds.has(id)) scores.set(id, (scores.get(id) ?? 0) + s);
                 }
               }
+              // ── 单字补一轮（2026-11-13，1.26.0）──
+              //
+              // 只在这一条路上补：没有 llm 服务、只能靠字面的时候。
+              // 有模型那条路不需要 —— 它读的是全部 summary，本来就是按意思挑的。
+              //
+              // 补进来的一律封在 0.15，够不着 0.18 那一档，
+              // 于是只会落在 `literal`（「只是字面撞上」），不会被说成「记得」。
+              for (const [id, sim] of searchChars(index, query, { limit: 30 })) {
+                if (scores.has(id)) continue;
+                const weak = Math.min(0.15, sim * 0.5);
+                if (weak > 0) scores.set(id, weak);
+              }
               ranked = [...scores.entries()]
                 .map(([id, sim]) => ({
                   entry: byId.get(id),
@@ -4228,6 +4240,9 @@ export function apply(ctx, rawConfig) {
               if (onlyCold.length > 0) {
                 for (const [id] of searchScores(coldIndex(), query, { limit: 200 })) looseIds.add(id);
               }
+              // 单字撞上的也算「沾边」—— 不算进来的话，明明有字面联系
+              // 也会报「一条都沾不上」，那是另一种撒谎。
+              for (const [id] of searchChars(index, query, { limit: 50 })) looseIds.add(id);
               const needle2 = query.toLowerCase();
               for (const e of corpus) {
                 if (typeof e.text === 'string' && e.text.toLowerCase().includes(needle2)) looseIds.add(e.id);
