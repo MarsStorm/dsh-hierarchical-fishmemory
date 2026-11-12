@@ -89,6 +89,7 @@ import {
 } from '../core/sticky.mjs';
 import { readQuotes, renderQuotes, searchQuotes } from '../core/quotes.mjs';
 import { bumpRecalled, soughtCount, soughtNote } from '../core/revisit.mjs';
+import { diagnoseMiss } from '../core/miss.mjs';
 import { LESSON_FILE, registerLesson } from '../core/lesson.mjs';
 import {
   UNFINISHED_FILE,
@@ -4162,15 +4163,41 @@ export function apply(ctx, rawConfig) {
             }
 
             if (ranked.length === 0) {
-              log(`检索「${query.slice(0, 20)}」：没找到`);
-              return {
-                ok: true,
-                found: 0,
-                text: hasRange
-                  ? `那段时间（${since || '最初'} → ${until || '现在'}）里没找到。要么换个说法，要么放宽日期。`
-                  : '这一句没翻到。可能是真没有，也可能我当时用了别的说法 —— 换两个词再试一次。'
-                    + '两次都没有，就当他没说过，别编一个像样的。',
-              };
+              // ── 没翻到的时候，先弄清是哪一种「没有」──
+              //
+              // 原来这里只回一句"可能是真没有，也可能我用了别的说法"。
+              // 听着诚实，其实把四种情况糊成了一句 —— 而这两天我做的
+              // 每一件事（记不清分档 / 作废标记 / 原话库的有与没有）
+              // 核心都是不许含糊。最该说清楚的地方反而最含糊。
+              //
+              // 所以：真去数一遍。数出来的东西才配说出口。
+              // 抄的是 dsh-emotion-memory 的一条长处：「为什么没想起」
+              // 比「没想起」有用（见 core/miss.mjs 的注释）。
+              const looseIds = new Set();
+              for (const [id] of searchScores(index, query, { limit: 200 })) looseIds.add(id);
+              if (onlyCold.length > 0) {
+                for (const [id] of searchScores(coldIndex(), query, { limit: 200 })) looseIds.add(id);
+              }
+              const needle2 = query.toLowerCase();
+              for (const e of corpus) {
+                if (typeof e.text === 'string' && e.text.toLowerCase().includes(needle2)) looseIds.add(e.id);
+              }
+              let inLoose = 0;
+              for (const id of looseIds) {
+                const e = byId.get(id);
+                if (e && inRange(e)) inLoose += 1;
+              }
+
+              const reason = diagnoseMiss({
+                total: archive.diary.length + onlyCold.length,
+                loose: looseIds.size,
+                inLoose,
+                hasRange,
+                modelSaidNo: Array.isArray(picked),
+                query,
+              });
+              log(`检索「${query.slice(0, 20)}」：没找到（沾边 ${looseIds.size} 条，窗口内 ${inLoose} 条）`);
+              return { ok: true, found: 0, text: reason };
             }
 
             // 总字数封顶 —— 不按"次数"限流（那要跨轮状态，麻烦），
