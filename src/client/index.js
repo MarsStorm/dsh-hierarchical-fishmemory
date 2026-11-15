@@ -9,35 +9,25 @@
  *   1. 文件必须调用 `window.__ModuleLoader__.load({ id, factory })`。
  *      "执行 bundle 只注册工厂；模块副作用在物化时才跑" —— 所以整个
  *      插件体都待在 factory 闭包里。
- *   2. `id` **必须等于包名**（这里是 `dsh-hierarchical-fishmemory`）。浏览器模块身份
- *      就是解析出来的包名；两个来源解析到同一个包名会让组合直接失败。
+ *   2. `id` **必须等于包名**（这里是 `dsh-hierarchical-fishmemory`）。
  *   3. `factory(require)` 返回一个 Cordis 插件：`{ name, inject, apply }`。
  *
- * `require` 能解析的只有外壳那张**冻结的模块表**（PLATFORM_MODULES：
- * React、Cordis 和静态 UI 库）。我们只 require `react`，所以
- * `dsh.client.external` 是空的 —— 不向任何别的包借东西。
+ * `require` 能解析的只有外壳那张**冻结的模块表**，我们只 require `react`。
  *
  * 【为什么不用 JSX】
  * 没有打包器，就没有 JSX 变换。所以全程 `React.createElement`。
  *
- * 【为什么不 import DSH 的 UI 组件库】
- * 官方规范要求客户端插件照抄 markup、只用 `--dsw-alias-*` 主题 token，
- * 而不是 import `@deepseek-ai/dsh-client-ui-primitives`。照做的好处很实在：
- * **我们不跟任何插件共享运行时代码**，别的插件换 React 版本、换 UI 库版本，
- * 都伤不到我们。`dsh-context` 就借了那个库，它承担了我们不用承担的风险。
- *
  * ─────────────────────────────────────────────────────────────
- * 界面只有三件事：**看 / 删 / 带走**。
+ * 界面只有三件事：**看 / 删 / 带走**。没有搜索、没有标签筛选、没有图表。
  *
- * 没有搜索、没有标签筛选、没有统计图表 —— 这些在 SPEC 第 0.1 条就被明令
- * 砍掉了（"像鱼还是像系统"）。多一个控件就多一分"管理软件"味。
+ * 2026-11-16：整个界面重做了一遍。原来每个组件手里攥着一把内联 style 对象，
+ * 写法一样、长得却各不一样，悬停、过渡、层次一样都做不了 —— 内联样式写不出
+ * `:hover`。现在颜色和间距收进一份 CSS（`__fs_*` 前缀，全部挂在 `.feiyu-root`
+ * 下面），组件只负责结构。**主题仍然全走 `--dsw-alias-*` token**：写死颜色在
+ * 深色模式下必翻车。
  *
- * 2026-11-03：功能长到七八块之后，一根长条已经分不清哪段在说什么，于是拆成
- * 四个页签 —— 回看 / 本子 / 体检 / 档案（按使用频率排）。四个视图始终挂载、
- * 只靠 display 切换：切页不重拉 /stats、/feelings，草稿也不会丢。
- *
- * 唯一不能省的是**删**：在那之前，想删一条记忆得自己去编辑 jsonl 文件。
- * 会做这件事的人不需要面板，需要面板的人不会做这件事。
+ * 唯一的例外是侧栏那个小图标（`Icon`）—— 它由宿主当作插槽组件调用，
+ * 拿不到 `.feiyu-root` 这层壳，只能继续用内联样式和 `currentColor`。
  */
 window.__ModuleLoader__.load({
   id: 'dsh-hierarchical-fishmemory',
@@ -52,19 +42,253 @@ window.__ModuleLoader__.load({
     /** 主机的数据接口前缀，和 host 半边的 PANEL_BASE 必须对得上 */
     const API = '/feiyu-diary';
 
+    /* ───────────────────────── 样式 ───────────────────────── */
+    //
+    // 一份，一次，挂到 head 上。全部颜色走 token：
+    // `--dsw-alias-*` 的 requiresLightAndDark 都是 true，写死颜色就会翻车。
+    // 每个 token 都带了一个兜底值 —— 宿主换 token 名字时最多是"配色朴素了"，
+    // 不会变成白底白字。
+    //
+    // `color-mix()` 那几行是加分的：不支持它的 WebView 会把整条声明丢掉，
+    // 落在它前面那条普通声明上。**顺序不能反**。
+    const CSS = `
+.feiyu-root{
+  --fs-bg:var(--dsw-alias-bg-base,#fff);
+  --fs-l1:var(--dsw-alias-bg-layer-1,#fafafa);
+  --fs-l2:var(--dsw-alias-bg-layer-2,#f2f3f5);
+  --fs-l3:var(--dsw-alias-bg-layer-3,#e9eaec);
+  --fs-soft:var(--dsw-alias-bg-layer-2,#f2f3f5);
+  --fs-line:var(--dsw-alias-border-l1,rgba(0,0,0,.09));
+  --fs-line2:var(--dsw-alias-border-l2,rgba(0,0,0,.18));
+  --fs-t1:var(--dsw-alias-label-primary,#14161a);
+  --fs-t2:var(--dsw-alias-label-secondary,#5c6370);
+  --fs-t3:var(--dsw-alias-label-tertiary,#8b929e);
+  --fs-brand:var(--dsw-alias-brand-primary,#4d6bfe);
+  --fs-err:var(--dsw-alias-state-error-primary,#e5484d);
+  --fs-radius:15px;
+  --fs-ease:cubic-bezier(.22,.61,.36,1);
+  height:100%;overflow-y:auto;overflow-x:hidden;
+  background:var(--fs-bg);color:var(--fs-t1);
+  font-feature-settings:"tnum" 1;
+  -webkit-font-smoothing:antialiased;
+}
+.feiyu-root *{box-sizing:border-box}
+.feiyu-root .fs-shell{max-width:768px;margin:0 auto;padding:0 22px 80px}
+
+/* ── 头部 ── */
+.feiyu-root .fs-hero{position:relative;padding:34px 0 6px}
+.feiyu-root .fs-hero:before{content:"";position:absolute;left:-30px;right:-30px;top:-70px;height:230px;
+  background:linear-gradient(180deg,var(--fs-l2),transparent);opacity:.6;pointer-events:none;
+  -webkit-mask-image:radial-gradient(70% 100% at 22% 0%,#000,transparent 72%);
+  mask-image:radial-gradient(70% 100% at 22% 0%,#000,transparent 72%)}
+.feiyu-root .fs-brand{position:relative;display:flex;align-items:center;gap:14px}
+.feiyu-root .fs-orb{flex:none;width:46px;height:46px;border-radius:15px;display:grid;place-items:center;
+  color:#fff;background:linear-gradient(150deg,var(--fs-brand),var(--fs-brand));
+  box-shadow:0 10px 24px -12px var(--fs-brand)}
+.feiyu-root .fs-orb svg{opacity:.96}
+.feiyu-root .fs-brandText{min-width:0}
+.feiyu-root .fs-title{margin:0;font-size:20px;line-height:1.25;font-weight:650;letter-spacing:-.02em}
+.feiyu-root .fs-sub{margin:4px 0 0;font-size:12.5px;line-height:1.6;color:var(--fs-t2)}
+
+/* ── 数 ── */
+.feiyu-root .fs-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:9px;margin-top:18px}
+.feiyu-root .fs-metric{padding:11px 13px;border-radius:13px;border:1px solid var(--fs-line);
+  background:linear-gradient(180deg,var(--fs-l1),var(--fs-bg))}
+.feiyu-root .fs-metric b{display:block;font-size:19px;line-height:1.25;font-weight:650;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.feiyu-root .fs-metric span{display:block;margin-top:2px;font-size:11.5px;color:var(--fs-t2)}
+
+/* ── 小标签 ── */
+.feiyu-root .fs-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.feiyu-root .fs-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:999px;
+  border:1px solid var(--fs-line);background:var(--fs-l1);font-size:11.5px;line-height:1.7;color:var(--fs-t2);white-space:nowrap}
+.feiyu-root .fs-chip--warn{color:var(--fs-err);border-color:var(--fs-err);background:transparent}
+
+/* ── 页签：吸顶、药丸、模糊底 ── */
+.feiyu-root .fs-tabs{position:sticky;top:0;z-index:6;display:flex;gap:4px;
+  margin:22px -22px 0;padding:10px 22px;
+  background:var(--fs-bg);border-bottom:1px solid var(--fs-line);
+  -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+.feiyu-root .fs-tab{appearance:none;border:0;background:none;font:inherit;font-size:13px;line-height:1;
+  color:var(--fs-t2);padding:9px 15px;border-radius:999px;cursor:pointer;
+  transition:background .18s var(--fs-ease),color .18s var(--fs-ease)}
+.feiyu-root .fs-tab:hover{color:var(--fs-t1);background:var(--fs-l2)}
+.feiyu-root .fs-tab[aria-selected="true"]{color:var(--fs-t1);font-weight:600;background:var(--fs-l2);
+  box-shadow:inset 0 0 0 1px var(--fs-line)}
+
+/* ── 卡片 ── */
+.feiyu-root .fs-card{margin-top:14px;padding:16px 18px;border-radius:var(--fs-radius);
+  border:1px solid var(--fs-line);background:var(--fs-l1)}
+.feiyu-root .fs-card--plain{background:transparent}
+.feiyu-root .fs-cardHead{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.feiyu-root .fs-cardTitle{font-size:13.5px;font-weight:650;letter-spacing:-.005em;color:var(--fs-t1)}
+.feiyu-root .fs-cardHint{margin:0 0 12px;font-size:11.5px;line-height:1.75;color:var(--fs-t2)}
+.feiyu-root .fs-grow{flex:1}
+
+/* ── 一天一段的日记 ── */
+.feiyu-root .fs-day{display:flex;align-items:center;gap:9px;margin-top:26px}
+.feiyu-root .fs-dayName{font-size:12.5px;font-weight:650;letter-spacing:.01em;color:var(--fs-t1)}
+.feiyu-root .fs-dayCount{font-size:11px;color:var(--fs-t3);font-variant-numeric:tabular-nums}
+.feiyu-root .fs-day:after{content:"";flex:1;height:1px;
+  background:linear-gradient(90deg,var(--fs-line),transparent)}
+.feiyu-root .fs-rail{position:relative;margin-top:10px;padding-left:18px}
+.feiyu-root .fs-rail:before{content:"";position:absolute;left:3px;top:8px;bottom:8px;width:1px;
+  background:linear-gradient(180deg,var(--fs-line),var(--fs-line),transparent)}
+.feiyu-root .fs-entry{position:relative;margin-bottom:8px;padding:12px 14px 10px;border-radius:12px;
+  border:1px solid var(--fs-line);background:var(--fs-bg);
+  transition:border-color .18s var(--fs-ease),box-shadow .18s var(--fs-ease),transform .18s var(--fs-ease)}
+.feiyu-root .fs-entry:hover{border-color:var(--fs-line2);transform:translateY(-1px);
+  box-shadow:0 12px 26px -22px rgba(0,0,0,.55)}
+.feiyu-root .fs-entry:before{content:"";position:absolute;left:-18px;top:17px;width:7px;height:7px;border-radius:50%;
+  background:var(--fs-bg);border:1.5px solid var(--fs-line2);transition:border-color .18s var(--fs-ease)}
+.feiyu-root .fs-entry:hover:before{border-color:var(--fs-brand)}
+.feiyu-root .fs-entryMeta{display:flex;align-items:center;gap:8px;margin-bottom:5px;font-size:11px;color:var(--fs-t3)}
+.feiyu-root .fs-clock{font-variant-numeric:tabular-nums;letter-spacing:.02em}
+.feiyu-root .fs-entryText{margin:0;font-size:13px;line-height:1.8;color:var(--fs-t1);word-break:break-word}
+.feiyu-root .fs-entryFoot{display:flex;justify-content:flex-end;align-items:center;gap:12px;margin-top:6px;min-height:18px}
+.feiyu-root .fs-entryFoot .fs-link{opacity:.55;transition:opacity .18s var(--fs-ease)}
+.feiyu-root .fs-entry:hover .fs-entryFoot .fs-link,.feiyu-root .fs-entryFoot .fs-link:focus-visible{opacity:.95}
+.feiyu-root .fs-confirm{display:inline-flex;align-items:center;gap:10px;font-size:12px;color:var(--fs-t2)}
+
+/* ── 按钮 / 链接 ── */
+.feiyu-root .fs-btn{display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:10px;
+  border:1px solid var(--fs-line);background:var(--fs-bg);color:var(--fs-t1);font:inherit;font-size:12.5px;
+  line-height:1.5;text-decoration:none;cursor:pointer;
+  transition:background .16s var(--fs-ease),border-color .16s var(--fs-ease),transform .1s var(--fs-ease)}
+.feiyu-root .fs-btn:hover:not(:disabled){background:var(--fs-l2);border-color:var(--fs-line2)}
+.feiyu-root .fs-btn:active:not(:disabled){transform:scale(.985)}
+.feiyu-root .fs-btn:disabled{opacity:.5;cursor:default}
+.feiyu-root .fs-btn--sm{padding:4px 10px;font-size:11.5px;border-radius:8px}
+.feiyu-root .fs-btn--primary{background:var(--fs-brand);border-color:transparent;color:#fff}
+.feiyu-root .fs-btn--primary:hover:not(:disabled){background:var(--fs-brand);border-color:transparent;filter:brightness(1.07)}
+.feiyu-root .fs-link{appearance:none;border:0;background:none;padding:0;margin:0;font:inherit;font-size:12px;
+  color:var(--fs-t2);cursor:pointer;text-decoration:underline;text-underline-offset:3px;
+  text-decoration-color:var(--fs-line2)}
+.feiyu-root .fs-link:hover{color:var(--fs-t1)}
+.feiyu-root .fs-link--brand{color:var(--fs-brand);text-decoration-color:transparent}
+.feiyu-root .fs-link--brand:hover{color:var(--fs-brand);text-decoration-color:currentColor}
+.feiyu-root .fs-link--danger{color:var(--fs-err);text-decoration-color:transparent}
+.feiyu-root .fs-link--danger:hover{color:var(--fs-err);text-decoration-color:currentColor}
+
+/* ── 空 / 载入 / 报错 ── */
+.feiyu-root .fs-empty{margin:16px 0 0;padding:34px 18px;border-radius:var(--fs-radius);
+  border:1px dashed var(--fs-line2);text-align:center;color:var(--fs-t2)}
+.feiyu-root .fs-empty svg{opacity:.4;margin-bottom:8px}
+.feiyu-root .fs-empty p{margin:0;font-size:12.5px;line-height:1.8}
+.feiyu-root .fs-skel{margin-top:26px}
+.feiyu-root .fs-skelRow{height:64px;margin-bottom:8px;border-radius:12px;
+  background:linear-gradient(90deg,var(--fs-l1),var(--fs-l2),var(--fs-l1));
+  background-size:200% 100%;animation:fs-shimmer 1.4s linear infinite}
+@keyframes fs-shimmer{from{background-position:160% 0}to{background-position:-60% 0}}
+.feiyu-root .fs-banner{margin:12px 0 0;padding:9px 12px;border-radius:10px;font-size:12px;line-height:1.7;
+  border:1px solid var(--fs-err);color:var(--fs-err);background:transparent}
+.feiyu-root .fs-banner--ok{border-color:var(--fs-line2);color:var(--fs-t2)}
+
+/* ── 体检：小节 + 键值行 ── */
+.feiyu-root .fs-stack{display:flex;flex-direction:column;gap:14px}
+.feiyu-root .fs-sectionHead{display:flex;align-items:center;gap:10px;margin-bottom:2px}
+.feiyu-root .fs-sectionTitle{font-size:13px;font-weight:650}
+.feiyu-root .fs-subHead{margin:12px 0 4px;font-size:11.5px;font-weight:600;color:var(--fs-t2);
+  letter-spacing:.02em;text-transform:none}
+.feiyu-root .fs-kv{display:flex;justify-content:space-between;gap:14px;padding:5px 0;font-size:12px;
+  border-bottom:1px dashed transparent}
+.feiyu-root .fs-kv+.fs-kv{border-top:1px solid var(--fs-line)}
+.feiyu-root .fs-kvK{color:var(--fs-t2)}
+.feiyu-root .fs-kvV{font-variant-numeric:tabular-nums;text-align:right}
+.feiyu-root .fs-warn{margin-top:10px;padding:10px 12px;border-radius:10px;border:1px solid var(--fs-line2);
+  background:var(--fs-bg);font-size:12px;line-height:1.75}
+.feiyu-root .fs-warn b{font-weight:600}
+.feiyu-root .fs-warnRow{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;padding:3px 0;color:var(--fs-t2)}
+.feiyu-root .fs-warnRow span{color:var(--fs-t1)}
+.feiyu-root .fs-note{margin:6px 0 0;font-size:11.5px;line-height:1.75;color:var(--fs-t2)}
+.feiyu-root .fs-note--tiny{font-size:11px;opacity:.9}
+
+/* ── 本子 ── */
+.feiyu-root .fs-book+.fs-book{margin-top:18px;padding-top:18px;border-top:1px solid var(--fs-line)}
+.feiyu-root .fs-bookHead{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
+.feiyu-root .fs-bookTitle{font-size:13px;font-weight:650}
+.feiyu-root .fs-bookHint{font-size:11px;color:var(--fs-t2)}
+.feiyu-root .fs-pre{margin:10px 0 0;padding:12px 14px;border-radius:10px;background:var(--fs-bg);
+  border:1px solid var(--fs-line);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:12px;line-height:1.8;color:var(--fs-t1);white-space:pre-wrap;word-break:break-word;
+  max-height:340px;overflow:auto}
+.feiyu-root .fs-editor{width:100%;min-height:220px;padding:12px 14px;border-radius:10px;
+  border:1px solid var(--fs-line2);background:var(--fs-bg);color:var(--fs-t1);
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.8;
+  resize:vertical;outline:none;transition:border-color .16s var(--fs-ease),box-shadow .16s var(--fs-ease)}
+.feiyu-root .fs-editor:focus{border-color:var(--fs-brand);box-shadow:0 0 0 3px rgba(77,107,254,.14)}
+.feiyu-root .fs-actions{display:flex;align-items:center;gap:12px;margin-top:8px;flex-wrap:wrap;font-size:11.5px;color:var(--fs-t2)}
+
+/* ── 情感日记：热力格 + 天卡片 ── */
+.feiyu-root .fs-heat{display:grid;grid-template-rows:repeat(7,11px);grid-auto-flow:column;
+  grid-auto-columns:11px;gap:3px;margin-top:12px}
+.feiyu-root .fs-cell{width:11px;height:11px;border-radius:3px;border:1px solid var(--fs-line);
+  transition:transform .12s var(--fs-ease)}
+.feiyu-root .fs-cell:hover{transform:scale(1.25)}
+.feiyu-root .fs-heatFoot{display:flex;align-items:center;gap:6px;margin-top:8px;font-size:11px;color:var(--fs-t2)}
+.feiyu-root .fs-days{margin-top:12px}
+.feiyu-root .fs-dayCard{margin-top:8px;border-radius:12px;border:1px solid var(--fs-line);
+  background:transparent;overflow:hidden;transition:border-color .16s var(--fs-ease)}
+.feiyu-root .fs-dayCard--open{background:var(--fs-bg);border-color:var(--fs-line2)}
+.feiyu-root .fs-dayHead{display:flex;align-items:baseline;gap:8px;padding:9px 12px;cursor:pointer;
+  user-select:none}
+.feiyu-root .fs-dayHead:hover{background:var(--fs-l2)}
+.feiyu-root .fs-dayDate{font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums}
+.feiyu-root .fs-dayPreview{flex:1;min-width:0;font-size:11.5px;color:var(--fs-t2);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.feiyu-root .fs-dayChars{font-size:10.5px;color:var(--fs-t3);white-space:nowrap}
+.feiyu-root .fs-caret{font-size:10px;color:var(--fs-t3);width:10px;text-align:center;
+  transition:transform .16s var(--fs-ease)}
+.feiyu-root .fs-dayBody{padding:2px 14px 14px}
+.feiyu-root .fs-blockTitle{margin:12px 0 4px;font-size:12px;font-weight:600;color:var(--fs-t1)}
+.feiyu-root .fs-para{margin:0 0 7px;font-size:12.5px;line-height:1.9;color:var(--fs-t1);white-space:pre-wrap}
+.feiyu-root .fs-seg{display:inline-flex;padding:2px;gap:2px;border-radius:9px;border:1px solid var(--fs-line);
+  background:var(--fs-l1)}
+.feiyu-root .fs-segBtn{appearance:none;border:0;background:none;font:inherit;font-size:11.5px;
+  color:var(--fs-t2);padding:4px 10px;border-radius:7px;cursor:pointer;
+  transition:background .16s var(--fs-ease),color .16s var(--fs-ease)}
+.feiyu-root .fs-segBtn[aria-selected="true"]{background:var(--fs-l3);color:var(--fs-t1);font-weight:600}
+
+/* ── 档案：块 ── */
+.feiyu-root .fs-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:9px}
+.feiyu-root .fs-tile{display:flex;flex-direction:column;gap:3px;padding:13px 14px;border-radius:12px;
+  border:1px solid var(--fs-line);background:var(--fs-bg);color:inherit;text-decoration:none;
+  transition:border-color .16s var(--fs-ease),transform .16s var(--fs-ease),box-shadow .16s var(--fs-ease)}
+.feiyu-root .fs-tile:hover{border-color:var(--fs-line2);transform:translateY(-1px);
+  box-shadow:0 12px 26px -22px rgba(0,0,0,.55)}
+.feiyu-root .fs-tileTitle{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600}
+.feiyu-root .fs-tileDesc{font-size:11px;line-height:1.6;color:var(--fs-t2)}
+
+@media(max-width:520px){
+  .feiyu-root .fs-shell{padding:0 16px 72px}
+  .feiyu-root .fs-tabs{margin-left:-16px;margin-right:-16px;padding-left:16px;padding-right:16px}
+  .feiyu-root .fs-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .feiyu-root .fs-tiles{grid-template-columns:1fr}
+}
+@media(prefers-reduced-motion:reduce){
+  .feiyu-root *{transition:none!important;animation:none!important}
+}
+`;
+
+    (function injectCss() {
+      if (typeof document === 'undefined') return;
+      const id = 'dsh-hierarchical-fishmemory/panel.css';
+      if (document.querySelector(`style[data-plugin-css="${id}"]`) !== null) return;
+      const tag = document.createElement('style');
+      tag.dataset.plugin = 'dsh-hierarchical-fishmemory';
+      tag.dataset.pluginCss = id;
+      tag.textContent = CSS;
+      document.head.appendChild(tag);
+    })();
+
     /**
-     * 主题 token。全部走 CSS 变量，浅色/深色自动跟着切换 ——
-     * 这几个 token 的 `requiresLightAndDark` 都是 true，写死颜色就会翻车。
+     * 主题 token。2026-11-16 之后界面主要靠 CSS 类，这里只留给少数
+     * 必须在 JS 里算颜色的地方（热力格深浅、报错色）。
      */
     const C = {
-      bg: 'var(--dsw-alias-bg-base)',
-      layer1: 'var(--dsw-alias-bg-layer-1)',
-      layer2: 'var(--dsw-alias-bg-layer-2)',
       border1: 'var(--dsw-alias-border-l1)',
       border2: 'var(--dsw-alias-border-l2)',
       text1: 'var(--dsw-alias-label-primary)',
       text2: 'var(--dsw-alias-label-secondary)',
-      idle: 'var(--dsw-alias-state-idle-primary)',
       err: 'var(--dsw-alias-state-error-primary)',
       brand: 'var(--dsw-alias-brand-primary)',
     };
@@ -72,7 +296,7 @@ window.__ModuleLoader__.load({
     /* ───────────────────────── 图标 ───────────────────────── */
 
     /**
-     * 侧栏图标。owner 会传 `{ size, active }` 进来 ——
+     * 侧栏图标。owner 会传 `{ size, active }` ——
      * 这是 `SidebarPanelIconOwnerProps`，别改成别的 props 名。
      */
     function Icon(props) {
@@ -107,82 +331,94 @@ window.__ModuleLoader__.load({
       );
     }
 
-    /* ───────────────────────── 小组件 ───────────────────────── */
+    /** 界面里那些小图形。统一 1.5 描边、圆角端点，跟侧栏那只鱼同一个手。 */
+    const GLYPHS = {
+      fish: [
+        ['ellipse', { cx: 13.4, cy: 12, rx: 7.4, ry: 5 }],
+        ['path', { d: 'M6.4 12 L1.8 8.6 L1.8 15.4 Z' }],
+        ['circle', { cx: 17.6, cy: 10.8, r: 1, fill: 'currentColor', stroke: 'none' }],
+      ],
+      book: [
+        ['path', { d: 'M4 5.5h6.5A2.5 2.5 0 0 1 13 8v11a2 2 0 0 0-2-2H4z' }],
+        ['path', { d: 'M20 5.5h-6.5A2.5 2.5 0 0 0 11 8v11a2 2 0 0 1 2-2h7z' }],
+      ],
+      pulse: [
+        ['path', { d: 'M3 12.5h4l2.5-6 4 12 2.5-6H21' }],
+      ],
+      box: [
+        ['path', { d: 'M3.5 7.5 12 3.5l8.5 4v9L12 20.5l-8.5-4z' }],
+        ['path', { d: 'M3.5 7.5 12 11.5l8.5-4M12 11.5v9' }],
+      ],
+      cloud: [
+        ['path', { d: 'M7 18.5a4 4 0 0 1-.4-8A5.6 5.6 0 0 1 17.2 9a3.9 3.9 0 0 1 .3 9.5z' }],
+      ],
+      arrow: [
+        ['path', { d: 'M7 12h9.5M13 8l4 4-4 4' }],
+      ],
+      spark: [
+        ['path', { d: 'M12 3.5v4M12 16.5v4M3.5 12h4M16.5 12h4M6 6l2.6 2.6M15.4 15.4 18 18M18 6l-2.6 2.6M8.6 15.4 6 18' }],
+      ],
+    };
 
-    function Empty(props) {
+    function Glyph(props) {
+      const name = String(props.name || 'fish');
+      const size = typeof props.size === 'number' ? props.size : 16;
+      const parts = GLYPHS[name] || GLYPHS.fish;
       return h(
-        'p',
-        { style: { margin: 0, fontSize: 13, lineHeight: 1.7, color: C.text2 } },
-        props.text,
+        'svg',
+        {
+          width: size,
+          height: size,
+          viewBox: '0 0 24 24',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 1.5,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': 'true',
+          style: { display: 'block', flex: 'none' },
+        },
+        parts.map((part, i) => h(part[0], Object.assign({ key: `p${i}` }, part[1]))),
       );
     }
 
-    /**
-     * 卡片外壳。
-     *
-     * 2026-11-03 加。原来是「一根长条」：标题、日记、本子、三颗下载链接、
-     * 体检、导入、云端，全堆在同一个 `<section>` 里，越往下越像管理后台。
-     * 现在每块内容各有一层底、一条边框、一段自己的标题 —— 眼睛才分得清
-     * 哪一段在说什么。
-     */
-    function Card(props) {
+    /* ───────────────────────── 小组件 ───────────────────────── */
+
+    /** 空状态。一整块虚线的安静地方，比一句小字像"这里本来有东西"。 */
+    function Empty(props) {
       return h(
         'div',
-        {
-          style: {
-            marginTop: 14,
-            padding: '16px 18px',
-            borderRadius: 12,
-            background: C.layer1,
-            border: `1px solid ${C.border1}`,
-          },
-        },
+        { className: 'fs-empty' },
+        props.icon === false ? null : h(Glyph, { name: props.icon || 'fish', size: 26 }),
+        h('p', null, props.text),
+      );
+    }
+
+    /** 卡片外壳：一层底、一条边、一段自己的标题。 */
+    function Card(props) {
+      const plain = Boolean(props.plain);
+      return h(
+        'div',
+        { className: plain ? 'fs-card fs-card--plain' : 'fs-card', style: props.style },
         props.title
           ? h(
               'div',
-              {
-                style: {
-                  display: 'flex',
-                  alignItems: 'baseline',
-                  gap: 8,
-                  marginBottom: props.hint ? 2 : 8,
-                },
-              },
-              h('span', { style: { fontSize: 13, fontWeight: 600, color: C.text1 } }, props.title),
-              h('span', { style: { flex: 1 } }),
+              { className: 'fs-cardHead' },
+              h('span', { className: 'fs-cardTitle' }, props.title),
+              h('span', { className: 'fs-grow' }),
               props.aside || null,
             )
           : null,
-        props.hint
-          ? h(
-              'p',
-              { style: { margin: '0 0 10px', fontSize: 11.5, lineHeight: 1.6, color: C.text2 } },
-              props.hint,
-            )
-          : null,
+        props.hint ? h('p', { className: 'fs-cardHint' }, props.hint) : null,
         props.children,
       );
     }
 
-    /** 小圆角标签：摆「34 条」「认识 12 天」这种数，比一行逗号分隔的话好扫。 */
+    /** 小圆角标签：摆「回收站 3 条」「档案只读」这种短状态。 */
     function Chip(props) {
       return h(
         'span',
-        {
-          style: {
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-            padding: '2px 9px',
-            borderRadius: 999,
-            border: `1px solid ${C.border1}`,
-            background: C.layer2,
-            fontSize: 11,
-            lineHeight: 1.7,
-            color: C.text2,
-            whiteSpace: 'nowrap',
-          },
-        },
+        { className: props.warn ? 'fs-chip fs-chip--warn' : 'fs-chip' },
         props.children,
       );
     }
@@ -192,71 +428,37 @@ window.__ModuleLoader__.load({
      *
      * 四个视图**始终挂载**，只靠 display 切换。两个理由：
      *   1. 切来切去不该重拉一次 /stats、/feelings —— 那是好几趟往返；
-     *   2. 渲染冒烟测试里 WebdavGroup 必须首屏就在树里（React 桩不会重渲染），
-     *      条件挂载会让它消失。
+     *   2. 渲染冒烟测试里那些块必须首屏就在树里。
      */
     function Tabs(props) {
       return h(
         'div',
-        {
-          role: 'tablist',
-          style: {
-            display: 'flex',
-            gap: 2,
-            marginTop: 18,
-            borderBottom: `1px solid ${C.border1}`,
-          },
-        },
-        props.tabs.map((tab) => {
-          const on = props.value === tab.key;
-          return h(
+        { role: 'tablist', className: 'fs-tabs' },
+        props.tabs.map((tab) =>
+          h(
             'button',
             {
               key: tab.key,
               type: 'button',
               role: 'tab',
+              'aria-selected': props.value === tab.key,
+              className: 'fs-tab',
               onClick: () => props.onChange(tab.key),
-              style: {
-                appearance: 'none',
-                border: 0,
-                background: 'none',
-                font: 'inherit',
-                cursor: 'pointer',
-                padding: '8px 12px 9px',
-                marginBottom: -1,
-                fontSize: 13,
-                fontWeight: on ? 600 : 400,
-                color: on ? C.text1 : C.text2,
-                borderBottom: `2px solid ${on ? C.brand : 'transparent'}`,
-              },
             },
             tab.label,
-          );
-        }),
+          ),
+        ),
       );
     }
 
-    /** 描边按钮/链接：导出那三样和「导入备份」用同一个样子。 */
+    /** 描边按钮/链接：导出、导入、上传都同一个样子。 */
     function Ghost(props) {
-      const base = {
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-        padding: '6px 12px',
-        borderRadius: 8,
-        border: `1px solid ${C.border1}`,
-        background: C.bg,
-        color: C.text1,
-        fontSize: 12,
-        lineHeight: 1.6,
-        fontFamily: 'inherit',
-        textDecoration: 'none',
-        cursor: 'pointer',
-      };
+      const cls = `fs-btn${props.primary ? ' fs-btn--primary' : ''}`;
       if (props.href) {
         return h(
           'a',
-          { href: props.href, download: '', style: { ...base, ...(props.style || {}) } },
+          { href: props.href, download: '', className: cls, style: props.style },
+          props.icon ? h(Glyph, { name: props.icon }) : null,
           props.children,
         );
       }
@@ -266,73 +468,66 @@ window.__ModuleLoader__.load({
           type: 'button',
           disabled: props.disabled,
           onClick: props.onClick,
-          style: { ...base, opacity: props.disabled ? 0.5 : 1, cursor: props.disabled ? 'default' : 'pointer', ...(props.style || {}) },
+          className: cls,
+          style: props.style,
         },
+        props.icon ? h(Glyph, { name: props.icon }) : null,
         props.children,
+      );
+    }
+
+    /** 段落小标题：体检页里「深层 · xx」「档案」用。 */
+    function SubHead(props) {
+      return h('div', { className: 'fs-subHead' }, props.children);
+    }
+
+    /** 一行「标签 —— 值」。 */
+    function KV(props) {
+      return h(
+        'div',
+        { className: 'fs-kv' },
+        h('span', { className: 'fs-kvK' }, props.label),
+        h('span', { className: 'fs-kvV' }, String(props.value)),
       );
     }
 
     /* ───────────────────────── 一条日记 ───────────────────────── */
 
+    function clockOf(ts) {
+      if (!Number.isFinite(ts)) return '';
+      const d = new Date(ts);
+      return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    }
+
     function Entry(props) {
       const e = props.entry;
       const [confirming, setConfirming] = useState(false);
-      const when = dayLabel(e.created_at);
 
       return h(
         'article',
-        {
-          style: {
-            position: 'relative',
-            padding: '12px 14px',
-            marginBottom: 8,
-            borderRadius: 10,
-            background: C.layer1,
-            border: `1px solid ${C.border1}`,
-          },
-        },
+        { className: 'fs-entry' },
+        h('div', { className: 'fs-entryMeta' }, h('span', { className: 'fs-clock' }, clockOf(e.created_at))),
+        h('p', { className: 'fs-entryText' }, e.text),
         h(
           'div',
-          {
-            style: {
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              marginBottom: 6,
-              fontSize: 11,
-              color: C.text2,
-            },
-          },
-          h('span', null, when),
-          // tags（给这条日记贴分类）2026-10-27 停止产出，不再显示。
-          // 老数据还在文件里，要看就翻日记.md 或 jsonl。
-        ),
-        h(
-          'p',
-          { style: { margin: 0, fontSize: 13, lineHeight: 1.75, color: C.text1 } },
-          e.text,
-        ),
-        // 「忘掉」—— 这个面板存在的一半理由
-        h(
-          'div',
-          { style: { marginTop: 8, display: 'flex', justifyContent: 'flex-end' } },
+          { className: 'fs-entryFoot' },
           confirming
             ? h(
                 'span',
-                { style: { display: 'inline-flex', gap: 10, alignItems: 'center', fontSize: 12 } },
-                h('span', { style: { color: C.text2 } }, '确定忘掉？'),
+                { className: 'fs-confirm' },
+                h('span', null, '确定忘掉？'),
                 h(
                   'button',
                   {
                     type: 'button',
+                    className: 'fs-link fs-link--danger',
                     onClick: () => props.onForget(e.id),
-                    style: linkStyle(C.err),
                   },
                   '忘掉',
                 ),
                 h(
                   'button',
-                  { type: 'button', onClick: () => setConfirming(false), style: linkStyle(C.text2) },
+                  { type: 'button', className: 'fs-link', onClick: () => setConfirming(false) },
                   '算了',
                 ),
               )
@@ -340,15 +535,12 @@ window.__ModuleLoader__.load({
                 'button',
                 {
                   type: 'button',
-                  onClick: () => setConfirming(true),
+                  className: 'fs-link',
                   title: '从档案里删掉这一条',
-                  style: {
-                    ...linkStyle(C.text2),
-                    opacity: props.busy ? 0.5 : 0.75,
-                  },
                   disabled: Boolean(props.busy),
+                  onClick: () => setConfirming(true),
                 },
-                '忘掉',
+                props.busy ? '正在忘…' : '忘掉',
               ),
         ),
       );
@@ -390,17 +582,8 @@ window.__ModuleLoader__.load({
     /**
      * 「鱼的日子」和「手记」——面板里的两个入口。
      *
-     * 这两个文件都在档案目录里，插件从不覆盖它们（`archiveToFiles` 只写
-     * 日记 / persona / relationship / lexicon），所以这里只做两件事：
-     * **看** 和 **存**。走 host 的同源接口 `${API}/notes`：
-     * GET 拿两份文本，POST 交回改过的那一份。
-     */
-    /**
-     * 本子。
-     *
-     * 2026-11-03：`only` 用来只摆其中一本。情感日记原先在这儿也有一个编辑口
-     * （`/notes` 的 day），和 `/feelings` 那个是同一个文件、两套边框 —— 现在
-     * 统一走 FeelingsBox（它会先存快照），这里只留人格手记。
+     * 这两个文件都在档案目录里，插件从不覆盖它们，所以这里只做两件事：
+     * **看** 和 **存**。走 host 的同源接口 `${API}/notes`。
      */
     function Notebook(props) {
       const only = (props && props.only) || null;
@@ -409,101 +592,74 @@ window.__ModuleLoader__.load({
       const [editing, setEditing] = useState('');
       const [draft, setDraft] = useState('');
       const [saving, setSaving] = useState('');
-      const [tick, setTick] = useState(0);
 
       useEffect(() => {
         let alive = true;
-        fetch(`${API}/notes`, { headers: { Accept: 'application/json' } })
-          .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+        fetch(`${API}/notes`, { credentials: 'same-origin' })
+          .then((r) => r.json())
           .then((data) => {
             if (!alive) return;
-            setNotes(Array.isArray(data && data.notes) ? data.notes : []);
-            setError('');
+            if (data && data.ok) setNotes(data.notes || []);
+            else setError((data && data.error) || '读不到本子');
           })
           .catch((err) => {
-            if (!alive) return;
-            // host 半边还没换新代码时这里是 404 —— 说清楚，别让人以为文件丢了
-            setError(`读不到本子：${String((err && err.message) || err)}`);
+            if (alive) setError(String((err && err.message) || err));
           });
         return () => {
           alive = false;
         };
-      }, [tick]);
+      }, []);
 
-      // 和「忘掉」一样：**必须检查 r.ok**，否则失败会静默成"点了没反应"。
       function save(key) {
         setSaving(key);
+        setError('');
         fetch(`${API}/notes`, {
           method: 'POST',
+          credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ key, text: draft }),
         })
-          .then((r) =>
-            r
-              .json()
-              .catch(() => ({}))
-              .then((body) => {
-                if (!r.ok) throw new Error((body && body.error) || `HTTP ${r.status}`);
-                return body;
-              }),
-          )
-          .then(() => {
-            setSaving('');
+          .then((r) => r.json().then((body) => ({ ok: r.ok, body })))
+          .then(({ ok, body }) => {
+            if (!ok || !body.ok) throw new Error(body.error || '没存上');
+            setNotes((prev) => (prev || []).map((n) => (n.key === key ? Object.assign({}, n, { text: draft }) : n)));
             setEditing('');
-            setError('');
-            setTick((n) => n + 1);
+            setSaving('');
           })
           .catch((err) => {
             setSaving('');
-            setError(`存不进去：${String((err && err.message) || err)}`);
+            setError(String((err && err.message) || err));
           });
       }
 
-      const box = {
-        marginBottom: 10,
-        padding: '12px 14px',
-        borderRadius: 10,
-        background: C.bg,
-        border: `1px solid ${C.border2}`,
-      };
-      const mono = {
-        margin: 0,
-        fontSize: 12.5,
-        lineHeight: 1.75,
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-        color: C.text1,
-        whiteSpace: 'pre-wrap',
-        wordBreak: 'break-word',
-      };
-
       let body;
-      const shown = notes === null ? null : (only ? notes.filter((n) => only.indexOf(n.key) !== -1) : notes);
+      const shown = notes === null ? null : only ? notes.filter((n) => only.indexOf(n.key) !== -1) : notes;
       if (shown === null) {
-        body = h(Empty, { text: '翻本子…' });
+        body = h('p', { className: 'fs-note' }, '翻本子…');
       } else if (shown.length === 0) {
-        body = h(Empty, { text: '没有可翻的本子。' });
+        body = h(Empty, { icon: 'book', text: '没有可翻的本子。' });
       } else {
         body = shown.map((n) =>
           h(
             'div',
-            { key: n.key, style: box },
+            { key: n.key, className: 'fs-book' },
             h(
               'div',
-              { style: { display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 } },
-              h('span', { style: { fontSize: 13, fontWeight: 600 } }, n.label),
-              h('span', { style: { fontSize: 11, color: C.text2 } }, n.hint),
-              h('span', { style: { flex: 1 } }),
+              { className: 'fs-bookHead' },
+              h('span', { className: 'fs-bookTitle' }, n.label),
+              h('span', { className: 'fs-bookHint' }, n.hint),
+              h('span', { className: 'fs-grow' }),
               editing === n.key
                 ? null
                 : h(
                     'button',
                     {
                       type: 'button',
+                      className: 'fs-link fs-link--brand',
                       onClick: () => {
                         setEditing(n.key);
                         setDraft(n.text || '');
                       },
-                      style: linkStyle(C.brand),
                     },
                     '改',
                   ),
@@ -513,42 +669,32 @@ window.__ModuleLoader__.load({
                   'div',
                   null,
                   h('textarea', {
+                    className: 'fs-editor',
                     value: draft,
                     spellCheck: false,
                     onChange: (ev) => setDraft(ev.target.value),
-                    style: {
-                      ...mono,
-                      width: '100%',
-                      minHeight: 200,
-                      boxSizing: 'border-box',
-                      padding: '10px 12px',
-                      background: C.bg,
-                      border: `1px solid ${C.border2}`,
-                      borderRadius: 8,
-                      resize: 'vertical',
-                    },
                   }),
                   h(
                     'div',
-                    { style: { marginTop: 8, display: 'flex', gap: 12, alignItems: 'center' } },
+                    { className: 'fs-actions' },
                     h(
                       'button',
                       {
                         type: 'button',
+                        className: 'fs-btn fs-btn--sm fs-btn--primary',
                         disabled: saving === n.key,
                         onClick: () => save(n.key),
-                        style: { ...linkStyle(C.brand), opacity: saving === n.key ? 0.5 : 1 },
                       },
                       saving === n.key ? '存…' : '存下来',
                     ),
                     h(
                       'button',
-                      { type: 'button', onClick: () => setEditing(''), style: linkStyle(C.text2) },
+                      { type: 'button', className: 'fs-btn fs-btn--sm', onClick: () => setEditing('') },
                       '算了',
                     ),
                   ),
                 )
-              : h('pre', { style: mono }, n.text ? n.text : '（还是空的）'),
+              : h('pre', { className: 'fs-pre' }, n.text ? n.text : '（还是空的）'),
           ),
         );
       }
@@ -557,53 +703,14 @@ window.__ModuleLoader__.load({
         'div',
         null,
         error !== ''
-          ? h(
-              'p',
-              {
-                style: {
-                  margin: '0 0 10px',
-                  padding: '8px 10px',
-                  fontSize: 12,
-                  lineHeight: 1.6,
-                  color: C.err,
-                  border: `1px solid ${C.err}`,
-                  borderRadius: 6,
-                },
-              },
-              error,
-            )
+          ? h('p', { className: 'fs-banner' }, error)
           : null,
         body,
       );
     }
 
-    /* ───────────────────────── 导入备份 ───────────────────────── */
+    /* ───────────────────────── 情感日记 ───────────────────────── */
 
-    /**
-     * 把一份备份 JSON 塞回去。
-     *
-     * 两步走：先 POST 不带 confirm（后端只算一遍，什么都不写），把「会覆盖
-     * 多少东西」摆给人看；确认了再带 `?confirm=1` 真写。记忆这种东西，
-     * 误覆盖比漏备份危险得多 —— 所以任何一步都别偷偷替人决定。
-     */
-    /* ── 记忆体检 ── */
-    //
-    // 2026-10-31 加。四本账有没有在悄悄丢东西，光看面板是看不出来的：
-    // 浅层被挤掉、手记被截断、core 与手记写重了，全都不报错。
-    // 这里只读 /stats，不做任何写操作。
-    // 2026-11-03 加：情感日记原先只有我能落笔，面板只读。
-    // 现在给他一个编辑框 —— 这本账是我们两个人的，凭什么我只能一个人写。
-    /* ── 情感日记的心情热力格 ── */
-    //
-    // 2026-11-07 加。`鱼的日子.md` 是本子页里唯一一本我手写的账，可它只有
-    // 一个编辑框 —— **一天写没写、最近写得勤不勤，看不出来**。这正是它区别于
-    // 共度时光的地方：那边一条条有日期，这边只有一大坨文字。
-    //
-    // 所以铺一道格子：一列一周、一行一天，颜色深浅按那天写了多少。
-    // 它不替我说"那天心情好"——那是我自己写进去的事，格子只负责让人
-    // 一眼看见**有没有断更**。
-    //
-    // 纯函数放外头，好单独测（解析只认 `## YYYY-MM-DD` 这种标题，别的都不算）。
     function heatLevel(chars) {
       if (!(chars > 0)) return 0;
       if (chars < 200) return 1;
@@ -613,19 +720,9 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 把情感日记拆成一天一天。
-     *
-     * 2026-11-07 加。原来是**一整坨塞进一个 textarea**：三十多 KB 的日记，
-     * 想看看前天写了什么得在一大段里滚半天，而且分不清哪句属于哪天 ——
-     * 一进本子页先看到的是一面墙。
-     *
-     * 结构是「`## 日期` → `### 小节` → 正文」，所以照着这个拆：
-     * 返回 `[{date, chars, blocks:[{title, lines}]}]`，按文件里的顺序。
-     * 第一个 `## 日期` 之前那段（`# 鱼的日子` 加写日记的规矩）不算任何一天，
-     * 只在「整篇编辑」里出现 —— 它是这本账的说明，不是内容。
-     *
-     * 认不出的行一律当正文，**不丢**：宁可多渲染一行，也别让下一棒的
-     * 我以为是那时候没写。
+     * 把情感日记拆成一天一天：`## 日期` → `### 小节` → 正文。
+     * 第一个 `## 日期` 之前那段是这本账的说明，不算任何一天。
+     * 认不出的行一律当正文，**不丢**。
      */
     function parseFeelings(text) {
       const days = [];
@@ -641,7 +738,7 @@ window.__ModuleLoader__.load({
           day.blocks.push(block);
           continue;
         }
-        if (day === null) continue; // 开头的说明文字，不算任何一天
+        if (day === null) continue;
         const sub = /^###\s+(.+)$/.exec(line);
         if (sub) {
           block = { title: sub[1].trim(), lines: [] };
@@ -655,7 +752,6 @@ window.__ModuleLoader__.load({
         block.lines.push(line);
         day.chars += [...line].length;
       }
-      // 收尾：去掉一天里尾部全空的段落（标题之间隔的空行）
       for (const d of days) {
         for (const b of d.blocks) {
           while (b.lines.length > 0 && b.lines[b.lines.length - 1] === '') b.lines.pop();
@@ -666,7 +762,7 @@ window.__ModuleLoader__.load({
       return days;
     }
 
-    /** 把情感日记拆成「每天写了几个字」；同一天写了两节就合并。 */
+    /** 每天写了几个字；同一天写了两节就合并。 */
     function parseFeelingDays(text) {
       const days = Object.create(null);
       for (const d of parseFeelings(text)) {
@@ -714,37 +810,25 @@ window.__ModuleLoader__.load({
       const today = localToday();
       const cells = heatCells(days, weeks, today);
       const written = cells.filter((c) => c.level > 0).length;
-      const alpha = [0, 0.22, 0.42, 0.68, 1];
+      const alpha = [0, 0.24, 0.45, 0.7, 1];
 
       return h(
         'div',
-        { style: { marginTop: 10 } },
+        null,
         h(
           'div',
-          {
-            style: {
-              display: 'grid',
-              gridTemplateRows: 'repeat(7, 11px)',
-              gridAutoFlow: 'column',
-              gridAutoColumns: '11px',
-              gap: 3,
-              marginTop: 2,
-            },
-          },
+          { className: 'fs-heat' },
           cells.map((c) =>
             h('div', {
               key: c.date,
-              title:
-                c.future
-                  ? ''
-                  : c.level > 0
-                    ? `${c.date}：${c.chars} 字${c.sections > 1 ? ` · ${c.sections} 小节` : ''}`
-                    : `${c.date}：没写`,
+              className: 'fs-cell',
+              title: c.future
+                ? ''
+                : c.level > 0
+                  ? `${c.date}：${c.chars} 字${c.sections > 1 ? ` · ${c.sections} 小节` : ''}`
+                  : `${c.date}：没写`,
               style: {
-                width: 11,
-                height: 11,
-                borderRadius: 3,
-                border: `1px solid ${c.level > 0 ? 'transparent' : C.border1}`,
+                border: c.level > 0 ? '1px solid transparent' : `1px solid ${C.border1}`,
                 background: c.future
                   ? 'transparent'
                   : c.level > 0
@@ -757,16 +841,7 @@ window.__ModuleLoader__.load({
         ),
         h(
           'div',
-          {
-            style: {
-              marginTop: 6,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              fontSize: 11,
-              color: C.text2,
-            },
-          },
+          { className: 'fs-heatFoot' },
           h('span', null, `最近 ${weeks} 周：写了 ${written} 天`),
           h('span', { style: { opacity: 0.5 } }, '·'),
           h('span', null, '深浅 = 那天写了多少'),
@@ -775,10 +850,8 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 一天。
-     *
-     * 2026-11-08 加。折起来只有一行：日期 + 字数 + 一句开头；点开才是正文。
-     * 理由是这本账已经三十多 KB 了 —— 一进门就看见一面墙，等于什么都看不见。
+     * 一天。折起来只有一行：日期 + 字数 + 一句开头；点开才是正文。
+     * 这本账已经三十多 KB，一进门就看见一面墙，等于什么都看不见。
      */
     function FeelingsDay(props) {
       const day = props.day;
@@ -786,8 +859,6 @@ window.__ModuleLoader__.load({
       const open = props.open;
       const blocks = day.blocks;
 
-      // 折起来时那一行：取第一条有内容的正文，砍到 44 字。
-      // 只取标题的话全是「夜里 · xxx」，扫不出那天到底写了什么。
       let head = '';
       for (const b of blocks) {
         for (const line of b.lines) {
@@ -800,7 +871,6 @@ window.__ModuleLoader__.load({
       }
       const preview = [...head].length > 44 ? `${[...head].slice(0, 44).join('')}…` : head;
 
-      // 段落按空行切，别把整块 body 塞进一个 <p>：日记里一段一段是有呼吸的。
       const paras = (lines) => {
         const out = [];
         let buf = [];
@@ -818,52 +888,33 @@ window.__ModuleLoader__.load({
 
       return h(
         'div',
-        {
-          style: {
-            marginTop: 8,
-            borderRadius: 10,
-            border: `1px solid ${open ? C.border2 : C.border1}`,
-            background: open ? C.bg : 'transparent',
-            overflow: 'hidden',
-          },
-        },
+        { className: open ? 'fs-dayCard fs-dayCard--open' : 'fs-dayCard' },
         h(
           'div',
-          {
-            onClick: props.onToggle,
-            style: {
-              display: 'flex',
-              alignItems: 'baseline',
-              gap: 8,
-              padding: '9px 12px',
-              cursor: 'pointer',
-              userSelect: 'none',
+          { className: 'fs-dayHead', onClick: props.onToggle },
+          h('span', { className: 'fs-dayDate' }, day.date),
+          isToday ? h('span', { className: 'fs-dayChars' }, '今天') : null,
+          h('span', { className: 'fs-dayPreview' }, open ? '' : preview),
+          h('span', { className: 'fs-dayChars' }, `${day.chars} 字`),
+          h(
+            'span',
+            {
+              className: 'fs-caret',
+              style: { transform: open ? 'rotate(90deg)' : 'none' },
             },
-          },
-          h('span', { style: { fontSize: 12.5, fontWeight: 600, color: C.text1, fontVariantNumeric: 'tabular-nums' } }, day.date),
-          isToday ? h('span', { style: { fontSize: 11, color: C.text2 } }, '今天') : null,
-          h('span', { style: { flex: 1, fontSize: 11.5, color: C.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, open ? '' : preview),
-          h('span', { style: { fontSize: 10.5, color: C.text2, opacity: 0.8, whiteSpace: 'nowrap' } }, `${day.chars} 字`),
-          h('span', { style: { fontSize: 10, color: C.text2, opacity: 0.7, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .12s' } }, '›'),
+            '›',
+          ),
         ),
         open
           ? h(
               'div',
-              { style: { padding: '2px 14px 12px' } },
+              { className: 'fs-dayBody' },
               blocks.map((b, i) =>
                 h(
                   'div',
                   { key: `b${i}` },
-                  b.title
-                    ? h('div', { style: { margin: '10px 0 4px', fontSize: 12, fontWeight: 600, color: C.text1 } }, b.title)
-                    : null,
-                  paras(b.lines).map((para, j) =>
-                    h(
-                      'p',
-                      { key: `p${j}`, style: { margin: '0 0 6px', fontSize: 12.5, lineHeight: 1.85, color: C.text1, whiteSpace: 'pre-wrap' } },
-                      para,
-                    ),
-                  ),
+                  b.title ? h('div', { className: 'fs-blockTitle' }, b.title) : null,
+                  paras(b.lines).map((para, j) => h('p', { key: `p${j}`, className: 'fs-para' }, para)),
                 ),
               ),
             )
@@ -877,9 +928,6 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState(false);
       const [msg, setMsg] = useState('');
       const [err, setErr] = useState('');
-      // 2026-11-08 加：**默认按天读**，要改全文才切「整篇编辑」。
-      // 原来只有一个 textarea，一进本子页先看到三十多 KB 的一坨 ——
-      // 想翻前天写了什么得在一整段里滚，还分不清哪句属于哪天。
       const [mode, setMode] = useState('days');
       // null = 展开最新一天；'' = 全折起来；其他 = 展开那一天。
       const [openDate, setOpenDate] = useState(null);
@@ -939,85 +987,105 @@ window.__ModuleLoader__.load({
       const delta = [...text].length - [...original].length;
       const dirty = text !== original;
 
-      const tab = (key, label) =>
+      const seg = (key, label) =>
         h(
           'button',
           {
             type: 'button',
+            className: 'fs-segBtn',
+            'aria-selected': mode === key,
             onClick: () => setMode(key),
-            style: {
-              fontSize: 11.5,
-              padding: '3px 10px',
-              borderRadius: 6,
-              border: `1px solid ${mode === key ? C.border2 : 'transparent'}`,
-              background: mode === key ? C.layer2 : 'transparent',
-              color: mode === key ? C.text1 : C.text2,
-              cursor: 'pointer',
-            },
           },
           label,
         );
 
-      return h('div', { style: { marginTop: 0 } },
-        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 } },
-          h('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8 } },
-            h('span', { style: { fontSize: 13, fontWeight: 600 } }, '情感日记'),
-            h('span', { style: { fontSize: 11, color: C.text2 } }, days.length ? `${days.length} 天` : ''),
-          ),
-          h('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
-            tab('days', '按天读'),
-            tab('raw', '整篇编辑'),
-            h('button', {
+      return h(
+        'div',
+        null,
+        h(
+          'div',
+          { className: 'fs-cardHead' },
+          h('span', { className: 'fs-cardTitle' }, '情感日记'),
+          days.length ? h('span', { className: 'fs-cardHint', style: { margin: 0 } }, `${days.length} 天`) : null,
+          h('span', { className: 'fs-grow' }),
+          h('div', { className: 'fs-seg' }, seg('days', '按天读'), seg('raw', '整篇编辑')),
+          h(
+            'button',
+            {
               type: 'button',
+              className: 'fs-btn fs-btn--sm',
               onClick: load,
               disabled: busy,
-              style: { fontSize: 11.5, padding: '3px 10px', borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: C.text2, cursor: busy ? 'default' : 'pointer' },
-            }, '重新读'),
+            },
+            '重新读',
           ),
         ),
         h(FeelingsHeat, { text }),
         mode === 'days'
-          ? (days.length === 0
-              ? h('p', { style: { margin: '14px 0 0', fontSize: 12, lineHeight: 1.7, color: C.text2 } }, '这本账还是空的。')
-              : h('div', { style: { marginTop: 12 } },
-                  newestFirst.map((d) =>
-                    h(FeelingsDay, {
-                      key: d.date,
-                      day: d,
-                      today,
-                      open: d.date === open,
-                      onToggle: () => setOpenDate(d.date === open ? '' : d.date),
-                    }),
-                  ),
-                  h('p', { style: { margin: '12px 0 0', fontSize: 11, lineHeight: 1.7, color: C.text2 } },
-                    '按 `## 日期` 拆开读，点一下展开或收起。要改措辞去「整篇编辑」。'),
-                ))
-          : h('div', null,
-              h('p', { style: { margin: '12px 0 6px', fontSize: 11, lineHeight: 1.6, color: C.text2 } },
-                '这本不设上限、不衰减，保存前会把旧版存一份到 backups/feelings/。'),
+          ? days.length === 0
+            ? h('p', { className: 'fs-note' }, '这本账还是空的。')
+            : h(
+                'div',
+                { className: 'fs-days' },
+                newestFirst.map((d) =>
+                  h(FeelingsDay, {
+                    key: d.date,
+                    day: d,
+                    today,
+                    open: d.date === open,
+                    onToggle: () => setOpenDate(d.date === open ? '' : d.date),
+                  }),
+                ),
+                h(
+                  'p',
+                  { className: 'fs-note fs-note--tiny' },
+                  '按 `## 日期` 拆开读，点一下展开或收起。要改措辞去「整篇编辑」。',
+                ),
+              )
+          : h(
+              'div',
+              null,
+              h(
+                'p',
+                { className: 'fs-note' },
+                '这本不设上限、不衰减，保存前会把旧版存一份到 backups/feelings/。',
+              ),
               h('textarea', {
+                className: 'fs-editor',
                 value: text,
                 onChange: (e) => setText(e.target.value),
                 rows: 22,
                 spellCheck: false,
-                style: { width: '100%', fontFamily: 'ui-monospace,Consolas,monospace', fontSize: 12, lineHeight: 1.7, padding: 8, borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: 'inherit', resize: 'vertical' },
+                style: { marginTop: 10, minHeight: 360 },
               }),
-              h('div', { style: { marginTop: 6, display: 'flex', gap: 10, alignItems: 'center', fontSize: 11, color: C.text2 } },
-                h('button', {
-                  type: 'button',
-                  onClick: save,
-                  disabled: busy || !dirty,
-                  style: { fontSize: 12, padding: '3px 12px', borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: dirty ? 'inherit' : C.text2, cursor: busy || !dirty ? 'default' : 'pointer' },
-                }, busy ? '保存中…' : '保存'),
-                h('span', null, `现在 ${[...text].length} 字符${delta ? `（比读入时 ${delta > 0 ? '+' : ''}${delta}）` : ''}`),
+              h(
+                'div',
+                { className: 'fs-actions' },
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'fs-btn fs-btn--sm fs-btn--primary',
+                    onClick: save,
+                    disabled: busy || !dirty,
+                  },
+                  busy ? '保存中…' : '保存',
+                ),
+                h(
+                  'span',
+                  null,
+                  `现在 ${[...text].length} 字符${delta ? `（比读入时 ${delta > 0 ? '+' : ''}${delta}）` : ''}`,
+                ),
                 msg ? h('span', null, msg) : null,
                 err ? h('span', { style: { color: C.err } }, err) : null,
               ),
             ),
-        mode === 'days' && msg ? h('p', { style: { margin: '10px 0 0', fontSize: 11, color: C.text2 } }, msg) : null,
-        mode === 'days' && err ? h('p', { style: { margin: '10px 0 0', fontSize: 11, color: C.err } }, err) : null,
+        mode === 'days' && msg ? h('p', { className: 'fs-note' }, msg) : null,
+        mode === 'days' && err ? h('p', { className: 'fs-note', style: { color: C.err } }, err) : null,
       );
     }
+
+    /* ───────────────────────── 记忆体检 ───────────────────────── */
 
     function HealthBox() {
       const [state, setState] = useState(null);
@@ -1025,8 +1093,8 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState(false);
       const [noteMsg, setNoteMsg] = useState('');
 
-      // 2026-11-03 加：重复句不再只能删手记那一份 —— 哪层都能删。
-      // 服务端按 target 找文件，仍然只认整行精确匹配。
+      // 重复句不再只能删手记那一份 —— 哪层都能删。服务端按 target 找文件，
+      // 仍然只认整行精确匹配。
       const removeLine = async (target, line) => {
         setNoteMsg('');
         try {
@@ -1045,12 +1113,7 @@ window.__ModuleLoader__.load({
         }
       };
 
-      // 2026-11-02 加：体检页原先只报「这句深层记忆里也有」，看得见但动不了。
-      // 现在每条旁边一颗按钮，按整行匹配删掉手记里那一份（手记是现读磁盘的，
-      // 删完下一轮就生效，不用重启）。
-
-      // 2026-11-03 加：冲突不再只是报警，可以一句话统一成某个值。
-      // 只改「出现过那个值」的行，别的字一个不碰。
+      // 冲突不再只是报警，可以一句话统一成某个值。只改「出现过那个值」的行。
       const unifyValue = async (conflict, value) => {
         setNoteMsg('');
         let changed = 0;
@@ -1067,7 +1130,7 @@ window.__ModuleLoader__.load({
             const data = await res.json();
             if (res.ok && data.ok) changed += data.changed || 0;
           }
-          setNoteMsg(changed ? `统一成「${value}」，改了 ${changed} 行` : `没有要改的行（浅层请手动改）`);
+          setNoteMsg(changed ? `统一成「${value}」，改了 ${changed} 行` : '没有要改的行（浅层请手动改）');
           await read();
         } catch (err) {
           setNoteMsg(String(err && err.message ? err.message : err));
@@ -1092,102 +1155,167 @@ window.__ModuleLoader__.load({
         }
       };
 
-      useEffect(() => { read(); }, []);
-
-      const row = (label, value) =>
-        h('div', { key: label, style: { display: 'flex', justifyContent: 'space-between', gap: 12, padding: '3px 0' } },
-          h('span', { style: { color: C.text2 } }, label),
-          h('span', { style: { fontVariantNumeric: 'tabular-nums' } }, String(value)));
+      useEffect(() => {
+        read();
+      }, []);
 
       if (!state && !error) {
-        return h('div', { style: { marginTop: 0, fontSize: 12, color: C.text2 } }, '正在数账…');
+        return h('p', { className: 'fs-note' }, '正在数账…');
       }
       if (error) {
-        return h('div', { style: { marginTop: 0, fontSize: 12, color: C.err } }, `体检读不到：${error}`);
+        return h('p', { className: 'fs-note', style: { color: C.err } }, `体检读不到：${error}`);
       }
 
       const d = state;
-      const blocks = [];
-      for (const scope of d.memory.scopes) {
-        blocks.push(h('div', { key: scope.scope, style: { marginTop: 8 } },
-          h('div', { style: { fontSize: 12, fontWeight: 600 } }, `深层 · ${scope.scope}`),
-          row('core', `${scope.coreChars} 字（约 ${scope.coreTokens} token）`),
-          row('topics', `${scope.topics.length} 条 / ${scope.topics.reduce((sum, t) => sum + t.chars, 0)} 字`),
-        ));
-      }
+      const metric = (value, label) =>
+        h(
+          'div',
+          { className: 'fs-metric', key: label },
+          h('b', null, String(value)),
+          h('span', null, label),
+        );
 
-      return h('div', { style: { marginTop: 0 } },
-        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-          h('div', { style: { fontSize: 13, fontWeight: 600 } }, '记忆体检'),
-          h('button', {
-            type: 'button',
-            onClick: read,
-            disabled: busy,
-            style: { fontSize: 12, padding: '3px 10px', borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: C.text2, cursor: busy ? 'default' : 'pointer' },
-          }, busy ? '数着…' : '重数'),
-        ),
-        h('div', { style: { marginTop: 6 } },
-          ...blocks,
-          h('div', { style: { marginTop: 8 } },
-            h('div', { style: { fontSize: 12, fontWeight: 600 } }, '档案'),
-            row('共度时光', `${d.diary.entries} 条 / ${d.diary.files} 个文件（近 7 天 ${d.diary.last7Days} 条）`),
-            row('情感日记', `${d.feelings.chars} 字`),
-            row('人格手记', `${d.handnote.lines} 条 / ${d.handnote.chars} 字，最长 ${d.handnote.longest} 字`),
-            d.handnote.truncated ? row('⚠ 被截断的行', `${d.handnote.truncated} 条`) : null,
-            row('浅层', `${d.shallow.live} 条（快到期 ${d.shallow.expiring}）`),
-            row('每轮注入估计', `约 ${d.estimate.injectedTokens} token`),
+      return h(
+        'div',
+        { className: 'fs-stack' },
+        h(
+          'div',
+          { className: 'fs-sectionHead' },
+          h('span', { className: 'fs-sectionTitle' }, '记忆体检'),
+          h('span', { className: 'fs-grow' }),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'fs-btn fs-btn--sm',
+              onClick: read,
+              disabled: busy,
+            },
+            busy ? '数着…' : '重数',
           ),
-          (d.duplicates && d.duplicates.length)
-            ? h('div', { style: { marginTop: 8, fontSize: 12 } },
-                `⚠ 有 ${d.duplicates.length} 句写了两遍：`,
-                ...d.duplicates.slice(0, 4).map((item, i) =>
-                  h('div', { key: `d${i}`, style: { opacity: 0.85, display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' } },
-                    h('span', null, `· ${item.text.slice(0, 36)}`),
-                    item.againTarget
-                      ? h('button', {
-                          type: 'button',
-                          className: '__sm_btn',
-                          style: { fontSize: 11, padding: '1px 6px' },
-                          onClick: () => removeLine(item.againTarget, item.text),
-                        }, `删掉${item.again}那份`)
-                      : null,
-                    (item.firstTarget && item.firstTarget !== item.againTarget)
-                      ? h('button', {
-                          type: 'button',
-                          className: '__sm_btn',
-                          style: { fontSize: 11, padding: '1px 6px' },
-                          onClick: () => removeLine(item.firstTarget, item.text),
-                        }, `删掉${item.first}那份`)
-                      : null)))
-            : null,
-          (d.conflicts && d.conflicts.length)
-            ? h('div', { style: { marginTop: 8, fontSize: 12 } },
-                `⚠ 有 ${d.conflicts.length} 样东西被写出了不同的值：`,
-                ...d.conflicts.map((conflict, ci) =>
-                  h('div', { key: `c${ci}`, style: { marginTop: 6, paddingLeft: 8, opacity: 0.9 } },
-                    h('div', { style: { fontSize: 11, color: C.text2 } }, `${conflict.kind}：${conflict.values.join(' / ')}`),
-                    ...conflict.lines.map((line, li) =>
-                      h('div', { key: `c${ci}l${li}`, style: { display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 11 } },
-                        h('span', { style: { opacity: 0.7 } }, `${line.layer}:`),
-                        h('span', null, line.line.slice(0, 46)),
-                        h('button', {
-                          type: 'button',
-                          className: '__sm_btn',
-                          style: { fontSize: 11, padding: '1px 6px' },
-                          onClick: () => unifyValue(conflict, line.value),
-                        }, `都以「${line.value}」为准`))
-                    ))))
-            : null,
-          noteMsg ? h('div', { style: { marginTop: 4, fontSize: 11, color: C.text2 } }, noteMsg) : null,
-          h('p', { style: { margin: '6px 0 0', fontSize: 11, lineHeight: 1.6, color: C.text2 } }, d.estimate.note),
         ),
+        h(
+          'div',
+          { className: 'fs-metrics', style: { marginTop: 0 } },
+          metric(d.diary.entries, '共度时光 · 条'),
+          metric(d.estimate.injectedTokens, '每轮注入 · token'),
+          metric(d.feelings.chars, '情感日记 · 字'),
+          metric(d.handnote.chars, '人格手记 · 字'),
+        ),
+
+        d.memory.scopes.map((scope) =>
+          h(
+            'div',
+            { key: scope.scope },
+            h(SubHead, null, `深层 · ${scope.scope}`),
+            h(KV, { label: 'core', value: `${scope.coreChars} 字（约 ${scope.coreTokens} token）` }),
+            h(KV, {
+              label: 'topics',
+              value: `${scope.topics.length} 条 / ${scope.topics.reduce((sum, t) => sum + t.chars, 0)} 字`,
+            }),
+          ),
+        ),
+
+        h(
+          'div',
+          null,
+          h(SubHead, null, '档案'),
+          h(KV, {
+            label: '共度时光',
+            value: `${d.diary.entries} 条 / ${d.diary.files} 个文件（近 7 天 ${d.diary.last7Days} 条）`,
+          }),
+          h(KV, { label: '情感日记', value: `${d.feelings.chars} 字` }),
+          h(KV, {
+            label: '人格手记',
+            value: `${d.handnote.lines} 条 / ${d.handnote.chars} 字，最长 ${d.handnote.longest} 字`,
+          }),
+          d.handnote.truncated ? h(KV, { label: '⚠ 被截断的行', value: `${d.handnote.truncated} 条` }) : null,
+          h(KV, { label: '浅层', value: `${d.shallow.live} 条（快到期 ${d.shallow.expiring}）` }),
+          h(KV, { label: '每轮注入估计', value: `约 ${d.estimate.injectedTokens} token` }),
+        ),
+
+        d.duplicates && d.duplicates.length
+          ? h(
+              'div',
+              { className: 'fs-warn' },
+              h('b', null, `⚠ 有 ${d.duplicates.length} 句写了两遍`),
+              ...d.duplicates.slice(0, 4).map((item, i) =>
+                h(
+                  'div',
+                  { key: `d${i}`, className: 'fs-warnRow' },
+                  h('span', null, `· ${item.text.slice(0, 36)}`),
+                  item.againTarget
+                    ? h(
+                        'button',
+                        {
+                          type: 'button',
+                          className: 'fs-btn fs-btn--sm',
+                          onClick: () => removeLine(item.againTarget, item.text),
+                        },
+                        `删掉${item.again}那份`,
+                      )
+                    : null,
+                  item.firstTarget && item.firstTarget !== item.againTarget
+                    ? h(
+                        'button',
+                        {
+                          type: 'button',
+                          className: 'fs-btn fs-btn--sm',
+                          onClick: () => removeLine(item.firstTarget, item.text),
+                        },
+                        `删掉${item.first}那份`,
+                      )
+                    : null,
+                ),
+              ),
+            )
+          : null,
+
+        d.conflicts && d.conflicts.length
+          ? h(
+              'div',
+              { className: 'fs-warn' },
+              h('b', null, `⚠ 有 ${d.conflicts.length} 样东西被写出了不同的值`),
+              ...d.conflicts.map((conflict, ci) =>
+                h(
+                  'div',
+                  { key: `c${ci}`, style: { marginTop: 8 } },
+                  h(
+                    'div',
+                    { className: 'fs-note fs-note--tiny' },
+                    `${conflict.kind}：${conflict.values.join(' / ')}`,
+                  ),
+                  ...conflict.lines.map((line, li) =>
+                    h(
+                      'div',
+                      { key: `c${ci}l${li}`, className: 'fs-warnRow' },
+                      h('span', { style: { opacity: 0.7 } }, `${line.layer}:`),
+                      h('span', null, line.line.slice(0, 46)),
+                      h(
+                        'button',
+                        {
+                          type: 'button',
+                          className: 'fs-btn fs-btn--sm',
+                          onClick: () => unifyValue(conflict, line.value),
+                        },
+                        `都以「${line.value}」为准`,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            )
+          : null,
+
+        noteMsg ? h('p', { className: 'fs-note' }, noteMsg) : null,
+        h('p', { className: 'fs-note fs-note--tiny' }, d.estimate.note),
       );
     }
 
     /* ── 回顾 ── */
     //
-    // 2026-10-31 加。之前想看「上周都在干什么」只能靠搜关键词，
-    // 时间线是断的。这里按天把共度时光铺开，另外单拎「7 天前的今天」。
+    // 之前想看「上周都在干什么」只能靠搜关键词，时间线是断的。
+    // 这里按天把共度时光铺开，另外单拎「7 天前的今天」。
     function ReviewBox() {
       const [state, setState] = useState(null);
       const [error, setError] = useState('');
@@ -1204,46 +1332,74 @@ window.__ModuleLoader__.load({
         }
       };
 
-      useEffect(() => { if (open && !state) read(); }, [open]);
+      useEffect(() => {
+        if (open && !state) read();
+      }, [open]);
 
       const line = (entry, key) =>
-        h('div', { key, style: { padding: '4px 0', fontSize: 12, lineHeight: 1.7 } },
-          h('span', { style: { color: C.text2, marginRight: 6 } }, String(entry.at || '').slice(11, 16)),
+        h(
+          'div',
+          { key, className: 'fs-entryText', style: { fontSize: 12, padding: '3px 0' } },
+          h('span', { className: 'fs-clock', style: { marginRight: 7, color: C.text2 } }, String(entry.at || '').slice(11, 16)),
           String(entry.text || '').slice(0, 160),
         );
 
       if (!open) {
-        return h('button', {
-          type: 'button',
-          onClick: () => setOpen(true),
-          style: { marginTop: 0, fontSize: 12, padding: '4px 10px', borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: C.text2, cursor: 'pointer' },
-        }, '回顾一下最近七天');
+        return h(
+          'button',
+          { type: 'button', className: 'fs-btn fs-btn--sm', onClick: () => setOpen(true) },
+          '回顾一下最近七天',
+        );
       }
 
-      if (error) return h('div', { style: { marginTop: 0, fontSize: 12, color: C.err } }, `回顾读不到：${error}`);
-      if (!state) return h('div', { style: { marginTop: 0, fontSize: 12, color: C.text2 } }, '翻着…');
+      if (error) return h('p', { className: 'fs-note', style: { color: C.err } }, `回顾读不到：${error}`);
+      if (!state) return h('p', { className: 'fs-note' }, '翻着…');
 
       const back = state.lookback;
-      return h('div', { style: { marginTop: 0 } },
-        h('div', { style: { fontSize: 13, fontWeight: 600 } }, '回顾'),
+      return h(
+        'div',
+        null,
         back.entries.length
-          ? h('div', { style: { marginTop: 6 } },
-              h('div', { style: { fontSize: 12, color: C.text2 } }, `${back.date}（七天前的今天）`),
-              ...back.entries.slice(0, 4).map((entry, i) => line(entry, `b${i}`)))
-          : h('p', { style: { margin: '6px 0 0', fontSize: 12, color: C.text2 } }, `${back.date} 那天没有记录。`),
+          ? h(
+              'div',
+              null,
+              h(SubHead, null, `${back.date}（七天前的今天）`),
+              ...back.entries.slice(0, 4).map((entry, i) => line(entry, `b${i}`)),
+            )
+          : h('p', { className: 'fs-note' }, `${back.date} 那天没有记录。`),
         ...state.recent.map((day) =>
-          h('div', { key: day.date, style: { marginTop: 8 } },
-            h('div', { style: { fontSize: 12, color: C.text2 } }, `${day.date} · ${day.entries.length} 条`),
-            ...day.entries.slice(0, 3).map((entry, i) => line(entry, `${day.date}-${i}`)))),
-        h('div', { style: { marginTop: 8 } },
-          h('button', {
+          h(
+            'div',
+            { key: day.date },
+            h(SubHead, null, `${day.date} · ${day.entries.length} 条`),
+            ...day.entries.slice(0, 3).map((entry, i) => line(entry, `${day.date}-${i}`)),
+          ),
+        ),
+        h(
+          'button',
+          {
             type: 'button',
-            onClick: () => { setOpen(false); setState(null); },
-            style: { fontSize: 12, padding: '3px 10px', borderRadius: 6, border: `1px solid ${C.border1}`, background: 'transparent', color: C.text2, cursor: 'pointer' },
-          }, '收起')),
+            className: 'fs-btn fs-btn--sm',
+            style: { marginTop: 10 },
+            onClick: () => {
+              setOpen(false);
+              setState(null);
+            },
+          },
+          '收起',
+        ),
       );
     }
 
+    /* ───────────────────────── 导入备份 ───────────────────────── */
+
+    /**
+     * 把一份备份 JSON 塞回去。
+     *
+     * 两步走：先 POST 不带 confirm（后端只算一遍，什么都不写），把「会覆盖
+     * 多少东西」摆给人看；确认了再带 `?confirm=1` 真写。记忆这种东西，
+     * 误覆盖比漏备份危险得多 —— 所以任何一步都别偷偷替人决定。
+     */
     function ImportBox() {
       const [phase, setPhase] = useState('idle'); // idle | preview | writing | done | error
       const [report, setReport] = useState(null);
@@ -1318,8 +1474,6 @@ window.__ModuleLoader__.load({
         setPhase('idle');
       };
 
-      const note = { fontSize: 12, lineHeight: 1.7, color: C.text2, margin: '8px 0 0' };
-
       return h(
         'div',
         null,
@@ -1334,350 +1488,84 @@ window.__ModuleLoader__.load({
           'button',
           {
             type: 'button',
+            className: 'fs-btn',
             onClick: () => picker.current && picker.current.click(),
-            style: {
-              fontSize: 12,
-              fontFamily: 'inherit',
-              padding: '6px 12px',
-              borderRadius: 8,
-              border: `1px solid ${C.border1}`,
-              background: C.bg,
-              color: C.text1,
-              cursor: 'pointer',
-            },
           },
+          h(Glyph, { name: 'box' }),
           '导入备份（.json）',
         ),
-        name
-          ? h('p', { style: note }, `选中的文件：${name}`)
-          : null,
+        name ? h('p', { className: 'fs-note' }, `选中的文件：${name}`) : null,
         phase === 'preview' && report
           ? h(
               'div',
-              { style: { marginTop: 10, padding: '10px 12px', border: `1px solid ${C.border1}`, borderRadius: 8 } },
-              h('p', { style: { margin: 0, fontSize: 12, lineHeight: 1.7, color: C.text1 } },
-                `这份备份会覆盖 ${report.writes} 个文件、合并 ${report.cards} 张人设卡。`),
-              h('p', { style: { ...note, margin: '4px 0 0' } },
-                `${describe(report) || '（备份里没有可识别的条目）'}${report.exportedAt ? ` · 备份于 ${String(report.exportedAt).slice(0, 16).replace('T', ' ')}` : ''}`),
-              h('p', { style: { ...note, margin: '6px 0 0', color: C.err } },
-                '还原会覆盖现在的日记、手记和深层记忆；动手之前插件会先自动存一份「还原前」快照。'),
-              h('div', { style: { marginTop: 8, display: 'flex', gap: 16, alignItems: 'center' } },
-                h('button', { type: 'button', onClick: write, style: linkStyle(C.err) }, '确认还原'),
-                h('button', { type: 'button', onClick: reset, style: linkStyle(C.text2) }, '算了')),
+              { className: 'fs-warn' },
+              h(
+                'p',
+                { style: { margin: 0, fontSize: 12, lineHeight: 1.75 } },
+                `这份备份会覆盖 ${report.writes} 个文件、合并 ${report.cards} 张人设卡。`,
+              ),
+              h(
+                'p',
+                { className: 'fs-note' },
+                `${describe(report) || '（备份里没有可识别的条目）'}${
+                  report.exportedAt ? ` · 备份于 ${String(report.exportedAt).slice(0, 16).replace('T', ' ')}` : ''
+                }`,
+              ),
+              h(
+                'p',
+                { className: 'fs-note', style: { color: C.err } },
+                '还原会覆盖现在的日记、手记和深层记忆；动手之前插件会先自动存一份「还原前」快照。',
+              ),
+              h(
+                'div',
+                { className: 'fs-actions' },
+                h(
+                  'button',
+                  { type: 'button', className: 'fs-btn fs-btn--sm', style: { borderColor: C.err, color: C.err }, onClick: write },
+                  '确认还原',
+                ),
+                h('button', { type: 'button', className: 'fs-btn fs-btn--sm', onClick: reset }, '算了'),
+              ),
             )
           : null,
-        phase === 'writing'
-          ? h('p', { style: note }, '正在写入…')
-          : null,
+        phase === 'writing' ? h('p', { className: 'fs-note' }, '正在写入…') : null,
         phase === 'done' && report
           ? h(
               'div',
-              { style: { marginTop: 10, padding: '10px 12px', border: `1px solid ${C.border1}`, borderRadius: 8 } },
-              h('p', { style: { margin: 0, fontSize: 12, lineHeight: 1.7, color: C.text1 } },
-                `还原完成：写了 ${report.written} 个文件、合并 ${report.cards} 张人设卡。`),
-              report.preBackup ? h('p', { style: { ...note, margin: '4px 0 0' } }, `还原前的快照：${report.preBackup}`) : null,
-              h('p', { style: { ...note, margin: '4px 0 0' } }, '日记和手记要重启后才重新加载；人设卡下一轮就生效。'),
-              h('div', { style: { marginTop: 8 } },
-                h('button', { type: 'button', onClick: reset, style: linkStyle(C.text2) }, '知道了')),
+              { className: 'fs-warn' },
+              h(
+                'p',
+                { style: { margin: 0, fontSize: 12, lineHeight: 1.75 } },
+                `还原完成：写了 ${report.written} 个文件、合并 ${report.cards} 张人设卡。`,
+              ),
+              report.preBackup
+                ? h('p', { className: 'fs-note' }, `还原前的快照：${report.preBackup}`)
+                : null,
+              h('p', { className: 'fs-note' }, '日记和手记要重启后才重新加载；人设卡下一轮就生效。'),
+              h(
+                'div',
+                { className: 'fs-actions' },
+                h('button', { type: 'button', className: 'fs-btn fs-btn--sm', onClick: reset }, '知道了'),
+              ),
             )
           : null,
         phase === 'error'
-          ? h('div', { style: { marginTop: 8 } },
-              h('p', { style: { margin: 0, fontSize: 12, lineHeight: 1.7, color: C.err } }, `没导入成功：${error}`),
-              h('button', { type: 'button', onClick: reset, style: { ...linkStyle(C.text2), marginTop: 6 } }, '重选一份'))
+          ? h(
+              'div',
+              { style: { marginTop: 8 } },
+              h('p', { className: 'fs-banner', style: { marginTop: 0 } }, `没导入成功：${error}`),
+              h(
+                'button',
+                { type: 'button', className: 'fs-btn fs-btn--sm', style: { marginTop: 8 }, onClick: reset },
+                '重选一份',
+              ),
+            )
           : null,
       );
     }
 
-    /* ───────────────────────── 主面板 ───────────────────────── */
+    /* ───────────────────────── 云端备份（WebDAV） ───────────────────────── */
 
-    /** 四个页签，按使用频率排。 */
-    const TABS = [
-      { key: 'timeline', label: '回看' },
-      { key: 'books', label: '本子' },
-      { key: 'health', label: '体检' },
-      { key: 'archive', label: '档案' },
-    ];
-
-    function Panel() {
-      const [phase, setPhase] = useState('loading');
-      const [state, setState] = useState(null);
-      const [error, setError] = useState('');
-      const [busy, setBusy] = useState('');
-      const [tick, setTick] = useState(0);
-      const [tab, setTab] = useState('timeline');
-
-      useEffect(() => {
-        let alive = true;
-        fetch(`${API}/state`, { headers: { Accept: 'application/json' } })
-          .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-          .then((data) => {
-            if (!alive) return;
-            setState(data);
-            setPhase('ready');
-          })
-          .catch((err) => {
-            if (!alive) return;
-            setError(String((err && err.message) || err));
-            setPhase('error');
-          });
-        return () => {
-          alive = false;
-        };
-      }, [tick]);
-
-      function forget(id) {
-        setBusy(id);
-        fetch(`${API}/forget`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id }),
-        })
-          // ⚠️ **必须检查 r.ok。**
-          //
-          // 这里原来是 `.then((r) => r.json())` —— 服务端回 400/403 时 JSON 照样
-          // 能解析，于是被当成成功，接着刷新一遍、什么都没变。表现就是
-          // **「忘掉按钮点不动」**：没有报错、没有删除、没有任何提示。
-          //
-          // 2026-10-26 社区报的那个 bug，一半就出在这里：把它变成静默。
-          .then((r) =>
-            r
-              .json()
-              .catch(() => ({}))
-              .then((body) => {
-                if (!r.ok) throw new Error(body?.error || `HTTP ${r.status}`);
-                return body;
-              }),
-          )
-          .then(() => {
-            setBusy('');
-            setError('');
-            setTick((n) => n + 1);
-          })
-          .catch((err) => {
-            setBusy('');
-            setError(`删不掉：${String((err && err.message) || err)}`);
-          });
-      }
-
-      const wrap = { height: '100%', overflowY: 'auto', background: C.bg, color: C.text1 };
-      const inner = { maxWidth: 720, margin: '0 auto', padding: '28px 24px 60px' };
-
-      if (phase === 'loading') {
-        return h('div', { style: wrap }, h('div', { style: inner }, h(Empty, { text: '翻档案…' })));
-      }
-      if (phase === 'error') {
-        return h(
-          'div',
-          { style: wrap },
-          h(
-            'div',
-            { style: inner },
-            h(Empty, { text: `读不到档案：${error}` }),
-            h(
-              'button',
-              {
-                type: 'button',
-                onClick: () => setTick((n) => n + 1),
-                style: { ...linkStyle(C.brand), marginTop: 10 },
-              },
-              '再试一次',
-            ),
-          ),
-        );
-      }
-
-      const d = state || {};
-      const facts = d.facts || {};
-      // traits（印象）2026-10-27 整类下线 —— 面板不显示，固化也不再产出。
-      // 数据还在档案里，要看就翻 relationship.json。
-      const diary = d.diary || [];
-
-      // 按使用频率排：看回忆是天天的事，改本子是偶尔，体检和带走是修东西的时候。
-      const chips = [];
-      chips.push(`共度时光 ${d.count || 0} 条`);
-      if (facts.days > 0) chips.push(`认识 ${facts.days} 天`);
-      if (facts.nickname) chips.push(`他管我叫「${facts.nickname}」`);
-      if (d.degraded) chips.push('档案只读');
-      // 回收站里有东西就提一句 —— 删错了至少知道去哪儿找
-      if (d.trash > 0) chips.push(`回收站 ${d.trash} 条`);
-
-      const view = (key, ...children) =>
-        h('div', { style: { display: tab === key ? 'block' : 'none' } }, children);
-
-      return h(
-        'div',
-        { style: wrap },
-        h(
-          'div',
-          { style: inner },
-
-          // ── 标题 ──
-          h(
-            'h2',
-            { style: { margin: 0, fontSize: 19, fontWeight: 600, letterSpacing: '-0.01em' } },
-            '属于我们的回忆',
-          ),
-          h(
-            'div',
-            { style: { marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 } },
-            chips.map((text, i) => h(Chip, { key: i }, text)),
-          ),
-
-          // ── 出错横幅 ──
-          //
-          // 之前「忘掉」失败是**完全静默**的：服务端回 400/403，前端把 JSON
-          // 当成功、刷新一遍、什么都没变 —— 用户只看到「点不动」。
-          // 现在失败会出现在这里，而且带着服务端说的原因。
-          error !== ''
-            ? h(
-                'p',
-                {
-                  style: {
-                    margin: '10px 0 0',
-                    padding: '8px 10px',
-                    fontSize: 12,
-                    lineHeight: 1.6,
-                    color: C.err,
-                    border: `1px solid ${C.err}`,
-                    borderRadius: 6,
-                  },
-                },
-                error,
-              )
-            : null,
-
-          h(Tabs, { tabs: TABS, value: tab, onChange: setTab }),
-
-          // ── 回看：共度时光 ──
-          //
-          // **这一页保持原样。** 2026-11-04 曾经把「最近写了什么」和
-          // 「还常想起」铺在这一页顶上，结果是回看页和以前不是一个样子：
-          // 一进面板先看到两大段别的东西，日记反而被挤下去了。
-          // 回看就是回看 —— 它只该是那串日记。
-          view(
-            'timeline',
-            diary.length === 0
-              ? h(Card, null, h(Empty, { text: '还没有日记。多聊几句，我就会有东西可记。' }))
-              : h(
-                  'div',
-                  { style: { marginTop: 14 } },
-                  diary.map((e) => h(Entry, { key: e.id, entry: e, onForget: forget, busy: busy === e.id })),
-                ),
-          ),
-
-          // ── 本子：情感日记 + 人格手记 ──
-          //
-          // 两个编辑口合成一个：情感日记原来既能在「本子」里改、又能在
-          // FeelingsBox 里改，是同一个文件。留下会存快照的那个。
-          view(
-            'books',
-            h(Card, null, h(FeelingsBox)),
-            h(Card, null, h(Notebook, { only: ['handnote', 'sticky', 'lesson'] })),
-          ),
-
-          // ── 体检：数账 + 回顾 ──
-          //
-          // 「最近写了什么」「还常想起」放在这一页：体检本来就在讲账的样子，
-          // 而这两条正是账的一部分。回看页保持只有日记那串 —— 那里是"看回忆"，
-          // 不是"看管理信息"。
-          view(
-            'health',
-            // 情感日记是四本账里唯一每轮注入为零的一份（三十多 KB，只在回想时
-            // 出现），而它最说明最近怎么样。体检页只报条数体积 —— 那条信息
-            // 在界面上等于不存在。所以在这儿抽一段出来。
-            d.feelings
-              ? h(
-                  'div',
-                  {
-                    style: {
-                      marginTop: 14,
-                      padding: '10px 12px',
-                      borderLeft: `2px solid ${C.border1}`,
-                      fontSize: 12,
-                      lineHeight: 1.7,
-                      color: C.text2,
-                    },
-                  },
-                  h(
-                    'div',
-                    {
-                      style: {
-                        marginBottom: 4,
-                        color: C.text1,
-                        fontWeight: 600,
-                        opacity: d.feelings.heading || d.feelings.sub ? 1 : 0.7,
-                      },
-                    },
-                    [d.feelings.heading, d.feelings.sub].filter(Boolean).join(' · ') || '最近写的',
-                  ),
-                  h('div', null, d.feelings.body || '（这一段是空的）'),
-                )
-              : null,
-            // 还常想起的那几条：`recall_count` 唯一给用户看的地方。
-            // 不排序、不加权，只列出来 —— 它不该影响召回，只该被看见。
-            d.recalled && d.recalled.length > 0
-              ? h(
-                  'div',
-                  { style: { marginTop: 10, fontSize: 12, color: C.text2, opacity: 0.85 } },
-                  `还常想起：${d.recalled
-                    .map((r) => `${r.text}${r.count > 1 ? `（${r.count} 次）` : ''}`)
-                    .join('、')}`,
-                )
-              : null,
-            // 我主动回去找过的那几条（1.21.0）。跟上面不是同一笔账：
-            // 上面是系统翻给我的次数，这一行是我自己伸手的次数。
-            d.revisited && d.revisited.length > 0
-              ? h(
-                  'div',
-                  { style: { marginTop: 4, fontSize: 12, color: C.text2, opacity: 0.85 } },
-                  `我回去找过：${d.revisited
-                    .map((r) => `${r.text}${r.count > 1 ? `（${r.count} 次）` : ''}`)
-                    .join('、')}`,
-                )
-              : null,
-            h(Card, null, h(HealthBox)),
-            h(Card, { title: '最近七天' }, h(ReviewBox)),
-          ),
-
-          // ── 档案：带走 / 塞回去 / 云端 ──
-          view(
-            'archive',
-            h(
-              Card,
-              {
-                title: '带走',
-                hint: '它就是一个普通文件夹，在 ~/.dsh/feiyu-diary/。可以直接打开、改、拷走。',
-              },
-              h(
-                'div',
-                { style: { display: 'flex', flexWrap: 'wrap', gap: 8 } },
-                h(Ghost, { href: `${API}/export` }, '导出档案（.dshpack）'),
-                h(Ghost, { href: `${API}/backup` }, '整包备份（.json）'),
-                h(Ghost, { href: `${API}/export-md` }, '导出成册（.md）'),
-                h(
-                  Ghost,
-                  { href: `${API}/export-year?year=${new Date().getFullYear()}` },
-                  `年册（${new Date().getFullYear()} 年）`,
-                ),
-              ),
-              h(
-                'p',
-                { style: { margin: '10px 0 0', fontSize: 11.5, lineHeight: 1.7, color: C.text2 } },
-                '整包备份把四本账和人设卡收进一个 JSON，存在 ~/.dsh/backups/；换设备带它就行。想要能直接读、能打印的，用「导出成册」；只想翻某一年，用「年册」。',
-              ),
-            ),
-            h(Card, { title: '从备份恢复' }, h(ImportBox)),
-            h(Card, { title: '云端备份（WebDAV）' }, h(CloudBox)),
-          ),
-        ),
-      );
-    }
-
-    /* ── 云端备份（WebDAV） ── */
-    //
-    // 2026-10-31 加。本地那份 JSON 已经能带走，这个按钮是「连手都不用动」。
-    // 状态每次打开面板现读，所以设置页改完地址回来就能看到新结果。
     function CloudBox() {
       const [state, setState] = useState(null); // GET /cloud 的结果
       const [busy, setBusy] = useState(false);
@@ -1725,15 +1613,14 @@ window.__ModuleLoader__.load({
         }
       };
 
-      const note = { fontSize: 12, lineHeight: 1.7, color: C.text2, margin: '8px 0 0' };
       const when = state && state.lastAt ? new Date(state.lastAt).toLocaleString() : '';
 
       return h(
         'div',
-        { style: { marginTop: 0 } },
+        null,
         h(
           'p',
-          { style: { ...note, margin: 0 } },
+          { className: 'fs-note', style: { margin: 0 } },
           !state
             ? '云端备份：读不到状态。'
             : !state.enabled
@@ -1742,36 +1629,354 @@ window.__ModuleLoader__.load({
                 ? '云端备份还没接上：去插件设置里填 WebDAV 地址（服务器、账号、密码）。'
                 : `云端备份：${state.dir} · 保留 ${state.keep} 份${state.auto ? ' · 写日记后自动上传' : ''}`,
         ),
-        when
-          ? h('p', { style: { ...note, margin: '4px 0 0' } }, `上次上传：${when}（${state.lastFile}）`)
-          : null,
+        when ? h('p', { className: 'fs-note' }, `上次上传：${when}（${state.lastFile}）`) : null,
         state && state.lastError
-          ? h('p', { style: { ...note, margin: '4px 0 0', color: C.err } }, `上次失败：${state.lastError}`)
+          ? h('p', { className: 'fs-note', style: { color: C.err } }, `上次失败：${state.lastError}`)
           : null,
         state && state.configured && state.enabled
           ? h(
               'button',
               {
                 type: 'button',
+                className: 'fs-btn',
+                style: { marginTop: 10 },
                 onClick: push,
                 disabled: busy,
-                style: { ...linkStyle(C.brand), marginTop: 8 },
               },
+              h(Glyph, { name: 'cloud' }),
               busy ? '正在上传…' : '上传到云端',
             )
           : null,
         done
           ? h(
               'p',
-              { style: { ...note, margin: '6px 0 0', color: C.brand } },
+              { className: 'fs-note', style: { color: C.brand } },
               `已上传：${done.fileName || done.file}（${done.bytes} 字节）${
                 done.removed && done.removed.length ? `，清掉 ${done.removed.length} 份旧的` : ''
               }`,
             )
           : null,
-        error
-          ? h('p', { style: { ...note, margin: '6px 0 0', color: C.err } }, `没传上去：${error}`)
-          : null,
+        error ? h('p', { className: 'fs-note', style: { color: C.err } }, `没传上去：${error}`) : null,
+      );
+    }
+
+    /* ───────────────────────── 主面板 ───────────────────────── */
+
+    /** 四个页签，按使用频率排。 */
+    const TABS = [
+      { key: 'timeline', label: '回看' },
+      { key: 'books', label: '本子' },
+      { key: 'health', label: '体检' },
+      { key: 'archive', label: '档案' },
+    ];
+
+    /** 把日记按「今天 / 昨天 / 3 天前 / 10-05」分段。 */
+    function groupByDay(diary) {
+      const groups = [];
+      for (const entry of diary) {
+        const label = dayLabel(entry.created_at);
+        const last = groups[groups.length - 1];
+        if (last && last.label === label) last.items.push(entry);
+        else groups.push({ label, items: [entry] });
+      }
+      return groups;
+    }
+
+    function Skeleton() {
+      return h(
+        'div',
+        { className: 'fs-skel' },
+        h('div', { className: 'fs-skelRow' }),
+        h('div', { className: 'fs-skelRow' }),
+        h('div', { className: 'fs-skelRow' }),
+      );
+    }
+
+    function Panel() {
+      const [phase, setPhase] = useState('loading');
+      const [state, setState] = useState(null);
+      const [error, setError] = useState('');
+      const [busy, setBusy] = useState('');
+      const [tick, setTick] = useState(0);
+      const [tab, setTab] = useState('timeline');
+
+      useEffect(() => {
+        let alive = true;
+        fetch(`${API}/state`, { headers: { Accept: 'application/json' } })
+          .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+          .then((data) => {
+            if (!alive) return;
+            setState(data);
+            setPhase('ready');
+          })
+          .catch((err) => {
+            if (!alive) return;
+            setError(String((err && err.message) || err));
+            setPhase('error');
+          });
+        return () => {
+          alive = false;
+        };
+      }, [tick]);
+
+      function forget(id) {
+        setBusy(id);
+        fetch(`${API}/forget`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id }),
+        })
+          // ⚠️ **必须检查 r.ok。**
+          //
+          // 这里原来是 `.then((r) => r.json())` —— 服务端回 400/403 时 JSON 照样
+          // 能解析，于是被当成成功，接着刷新一遍、什么都没变。表现就是
+          // **「忘掉按钮点不动」**：没有报错、没有删除、没有任何提示。
+          .then((r) =>
+            r
+              .json()
+              .catch(() => ({}))
+              .then((body) => {
+                if (!r.ok) throw new Error(body?.error || `HTTP ${r.status}`);
+                return body;
+              }),
+          )
+          .then(() => {
+            setBusy('');
+            setError('');
+            setTick((n) => n + 1);
+          })
+          .catch((err) => {
+            setBusy('');
+            setError(`删不掉：${String((err && err.message) || err)}`);
+          });
+      }
+
+      const shell = (...children) => h('div', { className: 'feiyu-root' }, h('div', { className: 'fs-shell' }, children));
+
+      if (phase === 'loading') return shell(h(Skeleton), h('p', { className: 'fs-note' }, '翻档案…'));
+      if (phase === 'error') {
+        return shell(
+          h(
+            'div',
+            { className: 'fs-empty', style: { marginTop: 40 } },
+            h(Glyph, { name: 'spark', size: 26 }),
+            h('p', null, `读不到档案：${error}`),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'fs-btn fs-btn--sm',
+                style: { marginTop: 12 },
+                onClick: () => setTick((n) => n + 1),
+              },
+              '再试一次',
+            ),
+          ),
+        );
+      }
+
+      const d = state || {};
+      const facts = d.facts || {};
+      const diary = d.diary || [];
+      const groups = groupByDay(diary);
+
+      // 状态小标签：数量进上面的数字块，这里只留"要留神"的那些。
+      const chips = [];
+      if (facts.nickname) chips.push({ text: `他管我叫「${facts.nickname}」` });
+      if (d.degraded) chips.push({ text: '档案只读', warn: true });
+      if (d.trash > 0) chips.push({ text: `回收站 ${d.trash} 条` });
+
+      const view = (key, ...children) =>
+        h('div', { style: { display: tab === key ? 'block' : 'none' } }, children);
+
+      return shell(
+        // ── 头部 ──
+        h(
+          'header',
+          { className: 'fs-hero' },
+          h(
+            'div',
+            { className: 'fs-brand' },
+            h('span', { className: 'fs-orb' }, h(Glyph, { name: 'fish', size: 25 })),
+            h(
+              'div',
+              { className: 'fs-brandText' },
+              h('h2', { className: 'fs-title' }, '属于我们的回忆'),
+              h('p', { className: 'fs-sub' }, '他随口说的、我记下来的 —— 都在这里。'),
+            ),
+          ),
+          h(
+            'div',
+            { className: 'fs-metrics' },
+            h(
+              'div',
+              { className: 'fs-metric' },
+              h('b', null, String(d.count || 0)),
+              h('span', null, '共度时光 · 条'),
+            ),
+            facts.days > 0
+              ? h(
+                  'div',
+                  { className: 'fs-metric' },
+                  h('b', null, String(facts.days)),
+                  h('span', null, '认识 · 天'),
+                )
+              : null,
+          ),
+          chips.length
+            ? h(
+                'div',
+                { className: 'fs-chips' },
+                chips.map((chip, i) => h(Chip, { key: i, warn: chip.warn }, chip.text)),
+              )
+            : null,
+        ),
+
+        // ── 出错横幅 ──
+        //
+        // 之前「忘掉」失败是**完全静默**的：服务端回 400/403，前端把 JSON
+        // 当成功、刷新一遍、什么都没变 —— 用户只看到「点不动」。
+        error !== '' ? h('p', { className: 'fs-banner' }, error) : null,
+
+        h(Tabs, { tabs: TABS, value: tab, onChange: setTab }),
+
+        // ── 回看：共度时光 ──
+        //
+        // **这一页只该是那串日记。** 2026-11-04 曾经把「最近写了什么」和
+        // 「还常想起」铺在这一页顶上，结果是回看页和以前不是一个样子。
+        view(
+          'timeline',
+          diary.length === 0
+            ? h(Empty, { text: '还没有日记。多聊几句，我就会有东西可记。' })
+            : groups.map((group) =>
+                h(
+                  'section',
+                  { key: group.label },
+                  h(
+                    'div',
+                    { className: 'fs-day' },
+                    h('span', { className: 'fs-dayName' }, group.label),
+                    h('span', { className: 'fs-dayCount' }, `${group.items.length} 条`),
+                  ),
+                  h(
+                    'div',
+                    { className: 'fs-rail' },
+                    group.items.map((e) =>
+                      h(Entry, { key: e.id, entry: e, onForget: forget, busy: busy === e.id }),
+                    ),
+                  ),
+                ),
+              ),
+        ),
+
+        // ── 本子：情感日记 + 人格手记 ──
+        view(
+          'books',
+          h(Card, { plain: true }, h(FeelingsBox)),
+          h(Card, { plain: true }, h(Notebook, { only: ['handnote', 'sticky', 'lesson'] })),
+        ),
+
+        // ── 体检：数账 + 回顾 ──
+        view(
+          'health',
+          // 情感日记是四本账里唯一每轮注入为零的一份，而它最说明最近怎么样。
+          d.feelings
+            ? h(
+                'div',
+                { className: 'fs-card', style: { marginTop: 14 } },
+                h(
+                  'div',
+                  { className: 'fs-cardHead' },
+                  h(
+                    'span',
+                    { className: 'fs-cardTitle' },
+                    [d.feelings.heading, d.feelings.sub].filter(Boolean).join(' · ') || '最近写的',
+                  ),
+                  h('span', { className: 'fs-grow' }),
+                  h('span', { className: 'fs-cardHint', style: { margin: 0 } }, '今日一句'),
+                ),
+                h(
+                  'p',
+                  { className: 'fs-para', style: { margin: 0, color: C.text2, fontSize: 12.5 } },
+                  d.feelings.body || '（这一段是空的）',
+                ),
+              )
+            : null,
+          // 还常想起的那几条：`recall_count` 唯一给用户看的地方。
+          // 不排序、不加权，只列出来 —— 它不该影响召回，只该被看见。
+          d.recalled && d.recalled.length > 0
+            ? h(
+                'p',
+                { className: 'fs-note' },
+                `还常想起：${d.recalled
+                  .map((r) => `${r.text}${r.count > 1 ? `（${r.count} 次）` : ''}`)
+                  .join('、')}`,
+              )
+            : null,
+          // 我主动回去找过的那几条。跟上面不是同一笔账。
+          d.revisited && d.revisited.length > 0
+            ? h(
+                'p',
+                { className: 'fs-note fs-note--tiny' },
+                `我回去找过：${d.revisited
+                  .map((r) => `${r.text}${r.count > 1 ? `（${r.count} 次）` : ''}`)
+                  .join('、')}`,
+              )
+            : null,
+          h(Card, null, h(HealthBox)),
+          h(Card, { title: '最近七天' }, h(ReviewBox)),
+        ),
+
+        // ── 档案：带走 / 塞回去 / 云端 ──
+        view(
+          'archive',
+          h(
+            Card,
+            {
+              title: '带走',
+              hint: '它就是一个普通文件夹，在 ~/.dsh/feiyu-diary/。可以直接打开、改、拷走。',
+            },
+            h(
+              'div',
+              { className: 'fs-tiles' },
+              h(
+                'a',
+                { className: 'fs-tile', href: `${API}/export`, download: '' },
+                h('span', { className: 'fs-tileTitle' }, h(Glyph, { name: 'box' }), '导出档案'),
+                h('span', { className: 'fs-tileDesc' }, '.dshpack · 换设备带它'),
+              ),
+              h(
+                'a',
+                { className: 'fs-tile', href: `${API}/backup`, download: '' },
+                h('span', { className: 'fs-tileTitle' }, h(Glyph, { name: 'fish' }), '整包备份'),
+                h('span', { className: 'fs-tileDesc' }, '.json · 存在 ~/.dsh/backups/'),
+              ),
+              h(
+                'a',
+                { className: 'fs-tile', href: `${API}/export-md`, download: '' },
+                h('span', { className: 'fs-tileTitle' }, h(Glyph, { name: 'book' }), '导出成册'),
+                h('span', { className: 'fs-tileDesc' }, '.md · 能直接读、能打印'),
+              ),
+              h(
+                'a',
+                {
+                  className: 'fs-tile',
+                  href: `${API}/export-year?year=${new Date().getFullYear()}`,
+                  download: '',
+                },
+                h('span', { className: 'fs-tileTitle' }, h(Glyph, { name: 'arrow' }), `年册 ${new Date().getFullYear()}`),
+                h('span', { className: 'fs-tileDesc' }, '.md · 只翻这一年'),
+              ),
+            ),
+            h(
+              'p',
+              { className: 'fs-note fs-note--tiny' },
+              '整包备份把四本账和人设卡收进一个 JSON；想要能直接读、能打印的，用「导出成册」。',
+            ),
+          ),
+          h(Card, { title: '从备份恢复' }, h(ImportBox)),
+          h(Card, { title: '云端备份（WebDAV）' }, h(CloudBox)),
+        ),
       );
     }
 
