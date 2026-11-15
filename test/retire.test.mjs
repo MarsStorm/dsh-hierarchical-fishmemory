@@ -4,7 +4,9 @@ import assert from 'node:assert/strict';
 import {
   RETIRE_RE,
   countRetired,
+  countScoped,
   isRetiredLine,
+  parseRetire,
   renderRetiredNote,
   retireLine,
   retireMatch,
@@ -49,8 +51,8 @@ test('拆开：还算数的正文里一行都不剩，退场的原文仍在', ()
 });
 
 test('拆开：空文本不炸', () => {
-  assert.deepEqual(splitRetired(''), { live: '', retired: [] });
-  assert.deepEqual(splitRetired(undefined), { live: '', retired: [] });
+  assert.deepEqual(splitRetired(''), { live: '', retired: [], scoped: [] });
+  assert.deepEqual(splitRetired(undefined), { live: '', retired: [], scoped: [] });
 });
 
 test('按一段话找到那一行', () => {
@@ -98,4 +100,54 @@ test('退场条目的说明文字：把「后来」也说出来', () => {
   assert.match(note, /2026-11-11 作废/);
   assert.match(note, /后来：改成 3100/);
   assert.equal(renderRetiredNote([]), '');
+});
+
+// ── 2026-11-15（1.29.0）加：作废可以只针对一句话 ──
+//
+// 原来的作废是整行的：一个端口号写错了，就把写它时的整个处境一起作废掉。
+// 现在可以给 cue —— 只在话题撞上那个词时这条才不算数。
+
+test('带线索的作废：只盖一句话，不整行退场', () => {
+  const line = '- 端口是 3080，改了会影响面板';
+  const out = retireLine(line, { at: '2026-11-15', cue: '端口' });
+  assert.match(out, /只在「端口」时/);
+  assert.equal(isRetiredLine(out), true);
+  // 整行退场的标记不该出现
+  assert.doesNotMatch(out, /⟪作废 2026-11-15⟫/);
+});
+
+test('带线索的作废：平时还在注入里，撞上线索才退场', () => {
+  const text = ['## 一节', '- 端口是 3080', '- 别的没事'].join('\n');
+  const out = retireMatch(text, { match: '端口是 3080', at: '2026-11-15', cue: '端口' });
+  assert.equal(out.hit, 1);
+
+  const split = splitRetired(out.text);
+  assert.match(split.live, /端口是 3080/, '平时它还在');
+  assert.match(split.live, /只在提到「端口」时不算数/, '但得说清什么时候不算');
+  assert.equal(split.scoped.length, 1);
+  assert.equal(split.retired.length, 0, '不该整条退场');
+  assert.equal(countScoped(out.text), 1);
+  assert.equal(countRetired(out.text), 0);
+});
+
+test('不带线索的作废照旧整行退场', () => {
+  const text = '- 端口是 3080';
+  const out = retireMatch(text, { match: '端口是 3080', at: '2026-11-15' });
+  assert.equal(countRetired(out.text), 1);
+  assert.equal(countScoped(out.text), 0);
+  assert.equal(splitRetired(out.text).live.trim(), '');
+});
+
+test('同一行再给一次线索也不会盖两层', () => {
+  const once = retireLine('- 端口是 3080', { at: '2026-11-15', cue: '端口' });
+  const twice = retireLine(once, { at: '2026-11-16', cue: '端口' });
+  assert.equal(twice, once);
+});
+
+test('理由和线索可以并存', () => {
+  const out = retireLine('- 端口是 3080', { at: '2026-11-15', cue: '端口', by: '改成自适应' });
+  const parsed = parseRetire(out);
+  assert.equal(parsed.cue, '端口');
+  assert.equal(parsed.by, '改成自适应');
+  assert.equal(parsed.scoped, true);
 });

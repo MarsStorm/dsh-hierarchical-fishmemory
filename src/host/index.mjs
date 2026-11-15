@@ -90,8 +90,16 @@ import {
   readNotesSync,
   registerSticky,
 } from '../core/sticky.mjs';
-import { readQuotes, renderQuotes, searchQuotes } from '../core/quotes.mjs';
+import { firstDay, readQuotes, renderQuotes, searchQuotes } from '../core/quotes.mjs';
 import { bumpRecalled, soughtCount, soughtNote } from '../core/revisit.mjs';
+import {
+  FEEDBACK_KINDS,
+  addFeedback,
+  correctionFor,
+  correctionNote,
+  renderEvent,
+} from '../core/feedback.mjs';
+import { findVerbatim, renderVerdict } from '../core/verbatim.mjs';
 import { diagnoseMiss } from '../core/miss.mjs';
 import { LESSON_FILE, registerLesson } from '../core/lesson.mjs';
 import { FRAGMENTS_SECTION, registerFragments } from '../core/fragments.mjs';
@@ -1333,7 +1341,15 @@ export function apply(ctx, rawConfig) {
       //
       // 2026-10-27：`olderNotes` 也撤了 —— 判断那一栏整体下线，它的历史条目
       // 不该从召回池绕回来（那等于把「规矩」换个栏目塞回去）。
-      const recallPool = events.filter((e) => !recentIds.has(e.id));
+      // ── 被纠正过、而且这一轮正好撞上线索的，不进召回池（2026-11-15 加）──
+      //
+      // `feedback.mjs` 收负向反馈时必须带一个至少两字的线索（他当时的原词），
+      // 并明写「不能宣判整篇原文无效」。这里就是那句话落地的地方：
+      // **只在话题撞上线索时才让这条退场**，别的场合照旧能浮上来 ——
+      // 一条写错的记录，不等于写它的那个处境也没发生过。
+      const recallPool = events.filter(
+        (e) => !recentIds.has(e.id) && correctionFor(e, query) === null,
+      );
 
       // ── 两道门：问句有没有内容，以及这一轮像不像在干活 ──
       //
@@ -4319,9 +4335,12 @@ export function apply(ctx, rawConfig) {
               // 一次是偶然，两次才叫"又回来了"。这句话比把握更私人：
               // 把握说的是档案靠不靠得住，它说的是我惦记过什么。
               const revisit = soughtNote(soughtNow.get(entry.id) ?? 0);
+              // 被纠正过、而这次问的正好撞上那条线索 —— 说出来。
+              // 不说的话我照样会照旧念一遍，而且念得理直气壮。
+              const corrected = correctionNote(entry, query);
               const line = head === ''
-                ? `[${label}] ${body}${revisit}`
-                : `[${label}] ${head}：${body}${revisit}`;
+                ? `[${label}] ${body}${revisit}${corrected}`
+                : `[${label}] ${head}：${body}${revisit}${corrected}`;
               if (used + line.length > MAX_CHARS && lines.length > 0) break;
               lines.push(`- ${line}`);
               used += line.length;
@@ -4331,7 +4350,15 @@ export function apply(ctx, rawConfig) {
             return {
               ok: true,
               found: lines.length,
-              text: lines.join('\n'),
+              // ── 逐字边界（2026-11-15 加）──
+              //
+              // 这里返回的是**我写的经过**，不是他当时的字。日记是转述：
+              // 转录一次、改写一次，里面的「他说……」读起来像原话，其实不是。
+              // 不写这句边界，我就会拿转述去替他复述，还说得很笃定 ——
+              // 而「只说结论不说边界」比含糊更坏（见 core/miss.mjs）。
+              text:
+                lines.join('\n') +
+                '\n（上面是我写的经过，不是逐字原话。要核他当时那几个字，用 fish_quote。）',
             };
           },
 
@@ -4380,6 +4407,12 @@ export function apply(ctx, rawConfig) {
               limit: { type: 'integer', description: '要几条。默认 6，最多 6。' },
               since: { type: 'string', description: '只要这一天及以后的（YYYY-MM-DD）。' },
               until: { type: 'string', description: '只要这一天及以前的（YYYY-MM-DD）。' },
+              exact: {
+                type: 'boolean',
+                description:
+                  '只要**逐字**含这几个字的那几句。给了它就没有"沾边"这一档：要么他自己说过这几个字，要么没有。' +
+                  '要断言"他说过……"之前，先用它核一遍。',
+              },
             },
             required: ['query'],
           },
@@ -4402,18 +4435,71 @@ export function apply(ctx, rawConfig) {
             const query = typeof args?.query === 'string' ? args.query.trim() : '';
             if (query === '') throw new Error('要找哪几个字？query 不能是空的。');
             const quotes = readQuotes({ file: stickyFile(), archiveFile: stickyArchive() });
+
+            // ── 逐字那一档（2026-11-15 加，1.29.0）──
+            //
+            // 默认那一档是"沾边也算"（二元组重合度 ≥0.34 就进），够用来找线索，
+            // **不够用来引用**。要断言「他说过这几个字」，就得走这条：
+            // 一句原文里必须真的含这串字，逐字。没有别的档。
+            //
+            // 抄的是 returning-tide-memory 的 `INVALID_EVIDENCE`：
+            // 引用不是原文子串，整条结论就不输出 —— 不降级成"意思相近"。
+            if (args?.exact === true) {
+              const pool = quotes.filter((n) => {
+                const day = String(n.date ?? '').slice(0, 10);
+                const since = String(args?.since ?? '').trim().slice(0, 10);
+                const until = String(args?.until ?? '').trim().slice(0, 10);
+                if (since && (!day || day < since)) return false;
+                if (until && (!day || day > until)) return false;
+                return true;
+              });
+              const verdict = findVerbatim(pool.map((n) => n.said), query);
+              // 「逐字没有」不等于「他没说过」—— 这个库只从 1.10.0 开始存，
+              // 在那之前他说的话，这儿一个字都没有。不说清边界，"没有"会被读成"没发生"。
+              const since0 = firstDay(pool);
+              const lines = verdict.hits
+                .map((said) => pool.find((n) => n.said === said))
+                .filter(Boolean)
+                .slice(-Math.max(1, Math.min(6, Math.floor(Number(args?.limit) || 6))));
+              log(`逐字核原话「${query.slice(0, 20)}」：${pool.length} 条里逐字命中 ${verdict.hits.length} 条`);
+              return {
+                ok: true,
+                found: verdict.hits.length,
+                total: quotes.length,
+                first: lines[0]?.date ?? '',
+                text:
+                  renderVerdict(verdict, { label: '原话' }) +
+                  (verdict.hits.length === 0 && since0
+                    ? `\n（这库最早只到 ${since0} —— 在那之前他说的话，这儿一个字都没存。所以"没有"只是"我没存着"，不是"他没说过"。）`
+                    : '') +
+                  (lines.length === 0
+                    ? ''
+                    : '\n' +
+                      lines
+                        .map((n) => `- ${n.date ?? ''} ${n.time ?? ''}「${n.said}」`)
+                        .join('\n')),
+              };
+            }
+
             const result = searchQuotes(quotes, query, {
               limit: args?.limit,
               since: args?.since,
               until: args?.until,
             });
             log(`查原话「${query.slice(0, 20)}」：${result.total} 条里命中 ${result.hits.length} 条`);
+            const loose = result.hits.some((h) => h.exact !== true);
             return {
               ok: true,
               found: result.hits.length,
               total: result.total,
               first: result.first ?? '',
-              text: renderQuotes(result, { query }),
+              // 沾边命中的时候必须自己说出来 —— 那几句不是他的话术，
+              // 只是字面撞上了。不说的话，下一次引用就会把它当原话用。
+              text:
+                renderQuotes(result, { query }) +
+                (loose
+                  ? '\n（带「沾边」的那几句不是逐字命中，不能当原话引用。要引用，用 exact: true 再核一遍。）'
+                  : ''),
             };
           },
           presentCall: (args) => ({
@@ -4426,6 +4512,113 @@ export function apply(ctx, rawConfig) {
       'feiyu: quote tool',
     );
     log('已注册工具 fish_quote');
+  });
+
+  /* ── 反馈层：被想起 ≠ 它重要（2026-11-15 加，1.29.0） ── */
+
+  /**
+   * 这个工具存在的理由，是我这边最难看的一处毛病。
+   *
+   * `recall_count` 每轮注入都会涨：一晚上八轮，同一条能被"看到"几十次。
+   * 1.21.0 我还拿它当「这条我记得」的证据，甚至让它给衰减减速 ——
+   * 那是拿「它出现过」冒充「它重要」。而这两件事没有因果关系：
+   * 一条写错的记录反而最容易被翻出来，因为它总在字面上撞上当前话题。
+   *
+   * 所以：曝光继续记，但**不记分**。要加分，就得给出依据 ——
+   * 1–3 条后续原文，那几句话是真让我改主意的东西。
+   */
+  ctx.inject(['tools'], (scope) => {
+    scope.effect(
+      () =>
+        scope.tools.register({
+          name: 'fish_feedback',
+          description:
+            '给某一条记忆记一条反馈。**只有当这条真的被用上、而且有据可查时才用**：' +
+            '他引用过它（cited）、它确实帮上了忙（helpful）、他又重申了一次（reaffirmed），' +
+            '或者反过来 —— 它是错的（corrected / invalidated）。' +
+            '必须给 1–3 条后续原文的 id 当依据；纠正还必须给 `cue`（他当时的原词，至少两个字），' +
+            '只在话题撞上那个词时这一条才不算数。' +
+            '**"被想起来""被展示"不算强化** —— 那个不用记，也别拿它当重要的证据。',
+          parameters: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string', description: '那条记忆的 id（用 fish_recall 找到它，抄真的 id）。' },
+              kind: {
+                type: 'string',
+                description: 'cited（被引用）/ helpful（有帮助）/ reaffirmed（重申）/ corrected（纠正）/ invalidated（失效）。',
+              },
+              refs: {
+                type: 'array',
+                items: { type: 'string' },
+                description: '1–3 条后续原文的 id 当依据。不能是本条自己，也不能比本条早。',
+              },
+              cue: {
+                type: 'string',
+                description: '纠正/失效时必填：他当时说的原词，至少两个字。这一条只在话题撞上它时才算作废。',
+              },
+              reason: { type: 'string', description: '可选：一句话说清为什么。' },
+            },
+            required: ['id', 'kind', 'refs'],
+          },
+          output: {
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                ok: { type: 'boolean' },
+                kind: { type: 'string' },
+                duplicate: { type: 'boolean' },
+                text: { type: 'string' },
+              },
+            },
+            render: (_args, value) => [{ type: 'text', text: value?.text ?? '没记上。' }],
+          },
+          async execute(args) {
+            await loadPromise;
+            if (!ready) throw new Error('档案现在读不了，记不了反馈。');
+            const id = String(args?.id ?? '').trim();
+            if (id === '') throw new Error('要给哪一条记？`id` 不能是空的。');
+            const r = addFeedback(archive, {
+              id,
+              kind: args?.kind,
+              refs: args?.refs,
+              cue: args?.cue,
+              reason: args?.reason,
+            });
+            if (!r.ok) return { ok: false, kind: '', duplicate: false, text: `没记上：${r.error}` };
+            if (r.duplicate) {
+              return {
+                ok: true,
+                kind: r.kind,
+                duplicate: true,
+                text: `这条「${FEEDBACK_KINDS[r.kind]?.label ?? r.kind}」已经记过了，没重复计。`,
+              };
+            }
+            archive = r.archive;
+            await persist();
+            log(`反馈：${id} ${r.kind}（依据 ${r.event.refs.length} 条）`);
+            return {
+              ok: true,
+              kind: r.kind,
+              duplicate: false,
+              text:
+                `记上了：${id} —— ${FEEDBACK_KINDS[r.kind]?.label ?? r.kind}` +
+                `${r.event.cue ? `（线索「${r.event.cue}」，只在话题撞上它时不算数）` : ''}。\n` +
+                renderEvent(r.event) +
+                '\n（它不会因此更容易被想起 —— 只有衰减会因为这条依据慢下来。这是有意的。）',
+            };
+          },
+          presentCall: (args) => ({
+            card: 'generic',
+            title: '记反馈',
+            kind: 'other',
+            rawInput: args,
+          }),
+        }),
+      'feiyu: feedback tool',
+    );
+    log('已注册工具 fish_feedback');
   });
 
   // 云端备份工具：他一句「备份一下」，我不用等面板，直接推一份上去。

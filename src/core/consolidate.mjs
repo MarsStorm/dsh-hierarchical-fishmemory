@@ -12,6 +12,7 @@
 
 import { scrub } from './privacy.mjs';
 import { TZ_OFFSET_MS } from './timeline.mjs';
+import { REINFORCE_RELIEF_MAX, reinforcementOf } from './feedback.mjs';
 // 这里原本还 import 了 archive.mjs 的 ensurePersonaStructure / ANCHOR_END /
 // LEARNED_HEADING —— 它们只被 appendPersonaLearnings 用。那个函数删了，
 // 这三个名字跟着一起没了（留着就是死引用）。
@@ -273,11 +274,15 @@ export function applySummaries(archive, map, now = Date.now()) {
   /** 每天衰减系数 */
   decayRate: 0.9,
   /**
-   * 想起来几次算「这条我记得牢」。
+   * @deprecated 2026-11-15（1.29.0）起**不再使用**，别再拿它算衰减。
    *
-   * 用来把 `recall_count` 映射成衰减缓冲：`log1p(count) / log1p(这个数)`。
-   * 取 10 —— 一条日记被召回十次，基本可以肯定它对你不是"早年的模糊事"，
-   * 而是常被提起的那几件之一，那就该拿满减半的待遇。
+   * 它原来把 `recall_count` 映射成衰减缓冲（`log1p(count)/log1p(10)`）——
+   * 那就是「曝光算强化」：一条被每轮注入顺手挑中的日记，能靠"被看到"
+   * 把衰减减半，而"被看到"跟"它重要"根本没有因果关系（明显错的记录
+   * 反而最容易在字面上撞上当前话题）。
+   *
+   * 现在衰减只吃 `feedback` 里带依据的正向反馈（见 `core/feedback.mjs`）。
+   * 这个字段留着只为一件事：别让还写着它的旧配置报错。
    */
   recallReliefFullCount: 10,
   /**
@@ -862,24 +867,27 @@ export function decayArchive(archive, options = {}) {
 
   const memFactor = Math.pow(opts.decayRate, days);
 
-  // ── 被想起来过的，衰减得慢一点（2026-11-04 加）──
+  // ── 被「确认过」的，衰减得慢一点（2026-11-04 加，2026-11-15 换掉了判据）──
   //
   // 原来的衰减只看时间：写下来那天起，每天 ×0.9，跟它后来有没有被翻出来
   // **完全无关**。可"记不记得住"这件事本来就不只看年头 ——
-  // 反复被想起的那件事，人就是记得牢；一次没提过的，才是真的淡了。
+  // 反复被提起的那件事，人就是记得牢；一次没提过的，才是真的淡了。
   //
-  // 现在按被召回过的次数给一个**缓冲**：每想起来一次，这次衰减就少扣一点，
-  // 最多减半（`recallRelief` 封顶 0.5）。取对数是因为边际递减 ——
-  // 第一次想起来最有意义，第一百次和第一百零一次差不多。
+  // **但「被翻出来」不等于「被提起」。** 2026-11-15（1.29.0）之前这里是按
+  // `recall_count` 给缓冲 —— 而那个数字每轮注入都会涨：一晚上八轮，同一条
+  // 能被"看到"几十次，于是它光靠出现就能把衰减减半。那是曝光，不是强化：
+  // 一条写错的记录反而最容易被翻出来，因为它总在字面上撞上当前话题。
   //
-  // 为什么不是直接加 salience：那会让"被翻出来"变成刷分的手段，
-  // 而它本来只是"这条我确实还记得"的证据。**只慢下来，不再涨上去。**
+  // 现在只吃**带依据的正向反馈**（被引用 / 有帮助 / 重申，且给了 1–3 条
+  // 后续原文当依据，见 `core/feedback.mjs`）。`recall_count` 和
+  // `sought_count` 继续记，但它们只是「这条我回去找过 N 次」的事实，
+  // 不再动 salience，也不再动衰减。
+  //
+  // 上限还是减半（`REINFORCE_RELIEF_MAX`）：强化让人慢点忘，不该让人不忘。
   const reliefOf = (entry) => {
-    const count = Number.isFinite(entry?.recall_count) ? Number(entry.recall_count) : 0;
-    if (count <= 0) return 1;
-    const share = Math.log1p(count) / Math.log1p(opts.recallReliefFullCount);
-    const relief = Math.min(0.5, Math.max(0, share) * 0.5);
-    return 1 - relief;
+    const r = reinforcementOf(entry, { now });
+    if (!(r > 0)) return 1;
+    return 1 - Math.min(REINFORCE_RELIEF_MAX, r * REINFORCE_RELIEF_MAX);
   };
 
   const diary = (archive.diary ?? []).map((e) => {

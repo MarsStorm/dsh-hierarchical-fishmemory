@@ -334,6 +334,30 @@ export function normalizeDiaryEntry(raw) {
       ? { sought_count: Math.floor(Number(raw.sought_count)) }
       : {}),
     ...(Number.isFinite(raw.last_sought_at) ? { last_sought_at: Number(raw.last_sought_at) } : {}),
+    // ── 反馈（2026-11-15 加，1.29.0）──
+    //
+    // 跟上面两个计数是两种东西：那两个数"我看到/找到过它几次"，
+    // 这个记"有人确认过它对不对、凭什么确认"。只有带依据的正向反馈
+    // 才给衰减减速（见 core/feedback.mjs）。
+    //
+    // ⚠️ 又是白名单：`summary` 在 1.25.1 就因为漏在这里静默丢了半年。
+    // 加字段记得来这一行 —— 写侧（applyFeedback 落盘）永远是对的，
+    // 丢的一直是读侧。
+    ...(() => {
+      if (!Array.isArray(raw.feedback)) return {};
+      const kinds = new Set(['cited', 'helpful', 'reaffirmed', 'corrected', 'invalidated']);
+      const events = raw.feedback
+        .filter((x) => x && typeof x === 'object' && kinds.has(String(x.kind ?? '')))
+        .map((x) => ({
+          kind: String(x.kind),
+          at: Number(x.at) || Date.now(),
+          refs: Array.isArray(x.refs) ? x.refs.filter((r) => typeof r === 'string').slice(0, 3) : [],
+          ...(typeof x.cue === 'string' && x.cue.trim() !== '' ? { cue: x.cue.trim().slice(0, 20) } : {}),
+          ...(typeof x.reason === 'string' && x.reason.trim() !== '' ? { reason: x.reason.trim().slice(0, 80) } : {}),
+        }))
+        .slice(-12);
+      return events.length === 0 ? {} : { feedback: events };
+    })(),
     // ── 一句话摘要（2026-11-13 补回，1.25.1）──
     //
     // **这里曾经漏了 `summary`，于是「补总结」这个功能从上线起就没生效过。**

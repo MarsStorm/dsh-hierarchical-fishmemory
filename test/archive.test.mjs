@@ -35,3 +35,55 @@ test('normalizeDiaryEntry：sought_count 也照样活着（1.21.0 那次的同�
   assert.equal(e.sought_count, 3);
   assert.equal(e.last_sought_at, 123);
 });
+
+// ── 2026-11-15（1.29.0）加：feedback 也必须活着走白名单 ──
+//
+// 同一个坑第三次了（summary 一次、sought_count 一次）。区别在于：
+// 前两次丢的是"显示用的东西"，这次丢的是"依据"——
+// 依据没了，衰减就会把有证据的条目和没证据的一视同仁地压下去。
+
+test('normalizeDiaryEntry：feedback 要活着走出归一化', () => {
+  const e = normalizeDiaryEntry({
+    id: 'd1',
+    text: '正文',
+    feedback: [{ kind: 'reaffirmed', at: 1000, refs: ['d2'], reason: '他又说了一遍' }],
+  });
+  assert.equal(Array.isArray(e.feedback), true);
+  assert.equal(e.feedback.length, 1);
+  assert.equal(e.feedback[0].kind, 'reaffirmed');
+  assert.deepEqual(e.feedback[0].refs, ['d2']);
+});
+
+test('normalizeDiaryEntry：feedback 里认不出的种类直接丢掉', () => {
+  const e = normalizeDiaryEntry({
+    id: 'd1',
+    text: '正文',
+    feedback: [
+      { kind: 'exposure', at: 1, refs: ['x'] },
+      { kind: 'helpful', at: 2, refs: ['y'] },
+      '不是对象',
+    ],
+  });
+  assert.equal(e.feedback.length, 1);
+  assert.equal(e.feedback[0].kind, 'helpful');
+});
+
+test('normalizeDiaryEntry：feedback 的字段都被截住，坏 refs 不进来', () => {
+  const e = normalizeDiaryEntry({
+    id: 'd1',
+    text: '正文',
+    feedback: [{ kind: 'corrected', at: 'x', refs: ['a', 'b', 'c', 'd', 3], cue: '端'.repeat(50), reason: '理'.repeat(200) }],
+  });
+  const f = e.feedback[0];
+  assert.equal(f.refs.length, 3, '依据最多三条');
+  assert.ok(f.refs.every((r) => typeof r === 'string'));
+  assert.ok(f.cue.length <= 20);
+  assert.ok(f.reason.length <= 80);
+  assert.equal(typeof f.at, 'number');
+});
+
+test('normalizeDiaryEntry：一条反馈都没有就别写这个字段', () => {
+  assert.equal('feedback' in normalizeDiaryEntry({ id: 'd1', text: '正文', feedback: [] }), false);
+  assert.equal('feedback' in normalizeDiaryEntry({ id: 'd2', text: '正文' }), false);
+  assert.equal('feedback' in normalizeDiaryEntry({ id: 'd3', text: '正文', feedback: 'x' }), false);
+});

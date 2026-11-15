@@ -41,19 +41,39 @@ test('decayArchive：不会掉到地板以下', () => {
   assert.equal(archive.diary[0].salience, DEFAULT_CONSOLIDATION.salienceFloor);
 });
 
-test('decayArchive：被想起来过的条目衰减更慢', () => {
+// ── 2026-11-15（1.29.0）改的判据 ──
+//
+// 原来这三条测的是「被想起来过的衰减更慢」—— 那正是「曝光算强化」，
+// 现在被删掉了。换成：**光被看到一点用都没有，要给依据才算数。**
+
+test('decayArchive：被想起来多少次都不算强化（曝光不加分）', () => {
   const never = entry('never');
-  const once = entry('once', { recall_count: 1 });
-  const many = entry('many', { recall_count: 10 });
-  const { archive } = decayArchive(archiveWith([never, once, many]), { now });
+  const seen = entry('seen', { recall_count: 100, sought_count: 50, last_recalled_at: now });
+  const { archive } = decayArchive(archiveWith([never, seen]), { now });
 
   const byId = new Map(archive.diary.map((e) => [e.id, e.salience]));
-  assert.ok(byId.get('many') > byId.get('once'), '召回十次的该比一次的高');
-  assert.ok(byId.get('once') > byId.get('never'), '召回过的该比没召回的高');
+  assert.equal(byId.get('seen'), byId.get('never'), '光被翻出来过，一分都不该多');
 });
 
-test('decayArchive：缓冲最多减半，不会完全不衰减', () => {
-  const huge = entry('huge', { recall_count: 100000 });
+test('decayArchive：有依据的正向反馈才算强化', () => {
+  const plain = entry('plain');
+  const confirmed = entry('confirmed', {
+    feedback: [{ kind: 'reaffirmed', at: now, refs: ['d_other'] }],
+  });
+  const { archive } = decayArchive(archiveWith([plain, confirmed]), { now });
+
+  const byId = new Map(archive.diary.map((e) => [e.id, e.salience]));
+  assert.ok(byId.get('confirmed') > byId.get('plain'), '确认过的该衰减得更慢');
+});
+
+test('decayArchive：强化最多减半，不会完全不衰减', () => {
+  const huge = entry('huge', {
+    feedback: [
+      { kind: 'reaffirmed', at: now, refs: ['a'] },
+      { kind: 'reaffirmed', at: now, refs: ['b'] },
+      { kind: 'reaffirmed', at: now, refs: ['c'] },
+    ],
+  });
   const { archive } = decayArchive(archiveWith([huge]), { now });
   // 半衰：0.9^(10*0.5) = 0.9^5
   const floorBound = 0.8 * Math.pow(0.9, 5);
@@ -61,8 +81,8 @@ test('decayArchive：缓冲最多减半，不会完全不衰减', () => {
   assert.ok(archive.diary[0].salience < 0.8, '还是得衰减一点');
 });
 
-test('decayArchive：recall_count 是脏值时当没召回', () => {
-  const bad = entry('bad', { recall_count: '不是数字' });
+test('decayArchive：feedback 是脏值时当没有反馈', () => {
+  const bad = entry('bad', { feedback: '不是数组' });
   const good = entry('good');
   const { archive } = decayArchive(archiveWith([bad, good]), { now });
   assert.equal(archive.diary[0].salience, archive.diary[1].salience);

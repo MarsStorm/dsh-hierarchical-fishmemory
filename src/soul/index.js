@@ -38,7 +38,7 @@ import { resolveDshHome } from "@deepseek-ai/dsh-home-paths";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { createMemoryLayout, normalizeMemoryTopic, retainMemoryEnds } from "./memory-layout.js";
 import { diffLines } from "./card-diff.mjs";
-import { countRetired, retireMatch, splitRetired } from "../core/retire.mjs";
+import { countRetired, countScoped, retireMatch, splitRetired } from "../core/retire.mjs";
 import { countMerged, mergeSection, renderSuggestion, stripMerged } from "../core/abstract.mjs";
 import { planCardSnapshots } from "./card-watch.mjs";
 import { applyRestore, backupFileName, collectBackup, parseBackup, planRestore, registerBackupBuilder, registerRestoreHandler, summarizeBackup, writeBackupFile } from "../core/backup.mjs";
@@ -709,6 +709,7 @@ function apply(ctx, config) {
           source: { type: "string" },
           topic: { type: "string" },
           retired: { type: "integer" },
+          scoped: { type: "integer" },
           merged: { type: "integer" },
           suggest: { type: "string" },
           content: { type: "string" },
@@ -720,6 +721,9 @@ function apply(ctx, config) {
           ? `Memory from "${value.source}"${value.topic ? ` topic "${value.topic}"` : ""} (${value.bytes} bytes${value.truncated ? ", truncated" : ""}):\n${value.content}`
             + (value.retired > 0
               ? `\n\n（里面有 ${value.retired} 条后面挂着 ⟪作废 …⟫ —— 那些已经不算数了，不再进注入。留着是为了让我看得见自己改过口。）`
+              : "")
+            + (value.scoped > 0
+              ? `\n（还有 ${value.scoped} 条是**带线索**的作废：只在话题撞上那个词时不算数，平时的注入里还在 —— 别以为它们已经彻底退场了。）`
               : "")
             + (value.merged > 0
               ? `\n（还有 ${value.merged} 条挂着 ⟪归并 …⟫ —— 它们已经被压成某一节顶上那句规律了，不再进注入。）`
@@ -737,9 +741,10 @@ function apply(ctx, config) {
       const { exists, text, index, source, topic: resolvedTopic = "" } = memoryReadChain(agentOf(exec), topic);
       const full = [text, index].filter(Boolean).join("\n\n");
       const retired = countRetired(text ?? "");
+      const scoped = countScoped(text ?? "");
       const merged = countMerged(text ?? "");
       const suggest = text ? renderSuggestion(text, { label: resolvedTopic ? "「" + resolvedTopic + "」的" : "" }) : "";
-      if (!exists || !full) return { exists: false, bytes: 0, truncated: false, source, topic: resolvedTopic, retired: 0, merged: 0, suggest: "", content: "" };
+      if (!exists || !full) return { exists: false, bytes: 0, truncated: false, source, topic: resolvedTopic, retired: 0, scoped: 0, merged: 0, suggest: "", content: "" };
       rememberTopic(agentOf(exec), source, resolvedTopic);
       const MAX = 20000;
       const truncated = full.length > MAX;
@@ -753,6 +758,7 @@ function apply(ctx, config) {
         source,
         topic: resolvedTopic,
         retired,
+        scoped,
         merged,
         suggest,
         content: truncated ? `${excerpt}\n…(truncated; beginning and end of core retained when layered; use a topic or file read for complete memory)…` : full,
@@ -832,10 +838,12 @@ function apply(ctx, config) {
   ctx.tools.register(defineTool({
     name: "memory_retire",
     description:
-      "Mark one line of deep memory as NO LONGER TRUE, without deleting it. Use this when you have changed your mind about something you once wrote: instead of appending a contradicting line next to the old one (which leaves two equally loud claims), retire the old line — it disappears from the injected memory but stays readable here. Give a short phrase from that line as `match`; give `by` to say what replaced it. Retiring is not the same as being wrong: it only says this claim does not count any more.",
+      "Mark one line of deep memory as NO LONGER TRUE, without deleting it. Use this when you have changed your mind about something you once wrote: instead of appending a contradicting line next to the old one (which leaves two equally loud claims), retire the old line — it disappears from the injected memory but stays readable here. Give a short phrase from that line as `match`; give `by` to say what replaced it. Retiring is not the same as being wrong: it only says this claim does not count any more. "
+      + "IMPORTANT: if only ONE detail turned out wrong (a port number, a version), pass `cue` — the phrase that detail is about. Then the line only stops counting when that topic comes up, and still counts everywhere else. Retiring the whole line for one wrong number throws away the situation you wrote it in.",
     parameters: {
       match: { type: "string", required: true, description: "A short phrase from the line to retire. It must appear in exactly the line(s) you mean — read the file first." },
       by: { type: "string", description: "Optional: what replaced it, in one short clause. This is what makes the retirement readable later." },
+      cue: { type: "string", description: "Optional but recommended: the phrase this claim is actually wrong ABOUT (at least 2 chars). With a cue, the line only stops counting when that topic comes up — everywhere else it still counts. Use this instead of retiring a whole line because one detail turned out wrong." },
       topic: { type: "string", description: "Optional topic key in layered mode. Omit or pass core/core.md for core.md." },
     },
     output: {
@@ -844,6 +852,7 @@ function apply(ctx, config) {
         additionalProperties: false,
         properties: {
           hit: { type: "integer" },
+          scoped: { type: "boolean" },
           scope: { type: "string" },
           topic: { type: "string" },
           text: { type: "string" },
@@ -855,6 +864,10 @@ function apply(ctx, config) {
     async execute(args, exec) {
       const match = String(args.match ?? "").trim();
       if (!match) throw new Error("memory_retire: `match` must be non-empty");
+      const cue = String(args.cue ?? "").trim();
+      if (cue !== "" && [...cue.replace(/\s+/g, "")].length < 2) {
+        throw new Error("memory_retire: `cue` 至少要两个字 —— 一个字谁都能撞上，那等于没给线索。");
+      }
       const topic = normalizeMemoryTopic(args.topic);
       if (topic && !cfg().memory?.layered) {
         throw new Error("memory_retire: `topic` requires memory.layered to be enabled");
@@ -864,13 +877,14 @@ function apply(ctx, config) {
       try {
         before = await readFile(target.file, "utf8");
       } catch {
-        return { hit: 0, scope: target.scope, topic: target.topic, text: "那个文件还不存在，没东西可以作废。" };
+        return { hit: 0, scoped: cue !== "", scope: target.scope, topic: target.topic, text: "那个文件还不存在，没东西可以作废。" };
       }
-      const { text, hit, lines } = retireMatch(before, { match, by: args.by });
+      const { text, hit, lines } = retireMatch(before, { match, by: args.by, cue });
       if (hit === 0) {
         const already = countRetired(before);
         return {
           hit: 0,
+          scoped: cue !== "",
           scope: target.scope,
           topic: target.topic,
           text: already > 0
@@ -882,12 +896,15 @@ function apply(ctx, config) {
       fileCache.delete(target.file);
       rememberTopic(agentOf(exec), target.scope, target.topic);
       const list = lines.map((l) => l.replace(/^\s*[-*]\s*/, "")).join("\n");
+      const how = cue === ""
+        ? "它不再进注入，但原文还在，memory_read 看得见。"
+        : `它只在话题撞上「${cue}」时不算数 —— 平时还在注入里。要整条退场，别给 cue 再来一次。`;
       return {
         hit,
+        scoped: cue !== "",
         scope: target.scope,
         topic: target.topic,
-        text: `作废了 ${hit} 行（scope "${target.scope}"${target.topic ? ` topic "${target.topic}"` : ""}）。`
-          + " 它不再进注入，但原文还在，memory_read 看得见。\n" + list,
+        text: `作废了 ${hit} 行（scope "${target.scope}"${target.topic ? ` topic "${target.topic}"` : ""}）。${how}\n` + list,
       };
     },
   }));

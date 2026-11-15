@@ -32,55 +32,113 @@
 export const RETIRE_RE = /⟪作废\s*(\d{4}-\d{2}-\d{2})(?:\s*→\s*([^⟫\n]*))?⟫/u;
 const RETIRE_RE_G = new RegExp(RETIRE_RE.source, 'gu');
 
+/**
+ * 带线索的作废（2026-11-15 加，1.29.0）。`payload` 里长这样：
+ *
+ *     只在「端口」时｜端口后来改成 3081 了
+ *
+ * 意思是：**只在话题撞上「端口」时，这一行才算作废。** 别的场合照旧。
+ * 抄的是 returning-tide-memory 那条「不能宣判整篇原文无效」：
+ * 一句话错了，不等于写它的那个处境不存在了。
+ */
+const SCOPED_RE = /^只在「([^」]*)」时(?:｜([\s\S]*))?$/u;
+
 /** 今天（他的时区由调用方决定，这里只吃一个时间戳）。 */
 function stampOf(at) {
   const t = Number.isFinite(at) ? at : Date.now();
   return new Date(t).toISOString().slice(0, 10);
 }
 
-/** 这一行作废了吗。 */
+/** 这一行作废了吗（带线索的也算「标过」，免得重复盖）。 */
 export function isRetiredLine(line) {
   return RETIRE_RE.test(String(line ?? ''));
 }
 
-/** 给一行加标记。已经标过就原样返回（幂等）。 */
-export function retireLine(line, { at, by } = {}) {
+/**
+ * 把一行上的标记拆开。
+ *
+ * @returns {{at:string, by:string, cue:string, scoped:boolean}}
+ */
+export function parseRetire(line) {
+  const m = RETIRE_RE.exec(String(line ?? ''));
+  if (m === null) return { at: '', by: '', cue: '', scoped: false };
+  const payload = (m[2] ?? '').trim();
+  const sm = SCOPED_RE.exec(payload);
+  if (sm === null) return { at: m[1], by: payload, cue: '', scoped: false };
+  return { at: m[1], by: (sm[2] ?? '').trim(), cue: sm[1].trim(), scoped: true };
+}
+
+/** 这一行只在某个线索出现时才算作废。 */
+export function isScopedLine(line) {
+  return parseRetire(line).scoped;
+}
+
+/**
+ * 给一行加标记。已经标过就原样返回（幂等）。
+ *
+ * 给了 `cue` 就是**带线索的作废**：只在话题撞上它时不算数，
+ * 别的场合这一行照旧进注入（见 `splitRetired`）。
+ */
+export function retireLine(line, { at, by, cue } = {}) {
   const s = String(line ?? '');
   if (s.trim() === '' || isRetiredLine(s)) return s;
   const reason = String(by ?? '').trim();
-  const tail = reason === '' ? `⟪作废 ${stampOf(at)}⟫` : `⟪作废 ${stampOf(at)} → ${reason}⟫`;
+  const cueStr = String(cue ?? '').trim();
+  let payload;
+  if (cueStr !== '') {
+    const scope = `只在「${cueStr}」时`;
+    payload = reason === '' ? scope : `${scope}｜${reason}`;
+  } else {
+    payload = reason;
+  }
+  const tail = payload === '' ? `⟪作废 ${stampOf(at)}⟫` : `⟪作废 ${stampOf(at)} → ${payload}⟫`;
   return `${s.replace(/\s+$/, '')} ${tail}`;
 }
 
 /**
- * 把一段文本拆成「还算数的」和「退场的」。
+ * 把一段文本拆成「还算数的」「整条退场的」「带线索退场的」。
+ *
+ * **带线索的那几条留在 live 里** —— 它们只在特定话题上不算数，
+ * 平时照旧要读到。为了不让 `⟪作废…⟫` 那种记号进注入，
+ * 换成人话写在原处：`（只在提到「端口」时不算数）`。
  *
  * 保留原顺序与空行 —— 注入时用的 live 还得读得通顺，
  * 不能因为删了几行就把段落黏在一起。
  */
 export function splitRetired(text) {
   const src = String(text ?? '');
-  if (src === '') return { live: '', retired: [] };
+  if (src === '') return { live: '', retired: [], scoped: [] };
   const live = [];
   const retired = [];
+  const scoped = [];
   for (const line of src.split('\n')) {
     const m = RETIRE_RE.exec(line);
     if (m === null) {
       live.push(line);
       continue;
     }
-    retired.push({
-      at: m[1],
-      by: (m[2] ?? '').trim(),
-      text: line.replace(RETIRE_RE_G, '').trim(),
-    });
+    const parsed = parseRetire(line);
+    const body = line.replace(RETIRE_RE_G, '').trim();
+    if (parsed.scoped) {
+      scoped.push({ at: parsed.at, by: parsed.by, cue: parsed.cue, text: body });
+      // 留在 live 里，但把符号换成一句人话
+      const plain = body.replace(/\s+$/, '');
+      live.push(`${plain}（只在提到「${parsed.cue}」时不算数）`);
+      continue;
+    }
+    retired.push({ at: parsed.at, by: parsed.by, cue: '', text: body });
   }
-  return { live: live.join('\n'), retired };
+  return { live: live.join('\n'), retired, scoped };
 }
 
-/** 有几行退场了。 */
+/** 有几行整条退场了（带线索的不算 —— 它们还在注入里）。 */
 export function countRetired(text) {
   return splitRetired(text).retired.length;
+}
+
+/** 有几行是「只在某个线索下才作废」。 */
+export function countScoped(text) {
+  return splitRetired(text).scoped.length;
 }
 
 /**
@@ -90,14 +148,14 @@ export function countRetired(text) {
  * 命中多行怎么办：**全都盖**，并且如实报数。宁可一次退多了、
  * 让人看见「改了 3 行」，也不要替人挑一行然后猜错。
  */
-export function retireMatch(text, { match, at, by } = {}) {
+export function retireMatch(text, { match, at, by, cue } = {}) {
   const needle = String(match ?? '').trim();
   if (needle === '') return { text: String(text ?? ''), hit: 0, lines: [] };
   const lines = [];
   let hit = 0;
   for (const line of String(text ?? '').split('\n')) {
     if (line.includes(needle) && !isRetiredLine(line)) {
-      lines.push(retireLine(line, { at, by }));
+      lines.push(retireLine(line, { at, by, cue }));
       hit += 1;
     } else {
       lines.push(line);
@@ -116,4 +174,20 @@ export function renderRetiredNote(retired) {
   if (!Array.isArray(retired) || retired.length === 0) return '';
   const lines = retired.map((r) => (r.by ? `- ${r.at} 作废：${r.text}（后来：${r.by}）` : `- ${r.at} 作废：${r.text}`));
   return `（这几条已经不算数了，留着是为了让我看得见自己改过口）\n${lines.join('\n')}`;
+}
+
+/**
+ * 带线索的那几条写成一句话（给 `memory_read` 用）。
+ *
+ * 它们**还在注入里** —— 所以这里不是"退场清单"，是"哪儿埋着条件"。
+ * 分成两栏说清楚，省得我以为作废了、其实每轮还在读。
+ */
+export function renderScopedNote(scoped) {
+  if (!Array.isArray(scoped) || scoped.length === 0) return '';
+  const lines = scoped.map((r) =>
+    r.by
+      ? `- 只在提到「${r.cue}」时不算数：${r.text}（后来：${r.by}）`
+      : `- 只在提到「${r.cue}」时不算数：${r.text}`,
+  );
+  return `（下面这几条还在注入里 —— 只在话题撞上那个词的时候才作废，别的场合照旧算数）\n${lines.join('\n')}`;
 }

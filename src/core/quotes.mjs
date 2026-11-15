@@ -82,7 +82,7 @@ export function readQuotes({ file, archiveFile } = {}) {
 }
 
 /** 最早那一天（他的钟点），给"库有多大"用。 */
-function firstDay(quotes) {
+export function firstDay(quotes) {
   const days = quotes.map((n) => String(n.date ?? '')).filter(Boolean).sort();
   return days[0] ?? '';
 }
