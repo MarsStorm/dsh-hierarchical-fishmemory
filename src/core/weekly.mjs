@@ -13,14 +13,13 @@
  * 不进每轮注入 —— 每周的东西每轮塞一遍，七天就把预算吃完了。
  */
 
+import { dayKey, TZ_OFFSET_MS as TZ } from './timeline.mjs';
+
 export const WEEK_DIR = '周结';
-const TZ = 8 * 3600 * 1000; // 他的时区。跟 timeline.mjs 的 TZ_OFFSET_MS 是同一个数。
 const DAY_MS = 24 * 3600 * 1000;
 
-/** 他那边的一天（`YYYY-MM-DD`）。 */
-export function dayKey(ts) {
-  return new Date(Number(ts) + TZ).toISOString().slice(0, 10);
-}
+/** 他那边的一天（`YYYY-MM-DD`）。实现在 timeline.mjs，这里只转出去。 */
+export { dayKey };
 
 /** 某个时刻属于他那边哪一年的第几周（`YYYY-Www`，ISO 周）。 */
 export function weekKey(ts) {

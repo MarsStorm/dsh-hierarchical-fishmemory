@@ -8,17 +8,10 @@
  * 为什么不用模型来写摘要：要花钱、要等、还可能编。规则摘要难看但不会说谎，
  * 真要细看，原文还在 archive 里。
  */
+import { KIND_LABEL } from './kinds.mjs';
+
 export const DAY_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_OLDER_THAN_DAYS = 45;
-
-const KIND_LABEL = {
-  failure: '搞砸了',
-  win: '干得不错',
-  chat: '闲聊',
-  disclosure: '他说了点自己的事',
-  grievance: '他不高兴了',
-  note: '我自己写的',
-};
 
 export function entryTime(entry) {
   const raw = String(entry?.at ?? entry?.date ?? '');

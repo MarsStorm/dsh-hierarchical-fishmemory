@@ -26,10 +26,11 @@
  * 状态存在 `未说完.json`（独立文件，不参与 archiveToFiles 重建）。
  */
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
-import { lookUnfinished, phaseOf, startOfDay, TZ_OFFSET_MS } from './timeline.mjs';
+import { writeJsonAtomic } from './fsx.mjs';
+import { dayKey, lookUnfinished, phaseOf, startOfDay, TZ_OFFSET_MS } from './timeline.mjs';
 import { pickBySeed } from './voice.mjs';
 
 /** 什么时候才浮上来（天）。三天，是"当时没接住、过几天还惦记"的距离。 */
@@ -46,9 +47,7 @@ export const MAX_PER_DAY = 1;
 export const MAX_RECORDS = 60;
 
 export const UNFINISHED_FILE = '未说完.json';
-export const UNFINISHED_SECTION = 'unfinished:memory';
 /** 排在纸条（0.6）和教训（0.62）之后，正文记忆（100）之前 */
-export const UNFINISHED_ORDER = 0.65;
 
 const DAY_MS = 86_400_000;
 
@@ -60,10 +59,8 @@ const UNFINISHED_HINTS = [
   '（这一句不必每轮都浮上来 —— 提一次，剩下的交给日子。）',
 ];
 
-/** 他那边是哪一天（YYYY-MM-DD）。全项目唯一一个"一天"的算法在 timeline.mjs。 */
-export function dayKey(ts) {
-  return new Date(ts + TZ_OFFSET_MS).toISOString().slice(0, 10);
-}
+/** 他那边是哪一天（YYYY-MM-DD）。实现在 timeline.mjs，这里只转出去。 */
+export { dayKey };
 
 function emptyStore() {
   return { version: 1, records: [], asked: [] };
@@ -89,13 +86,9 @@ export function loadStore(file) {
   }
 }
 
-/** 原子写。 */
+/** 原子写。实现在 fsx.mjs —— 同一个"先写临时文件再 rename"，别处不再各写一遍。 */
 export function saveStore(file, store) {
-  const body = `${JSON.stringify(store, null, 2)}\n`;
-  mkdirSync(dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
-  writeFileSync(tmp, body, 'utf8');
-  renameSync(tmp, file);
+  writeJsonAtomic(file, store, { indent: 2 });
 }
 
 /**
@@ -295,29 +288,11 @@ export function unfinishedSectionText(file, options = {}) {
  * @param {any} ctx
  * @param {{file:string, log?:(m:string)=>void, enabled?:()=>boolean, config?:()=>object}} options
  */
-export function registerUnfinished(ctx, { file, log = () => {}, enabled, config, section = true } = {}) {
+export function registerUnfinished(ctx, { file, log = () => {}, enabled, config } = {}) {
   const cfg = () => (typeof config === 'function' ? config() || {} : {});
   const on = () => (typeof enabled === 'function' ? enabled() !== false : true);
 
   // 1.23.0 起默认不自己注册段：三段零碎合成 `fragments:memory`，见 fragments.mjs。
-  if (section) {
-    ctx.effect(
-      () =>
-        ctx.systemPrompt.section({
-          name: UNFINISHED_SECTION,
-          order: UNFINISHED_ORDER,
-          text: () =>
-            unfinishedSectionText(file, {
-              enabled: on(),
-              at: Date.now(),
-              limit: Number.isFinite(cfg().maxPerTurn) ? cfg().maxPerTurn : MAX_PER_TURN,
-              log,
-            }),
-          interpolate: false,
-        }),
-      'fish: unfinished section',
-    );
-  }
 }
 
 /** 路径小工具。 */

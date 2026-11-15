@@ -25,17 +25,19 @@
  * 否则下一次写盘就整份覆盖没了。
  */
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
-import { tokenize } from './keywords.mjs';
+
 import { describeMarks, reviewPair } from './diffcheck.mjs';
+import { TZ_OFFSET_MS } from './timeline.mjs';
+import { writeTextAtomic } from './fsx.mjs';
+import { clip } from './text.mjs';
+import { dice, tokenSet } from './similarity.mjs';
 
 /** 文件名（档案目录下，和 纸条.md 同级） */
 export const LESSON_FILE = '教训.md';
 /** 注入节：排在纸条（0.6）之后、正文记忆（100）之前 */
-export const LESSON_SECTION = 'lesson:memory';
-export const LESSON_ORDER = 0.62;
 
 /** 一句话说清一条教训，太长就没人读了 */
 export const MAX_LESSON_CHARS = 160;
@@ -54,36 +56,17 @@ const SIMILAR = 0.5;
 /** token 太少不判（「慢一点」和「快一点」就差一个 token） */
 const MIN_TOKENS = 4;
 
-function tokenSet(text) {
-  try {
-    return new Set(tokenize(String(text ?? '')));
-  } catch {
-    return new Set();
-  }
-}
-
-function dice(a, b) {
-  if (a.size === 0 || b.size === 0) return 0;
-  let shared = 0;
-  for (const t of a) if (b.has(t)) shared += 1;
-  return (2 * shared) / (a.size + b.size);
-}
-
-function clip(text, max) {
-  const s = String(text ?? '').replace(/\s+/g, ' ').trim();
-  return s.length <= max ? s : `${s.slice(0, max - 1)}…`;
-}
 
 /** 正文里的全角竖线会破坏行格式 */
 function safe(text) {
-  return clip(text, MAX_LESSON_CHARS).replace(/｜/g, '|');
+  return clip(text, MAX_LESSON_CHARS, { collapse: true }).replace(/｜/g, '|');
 }
 
 /**
  * 今天（UTC+8）。跟全项目唯一的"一天"算法保持一致。
  */
 export function today(now = Date.now()) {
-  const d = new Date(now + 8 * 3600 * 1000);
+  const d = new Date(now + TZ_OFFSET_MS);
   return d.toISOString().slice(0, 10);
 }
 
@@ -200,10 +183,7 @@ export function addLesson(file, input = {}) {
   const sorted = [...lessons].sort(
     (a, b) => b.count - a.count || String(b.date).localeCompare(String(a.date)),
   );
-  mkdirSync(dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
-  writeFileSync(tmp, renderLessons(sorted), 'utf8');
-  renameSync(tmp, file);
+  writeTextAtomic(file, renderLessons(sorted));
 
   return { kind, count, text: body, lessons: sorted, ...(note ? { note } : {}) };
 }
@@ -265,23 +245,10 @@ export function lessonSectionText(file, options = {}) {
  * @param {any} ctx
  * @param {{file:string, log?:(m:string)=>void, enabled?:()=>boolean}} options
  */
-export function registerLesson(ctx, { file, log = () => {}, enabled, section = true } = {}) {
+export function registerLesson(ctx, { file, log = () => {}, enabled } = {}) {
   const on = () => (typeof enabled === 'function' ? enabled() !== false : true);
 
   // 1.23.0 起默认不自己注册段：三段零碎合成 `fragments:memory`，见 fragments.mjs。
-  if (section) {
-    ctx.effect(
-      () =>
-        ctx.systemPrompt.section({
-          name: LESSON_SECTION,
-          order: LESSON_ORDER,
-          // 每轮重读：这次刚记下的，下一轮就该看见
-          text: () => lessonSectionText(file, { enabled: on() }),
-          interpolate: false,
-        }),
-      'fish: lesson section',
-    );
-  }
 
   ctx.inject(['tools'], (scope) =>
     scope.effect(() =>

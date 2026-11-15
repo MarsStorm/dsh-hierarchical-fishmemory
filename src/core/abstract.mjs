@@ -19,7 +19,8 @@
  *   `memory_abstract(topic, section, rule)` 由我调，脚本只负责盖章和写规律行。
  */
 
-import { describeMarks, reviewPair, scanDifferences } from './diffcheck.mjs';
+import { describeMarks, scanDifferences } from './diffcheck.mjs';
+import { TZ_OFFSET_MS } from './timeline.mjs';
 
 /** 行尾的归并标记。`→ 后面写去处` 可省。 */
 export const MERGE_RE = /⟪归并\s*(\d{4}-\d{2}-\d{2})(?:\s*→\s*([^⟫\n]*))?⟫/u;
@@ -261,6 +262,6 @@ export function mergeSection(text, { section, rule, at, minCount } = {}) {
 
 /** 他那边的一天。 */
 function today() {
-  const d = new Date(Date.now() + 8 * 3600 * 1000);
+  const d = new Date(Date.now() + TZ_OFFSET_MS);
   return d.toISOString().slice(0, 10);
 }

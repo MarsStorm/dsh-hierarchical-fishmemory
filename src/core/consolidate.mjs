@@ -13,6 +13,8 @@
 import { scrub } from './privacy.mjs';
 import { TZ_OFFSET_MS } from './timeline.mjs';
 import { REINFORCE_RELIEF_MAX, reinforcementOf } from './feedback.mjs';
+import { errorText } from './errors.mjs';
+import { LIVE_KINDS } from './kinds.mjs';
 // 这里原本还 import 了 archive.mjs 的 ensurePersonaStructure / ANCHOR_END /
 // LEARNED_HEADING —— 它们只被 appendPersonaLearnings 用。那个函数删了，
 // 这三个名字跟着一起没了（留着就是死引用）。
@@ -485,7 +487,7 @@ export function parseConsolidation(raw) {
       parsed = JSON.parse(slice.replace(/,\s*([}\]])/g, '$1'));
     } catch {
       throw new ConsolidationParseError(
-        `JSON 解析失败：${err instanceof Error ? err.message : String(err)}`,
+        `JSON 解析失败：${errorText(err)}`,
       );
     }
   }
@@ -498,7 +500,7 @@ export function parseConsolidation(raw) {
 
 /* ───────────────────────── 合并 ───────────────────────── */
 
-const VALID_KINDS = new Set(['failure', 'win', 'chat', 'disclosure', 'grievance']);
+
 
 function clamp(v, lo, hi, fallback) {
   const n = Number(v);
@@ -715,7 +717,7 @@ export function applyConsolidation(archive, rawParsed, context = {}, options = {
       notes.push('没有标签，按配置丢弃');
     } else {
       const text = rawDiary.text.trim();
-      const kind = VALID_KINDS.has(rawDiary.kind) ? rawDiary.kind : 'chat';
+      const kind = LIVE_KINDS.has(rawDiary.kind) ? rawDiary.kind : 'chat';
       next.diary.push({
         id: makeDiaryId(now, next.diary),
         date: hisDate(now),

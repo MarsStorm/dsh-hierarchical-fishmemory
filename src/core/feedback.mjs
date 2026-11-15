@@ -29,6 +29,8 @@
  * 这是 returning-tide 的「不能宣判整篇原文无效」，我照抄语义。
  */
 
+import { TZ_OFFSET_MS } from './timeline.mjs';
+
 /** 五种反馈，只有这五种。正负分开记，权重照抄对方那张表。 */
 export const FEEDBACK_KINDS = {
   cited: { weight: 0.25, negative: false, label: '被引用' },
@@ -231,7 +233,7 @@ export function addFeedback(archive, { id, kind, refs, cue, reason, at } = {}) {
 export function renderEvent(e) {
   const meta = FEEDBACK_KINDS[String(e?.kind ?? '')];
   const label = meta?.label ?? String(e?.kind ?? '?');
-  const when = Number.isFinite(e?.at) ? new Date(Number(e.at) + 8 * 3600 * 1000).toISOString().slice(0, 10) : '';
+  const when = Number.isFinite(e?.at) ? new Date(Number(e.at) + TZ_OFFSET_MS).toISOString().slice(0, 10) : '';
   const refs = Array.isArray(e?.refs) ? e.refs.join('、') : '';
   const cue = String(e?.cue ?? '').trim();
   const reason = String(e?.reason ?? '').trim();

@@ -50,7 +50,7 @@ import {
   requeuePending,
   takePending,
 } from '../core/pending.mjs';
-import { addLoop, doneLoop, loopsPath, openLoops, renderLoops } from '../core/loops.mjs';
+import { addLoop, doneLoop, loopsPath, openLoops } from '../core/loops.mjs';
 import { renderLoopsAnnotated } from '../core/loops.mjs';
 import { annotateLoops, buildMirror, renderMirror } from '../core/mirror.mjs';
 import { datesPath, loadDates, upcoming, renderDates } from '../core/dates.mjs';
@@ -58,14 +58,13 @@ import { pickAnchors, renderAnchors } from '../core/anniversary.mjs';
 import { parseFeelingDays, pickFlashback, renderFlashback, FLASHBACK_FILE } from '../core/flashback.mjs';
 import { renderVoice } from '../core/voice.mjs';
 import { applyCompaction, planCompaction } from '../core/compact.mjs';
-import { buildBook, buildYearBook } from '../core/export-md.mjs';
 import { checkLayers } from '../core/conflicts.mjs';
-import { TZ_OFFSET_MS, calendarDaysBetween, stripTimeWords, softWhen } from '../core/timeline.mjs';
-import { readJsonOrNull } from '../core/fsx.mjs';
+import { TZ_OFFSET_MS, calendarDaysBetween, dayKey, stripTimeWords, softWhen } from '../core/timeline.mjs';
+import { readJsonOrNull, readTextOrNull } from '../core/fsx.mjs';
 import { silentStreak, renderSilenceNudge } from '../core/nudge.mjs';
 import { renderDiaryFile } from '../core/render-diary.mjs';
 import { DIARY_MD, FEELINGS_MD } from '../core/files.mjs';
-import { buildMaterial, feelingsOfWeek, groupByDay, previousWeekKey, renderWeekly, weekKey, weekRange, weeklyPath } from '../core/weekly.mjs';
+import { buildMaterial, feelingsOfWeek, groupByDay, previousWeekKey, renderWeekly, weekRange, weeklyPath } from '../core/weekly.mjs';
 import { buildJudgeInput, parseVerdict, JUDGE_MAX_TOKENS } from '../core/judge.mjs';
 import { selectHandNotes, HANDNOTE_FILE, HANDNOTE_TEMPLATE } from '../core/handnote.mjs';
 import {
@@ -108,8 +107,7 @@ import {
   harvest as harvestUnfinished,
   registerUnfinished,
 } from '../core/unfinished.mjs';
-import { summarizeBackup, writeBackupFile, backupFileName, buildRegisteredBackup, restoreViaRegistered } from '../core/backup.mjs';
-import { collectLayerReport, collectReview, collectStatsFromDisk } from '../core/stats.mjs';
+import { summarizeBackup, writeBackupFile, backupFileName, buildRegisteredBackup } from '../core/backup.mjs';
 import {
   TRASH_FILE,
   DEFAULT_KEEP_DAYS,
@@ -124,16 +122,10 @@ import {
 } from '../core/trash.mjs';
 import { COLD_DIR, coldOnly, mergeColdFiles } from '../core/cold.mjs';
 import { peekFeelings } from '../core/feelings.mjs';
-import {
-  downloadRemoteText,
-  explainWebdavError,
-  listRemoteBackups,
-  listRemoteConfigs,
-  normalizeWebdavConfig,
-  pushBackupToCloud,
-  testConnection,
-  uploadBackupText,
-} from '../core/webdav.mjs';
+import { normalizeWebdavConfig, pushBackupToCloud } from '../core/webdav.mjs';
+import { errorText } from '../core/errors.mjs';
+import { isSameOrigin, panelReply, readPanelBody, readPanelTextBody, setPanelLoggers } from './panel-http.mjs';
+import { createPanelRoutes } from './panel-routes.mjs';
 
 /** Cordis 插件身份。模块上只有这四个属性会被读取。 */
 export const name = 'dsh-hierarchical-fishmemory';
@@ -332,7 +324,7 @@ async function readArchiveDir(dir) {
       files.set(rel, await readFile(path.join(dir, rel), 'utf8'));
     } catch (err) {
       if (err?.code !== 'ENOENT') {
-        warnings.push(`${rel} 读不出来：${err instanceof Error ? err.message : String(err)}`);
+        warnings.push(`${rel} 读不出来：${errorText(err)}`);
       }
     }
   }
@@ -525,6 +517,8 @@ export function apply(ctx, rawConfig) {
     if (config.debugLog) emit('info', args);
   };
   const warn = (...args) => emit('warn', args);
+  // 面板 HTTP 层现在住在外面的模块里，日志从这儿接回去 —— 它自己不该知道 ctx 是什么
+  setPanelLoggers({ warn });
 
   /** @type {Map<string, any>} sessionId → 会话内的临时状态 */
   const sessionStates = new Map();
@@ -613,7 +607,7 @@ export function apply(ctx, rawConfig) {
       try {
         await persist();
       } catch (err) {
-        warn(`补总结：写状态失败（不影响别的）：${err instanceof Error ? err.message : String(err)}`);
+        warn(`补总结：写状态失败（不影响别的）：${errorText(err)}`);
       }
 
       // 等 llm 和模型信息就绪
@@ -640,7 +634,7 @@ export function apply(ctx, rawConfig) {
           await sleep(2000);
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorText(err);
         warn(`补总结：等服务就绪时炸了：${msg}`);
         markBackfill(pending().length, 0, 'error');
         try { await persist(); } catch { /* 写不进去就算了 */ }
@@ -730,7 +724,7 @@ export function apply(ctx, rawConfig) {
             finishInfo = run.finish;
           }
         } catch (err) {
-          warn(`补总结失败：${err instanceof Error ? err.message : String(err)}`);
+          warn(`补总结失败：${errorText(err)}`);
           markBackfill(total, done, 'error');
           return;
         }
@@ -856,7 +850,7 @@ export function apply(ctx, rawConfig) {
       try {
         await persist();
       } catch (err) {
-        warn(`启动留痕写盘失败：${err instanceof Error ? err.message : String(err)}`);
+        warn(`启动留痕写盘失败：${errorText(err)}`);
       }
 
       // ── 补总结**不在启动时**跑 ──
@@ -872,11 +866,11 @@ export function apply(ctx, rawConfig) {
         const notePath = path.join(archiveDirectory, HANDNOTE_FILE);
         if (!existsSync(notePath)) writeFileSync(notePath, HANDNOTE_TEMPLATE, 'utf8');
       } catch (err) {
-        warn(`建手记文件失败（不影响别的）：${err instanceof Error ? err.message : String(err)}`);
+        warn(`建手记文件失败（不影响别的）：${errorText(err)}`);
       }
     } catch (err) {
       degraded = true;
-      warn(`档案加载失败，本次以"不记忆"模式运行：${err instanceof Error ? err.message : String(err)}`);
+      warn(`档案加载失败，本次以"不记忆"模式运行：${errorText(err)}`);
     }
   })();
 
@@ -946,7 +940,7 @@ export function apply(ctx, rawConfig) {
       const file = path.join(archiveDirectory, DIARY_MD);
       await writeFileAtomic(file, renderDiaryFile(snapshot, { now: Date.now() }));
     } catch (err) {
-      warn(`写人读版日记失败（不影响记忆本身）：${err instanceof Error ? err.message : String(err)}`);
+      warn(`写人读版日记失败（不影响记忆本身）：${errorText(err)}`);
     }
   }
 
@@ -1009,7 +1003,7 @@ export function apply(ctx, rawConfig) {
       log('检测到 persona.md 被手动改过，采纳磁盘上的版本');
       return true;
     } catch (err) {
-      warn(`读 persona.md 失败（继续用内存里的）：${err instanceof Error ? err.message : String(err)}`);
+      warn(`读 persona.md 失败（继续用内存里的）：${errorText(err)}`);
       return false;
     }
   }
@@ -1031,7 +1025,7 @@ export function apply(ctx, rawConfig) {
       return gained;
     } catch (err) {
       // 读不到就照常写 —— 合并是**尽力而为的防丢**，不能因为它失败就不落盘
-      warn(`落盘前合并失败（继续写，但可能覆盖别的会话）：${err instanceof Error ? err.message : String(err)}`);
+      warn(`落盘前合并失败（继续写，但可能覆盖别的会话）：${errorText(err)}`);
       return 0;
     }
   }
@@ -1058,7 +1052,7 @@ export function apply(ctx, rawConfig) {
           try {
             maybeAutoCloud();
           } catch (err) {
-            warn(`自动云端备份没起来：${err instanceof Error ? err.message : String(err)}`);
+            warn(`自动云端备份没起来：${errorText(err)}`);
           }
         }, 0);
       })
@@ -1073,7 +1067,7 @@ export function apply(ctx, rawConfig) {
         // 一次失败可能只是临时占用，不值得惊动用户。
         writeFailures += 1;
         warn(
-          `写档案失败（连续第 ${writeFailures} 次）：${err instanceof Error ? err.message : String(err)}`,
+          `写档案失败（连续第 ${writeFailures} 次）：${errorText(err)}`,
         );
         if (writeFailures >= 3 && !degraded) {
           degraded = true;
@@ -1160,7 +1154,7 @@ export function apply(ctx, rawConfig) {
       return { ...pushed, localFile: file, localBytes: bytes };
     })()
       .catch((err) => {
-        cloudState.lastError = err instanceof Error ? err.message : String(err);
+        cloudState.lastError = errorText(err);
         throw err;
       })
       .finally(() => {
@@ -1177,7 +1171,7 @@ export function apply(ctx, rawConfig) {
     if (now - lastAutoAt < 5 * 60 * 1000) return;
     lastAutoAt = now;
     cloudBackupOnce({ reason: 'auto' }).catch((err) => {
-      warn(`自动云端备份失败：${err instanceof Error ? err.message : String(err)}`);
+      warn(`自动云端备份失败：${errorText(err)}`);
     });
   }
 
@@ -1271,7 +1265,7 @@ export function apply(ctx, rawConfig) {
       try {
         void persist();
       } catch (err) {
-        warn(`召回计数落盘没起来：${err instanceof Error ? err.message : String(err)}`);
+        warn(`召回计数落盘没起来：${errorText(err)}`);
       }
     }
   }
@@ -1503,8 +1497,8 @@ export function apply(ctx, rawConfig) {
         if (max > 0) {
           const feelingsFile = path.join(archiveDirectory, FEELINGS_MD);
           const stateFile = path.join(archiveDirectory, FLASHBACK_FILE);
-          const today = new Date(Date.now() + TZ_OFFSET_MS).toISOString().slice(0, 10);
-          const body = existsSync(feelingsFile) ? readFileSync(feelingsFile, 'utf8') : '';
+          const today = dayKey();
+          const body = readTextOrNull(feelingsFile) ?? '';
           const state = readJsonOrNull(stateFile) ?? {};
           // 昨天抽过的还能用（同一天里重启会重算，不该换人），但换天要重抽。
           let picked = state?.date === today && typeof state?.picked === 'string' ? state.picked : '';
@@ -1551,8 +1545,8 @@ export function apply(ctx, rawConfig) {
       try {
         if (config.voiceEnabled !== false) {
           const feelingsFile = path.join(archiveDirectory, FEELINGS_MD);
-          const today = new Date(Date.now() + TZ_OFFSET_MS).toISOString().slice(0, 10);
-          const body = existsSync(feelingsFile) ? readFileSync(feelingsFile, 'utf8') : '';
+          const today = dayKey();
+          const body = readTextOrNull(feelingsFile) ?? '';
           const voice = renderVoice(body, { today, maxChars: config.voiceMaxChars });
           if (voice) text = text ? `${text}\n\n${voice}` : voice;
         }
@@ -1568,8 +1562,8 @@ export function apply(ctx, rawConfig) {
       // 日期按他的钟点（UTC+8）切，不按本机 UTC —— 跨零点那几个小时容易写错。
       try {
         const feelingsFile = path.join(archiveDirectory, FEELINGS_MD);
-        const today = new Date(Date.now() + TZ_OFFSET_MS).toISOString().slice(0, 10);
-        const body = existsSync(feelingsFile) ? readFileSync(feelingsFile, 'utf8') : '';
+        const today = dayKey();
+        const body = readTextOrNull(feelingsFile) ?? '';
         const written = new RegExp(`^## ${today}$`, 'm').test(body);
         if (!written) {
           const line = `📝 今天（${today}）还没写情感日记 —— 有心情就记一笔，两行也算。`;
@@ -1609,7 +1603,7 @@ export function apply(ctx, rawConfig) {
           (rendered.trimmed?.length > 0 ? ` · 少了 ${rendered.trimmed.join('/')}` : ''),
       );
     } catch (err) {
-      warn(`渲染记忆失败：${err instanceof Error ? err.message : String(err)}`);
+      warn(`渲染记忆失败：${errorText(err)}`);
       text = '';
     }
 
@@ -1639,7 +1633,7 @@ export function apply(ctx, rawConfig) {
         });
       });
     } catch (err) {
-      warn(`注册会话段失败：${err instanceof Error ? err.message : String(err)}`);
+      warn(`注册会话段失败：${errorText(err)}`);
       return undefined;
     }
     promptFibers.set(agent, fiber);
@@ -1736,7 +1730,7 @@ export function apply(ctx, rawConfig) {
         }
       }
     } catch (err) {
-      warn(`采集会话事件失败：${err instanceof Error ? err.message : String(err)}`);
+      warn(`采集会话事件失败：${errorText(err)}`);
     }
   });
 
@@ -1803,7 +1797,7 @@ export function apply(ctx, rawConfig) {
           // 上一轮模型压根没吐字的，拿当时那份素材重放一次
           await retryFailedTurn(job.sessionId, job.agent, jobAbort.signal);
         } catch (err) {
-          warn(`固化失败：${err instanceof Error ? err.message : String(err)}`);
+          warn(`固化失败：${errorText(err)}`);
         } finally {
           clearTimeout(timer);
           abort.signal.removeEventListener('abort', onPluginAbort);
@@ -1936,7 +1930,7 @@ export function apply(ctx, rawConfig) {
       }
       return v;
     } catch (err) {
-      warn(`判断失败，按默认记：${err instanceof Error ? err.message : String(err)}`);
+      warn(`判断失败，按默认记：${errorText(err)}`);
       return { keep: true, why: '判断失败，按默认记' };
     }
   }
@@ -2026,11 +2020,11 @@ export function apply(ctx, rawConfig) {
           });
           if (added > 0) log(`半句话收进册子 +${added}（下次夜里也许能想起来）`);
         } catch (err) {
-          warn(`半句话收进册子失败（不影响别的）：${err instanceof Error ? err.message : String(err)}`);
+          warn(`半句话收进册子失败（不影响别的）：${errorText(err)}`);
         }
       }
     } catch (err) {
-      warn(`小纸条写失败（不影响别的）：${err instanceof Error ? err.message : String(err)}`);
+      warn(`小纸条写失败（不影响别的）：${errorText(err)}`);
     }
   }
 
@@ -2049,7 +2043,7 @@ export function apply(ctx, rawConfig) {
       if (did === '') return;
       patchDid(stickyFile(), did, String(s.lastUserText ?? '').trim());
     } catch (err) {
-      warn(`小纸条补注失败（不影响别的）：${err instanceof Error ? err.message : String(err)}`);
+      warn(`小纸条补注失败（不影响别的）：${errorText(err)}`);
     }
   }
 
@@ -2100,7 +2094,7 @@ export function apply(ctx, rawConfig) {
       // 这个回调是 serial、会被 await，绝不能在栈里发请求。
       enqueueJudge(id, agent);
     } catch (err) {
-      warn(`判断排队失败：${err instanceof Error ? err.message : String(err)}`);
+      warn(`判断排队失败：${errorText(err)}`);
     }
   });
 
@@ -2257,7 +2251,7 @@ export function apply(ctx, rawConfig) {
     try {
       run = await runStream(opts);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorText(err);
       if (opts.reasoningEffort !== undefined && /REASONING_EFFORT/i.test(msg)) {
         warn(`provider 不接受思考档位 ${opts.reasoningEffort}，退回不指定重试一次`);
         delete opts.reasoningEffort;
@@ -2433,7 +2427,7 @@ export function apply(ctx, rawConfig) {
     try {
       await consolidate(sessionId, agent, signal, material);
     } catch (err) {
-      warn(`重放失败：${err instanceof Error ? err.message : String(err)}`);
+      warn(`重放失败：${errorText(err)}`);
     }
   }
 
@@ -2481,7 +2475,7 @@ export function apply(ctx, rawConfig) {
         if (chunk?.type === 'text-delta') text += chunk.text;
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorText(err);
       const back = requeuePending(pendingFile(), item);
       warn(
         back.kept
@@ -2498,7 +2492,7 @@ export function apply(ctx, rawConfig) {
       const back = requeuePending(pendingFile(), item);
       warn(
         back.kept
-          ? `抄正后仍不合格，放回队列（第 ${back.tries} 次）：${err instanceof Error ? err.message : String(err)}`
+          ? `抄正后仍不合格，放回队列（第 ${back.tries} 次）：${errorText(err)}`
           : '抄正三次仍不合格，这一条放弃',
       );
       return;
@@ -2561,7 +2555,7 @@ export function apply(ctx, rawConfig) {
   function readTrash() {
     try {
       const file = trashPath();
-      const text = existsSync(file) ? readFileSync(file, 'utf8') : '';
+      const text = readTextOrNull(file) ?? '';
       const { records, broken } = parseTrash(text);
       if (broken > 0) warn(`回收站里有 ${broken} 行读不出来，已跳过`);
       const { records: kept, removed } = pruneTrash(records, { now: Date.now(), keepDays: DEFAULT_KEEP_DAYS });
@@ -2575,7 +2569,7 @@ export function apply(ctx, rawConfig) {
       }
       return kept;
     } catch (err) {
-      warn(`回收站读不出来（当成空的继续）：${err instanceof Error ? err.message : String(err)}`);
+      warn(`回收站读不出来（当成空的继续）：${errorText(err)}`);
       return [];
     }
   }
@@ -2590,7 +2584,7 @@ export function apply(ctx, rawConfig) {
     try {
       mkdirSync(archiveDirectory, { recursive: true });
       const file = trashPath();
-      const text = existsSync(file) ? readFileSync(file, 'utf8') : '';
+      const text = readTextOrNull(file) ?? '';
       // 先剪后写：不然回收站只增不减，一年后是个几十兆的包袱
       const { records } = parseTrash(text);
       const { records: kept, removed } = pruneTrash(records, { now: Date.now(), keepDays: DEFAULT_KEEP_DAYS });
@@ -2600,7 +2594,7 @@ export function apply(ctx, rawConfig) {
       writeFileSync(file, next, 'utf8');
       return record;
     } catch (err) {
-      warn(`写回收站失败（这次删除照常生效，只是找不回来了）：${err instanceof Error ? err.message : String(err)}`);
+      warn(`写回收站失败（这次删除照常生效，只是找不回来了）：${errorText(err)}`);
       return undefined;
     }
   }
@@ -2665,7 +2659,7 @@ export function apply(ctx, rawConfig) {
       log(`冷档案：读到 ${entries.length} 条归档原文（${used} 个文件）`);
       return entries;
     } catch (err) {
-      warn(`冷档案读不出来（当成没有）：${err instanceof Error ? err.message : String(err)}`);
+      warn(`冷档案读不出来（当成没有）：${errorText(err)}`);
       return [];
     }
   }
@@ -2873,120 +2867,6 @@ export function apply(ctx, rawConfig) {
    */
   const PLUGIN_ENTRY_ID = 'dsh-hierarchical-fishmemory';
 
-  /** 面板接口统一响应头：不缓存、不嗅探类型 */
-  function panelReply(res, status, body) {
-    res.statusCode = status;
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.end(JSON.stringify(body));
-  }
-
-  /**
-   * 这个请求是不是同源来的。
-   *
-   * **判定顺序（从强到弱）：**
-   *   1. 有 `Sec-Fetch-Site` → 必须 `same-origin`
-   *   2. 有 `Origin` → 它的 host:port 必须等于 `Host`
-   *   3. **两个都没有 → 放行**
-   *
-   * ── 第 3 条是 2026-10-26 改的，起因是一个真 bug ──
-   *
-   * 社区报「忘掉按钮点不动」。前端带了 `Content-Type: application/json`，
-   * 所以不是那条闸；最可能是这里：**桌面端（Electron）的 renderer 发同源 fetch
-   * 时未必带 `Origin` / `Sec-Fetch-Site`** —— 两个都没有就被判成跨站、403，
-   * 而前端又不检查 `r.ok`，于是「点了没反应」。
-   *
-   * 为什么"两个都没有"可以放行：**浏览器发起的跨站 POST 一定至少带一个**
-   * （`Origin` 是 Fetch 规范要求，现代浏览器再加 `Sec-Fetch-Site`）。
-   * 两个都没有，说明不是页面发起的普通请求。
-   *
-   * 而真正的闸是 `Content-Type: application/json` —— 跨站带它会触发预检，
-   * 预检失败请求就到不了这里。这条对跨站照样生效，没有放松。
-   */
-  function isSameOrigin(req) {
-    const site = String(req.headers?.['sec-fetch-site'] ?? '').toLowerCase();
-    if (site !== '') return site === 'same-origin';
-    const origin = String(req.headers?.origin ?? '');
-    const host = String(req.headers?.host ?? '');
-    if (origin !== '') {
-      if (host === '') return false;
-      try {
-        return new URL(origin).host === host;
-      } catch {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  /** 面板请求被拒时把凭据打出来 —— 否则"点了没反应"永远查不出原因 */
-  function logPanelReject(what, req, reason) {
-    try {
-      const h = req?.headers ?? {};
-      warn(
-        `面板 ${what} 被拒（${reason}）· host=${h.host ?? '-'} · origin=${h.origin ?? '-'} · ` +
-          `sec-fetch-site=${h['sec-fetch-site'] ?? '-'} · content-type=${h['content-type'] ?? '-'}`,
-      );
-    } catch {
-      // 日志本身绝不能再抛
-    }
-  }
-
-  /**
-   * 读一个很小的 JSON 请求体。超过 8KB 直接拒 —— 我们只收 id。
-   *
-   * ⚠️ **必须要求 `Content-Type: application/json`。**
-   *
-   * 审计报告（F3，P2）：原来这里不看 Content-Type 直接 JSON.parse。
-   * 于是跨站的 `text/plain` POST 能打进来 —— 按 CORS 规范，
-   * `text/plain` / `application/x-www-form-urlencoded` 属于「简单请求」，
-   * **浏览器不做预检就直接发出去**，服务端照常执行，只是页面读不到响应。
-   *
-   * 而日记 id 是 `d_YYYYMMDD_NN`，按日期枚举 01–99 就能逐条删光。
-   * 用户开着 dsh web 时访问一个恶意网页，记忆就没了 —— 而且没有确认环节。
-   *
-   * 要求 application/json 之后：跨站请求会触发预检，而预检会失败。
-   * 顺带把 Origin 也验一遍（双保险）。
-   */
-  async function readPanelBody(req) {
-    const ct = String(req.headers?.['content-type'] ?? '').toLowerCase();
-    if (!ct.startsWith('application/json')) {
-      logPanelReject('写请求', req, 'content-type 不是 json');
-      throw new Error('只接受 application/json');
-    }
-    if (!isSameOrigin(req)) {
-      logPanelReject('写请求', req, '来源判定为跨站');
-      throw new Error('跨站请求不予处理');
-    }
-    const chunks = [];
-    let size = 0;
-    for await (const chunk of req) {
-      size += chunk.length;
-      if (size > 8192) throw new Error('请求体过大');
-      chunks.push(chunk);
-    }
-    if (chunks.length === 0) return {};
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
-  }
-
-  /**
-   * 读原始文本（备份文件可能几 MB，比 `readPanelBody` 的 8 KB 宽松）。
-   *
-   * 备份就是纯 JSON 文本，不需要 multipart —— 前端直接 `fetch(body: text)`。
-   * 上限 24 MB：正常人一生也写不到这么多记忆，超了大概是选错文件了。
-   */
-  async function readPanelTextBody(req, { limit = 24 * 1024 * 1024 } = {}) {
-    const chunks = [];
-    let size = 0;
-    for await (const chunk of req) {
-      size += chunk.length;
-      if (size > limit) throw new Error('备份文件过大（上限 24 MB）');
-      chunks.push(chunk);
-    }
-    return Buffer.concat(chunks).toString('utf8');
-  }
-
   /**
    * 面板要的那一份状态。
    *
@@ -3008,7 +2888,7 @@ export function apply(ctx, rawConfig) {
       if (!existsSync(file)) return null;
       return peekFeelings(readFileSync(file, 'utf8'));
     } catch (err) {
-      warn(`读情感日记失败（面板那一行空着）：${err instanceof Error ? err.message : String(err)}`);
+      warn(`读情感日记失败（面板那一行空着）：${errorText(err)}`);
       return null;
     }
   }
@@ -3129,9 +3009,9 @@ export function apply(ctx, rawConfig) {
       const file = path.join(archiveDirectory, n.file);
       let text = '';
       try {
-        text = existsSync(file) ? readFileSync(file, 'utf8') : '';
+        text = readTextOrNull(file) ?? '';
       } catch (err) {
-        warn(`读 ${n.file} 失败：${err instanceof Error ? err.message : String(err)}`);
+        warn(`读 ${n.file} 失败：${errorText(err)}`);
       }
       return { key: n.key, file: n.file, label: n.label, hint: n.hint, text };
     });
@@ -3180,729 +3060,44 @@ export function apply(ctx, rawConfig) {
    */
   ctx.inject(['webServer'], (scope) => {
     scope.effect(() => {
-      const routes = [
-        {
-          kind: 'exact',
-          path: `${PANEL_BASE}/state`,
-          handler: async (req, res) => {
-            if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: 'method' });
-            await loadPromise;
-            return panelReply(res, 200, panelState());
-          },
-        },
-        {
-          kind: 'exact',
-          path: `${PANEL_BASE}/forget`,
-          handler: async (req, res) => {
-            if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
-            try {
-              const body = await readPanelBody(req);
-              const removed = await forgetEntry(body?.id);
-              return panelReply(res, 200, { ok: true, removed, count: archive.diary.length });
-            } catch (err) {
-              return panelReply(res, 400, {
-                ok: false,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            }
-          },
-        },
-        {
-          kind: 'exact',
-          path: `${PANEL_BASE}/notes`,
-          handler: async (req, res) => {
-            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-            if (req.method === 'GET') return panelReply(res, 200, { ok: true, notes: panelNotes() });
-            if (req.method === 'POST') {
-              try {
-                const saved = await savePanelNote(await readPanelBody(req));
-                return panelReply(res, 200, { ok: true, saved });
-              } catch (err) {
-                return panelReply(res, 400, {
-                  ok: false,
-                  error: err instanceof Error ? err.message : String(err),
-                });
-              }
-            }
-            return panelReply(res, 405, { ok: false, error: 'method' });
-          },
-        },
-        {
-          kind: 'exact',
-          path: `${PANEL_BASE}/export`,
-          handler: async (req, res) => {
-            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-            if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: 'method' });
-            try {
-              // 等到挂起的写盘落定，导出的是**磁盘上那份**档案
-              await loadPromise;
-              await drainPromise;
-              await writeChain;
-              const bytes = packArchive(archive);
-              const name = `feiyu-diary-${new Date().toISOString().slice(0, 10)}.dshpack`;
-              res.statusCode = 200;
-              res.setHeader('Content-Type', 'application/octet-stream');
-              res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
-              res.setHeader('Cache-Control', 'no-store');
-              res.end(Buffer.from(bytes));
-            } catch (err) {
-              return panelReply(res, 500, {
-                ok: false,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            }
-          },
-        },
-        {
-          // 全量备份：四本账 + 人设卡打包成一个 JSON。
-          // 为什么在这里而不是 host 自己拼：人设卡只有 soul 半边读得到，
-          // 所以真正的收集动作由它挂到 `fishMemory` 服务上的 `buildBackup` 做。
-          kind: 'exact',
-          path: `${PANEL_BASE}/backup`,
-          handler: async (req, res) => {
-            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-            if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: 'method' });
-            try {
-              // 等挂起的写盘落定，备份的是磁盘上那份
-              await loadPromise;
-              await drainPromise;
-              await writeChain;
-              const build = ctx.get('fishMemory')?.buildBackup;
-              const backup = typeof build === 'function' ? await build() : await buildRegisteredBackup();
-              backup.meta.counts = summarizeBackup(backup);
-              const { file, bytes } = await writeBackupFile(backup, path.join(dshHome(), 'backups'), { fileName: backupFileName() });
-              const display = `属于我们的回忆-${path.basename(file).replace(/^备份-/, '备份')}`;
-              res.statusCode = 200;
-              res.setHeader('Content-Type', 'application/json; charset=utf-8');
-              res.setHeader(
-                'Content-Disposition',
-                `attachment; filename="fishmemory-backup.json"; filename*=UTF-8''${encodeURIComponent(display)}`,
-              );
-              res.setHeader('Cache-Control', 'no-store');
-              res.end(readFileSync(file));
-              log(`全量备份已生成：${file}（${bytes} 字节）`);
-            } catch (err) {
-              return panelReply(res, 500, {
-                ok: false,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            }
-          },
-        },
-        {
-          // 导入备份：前端把整份 JSON 当请求体发上来。
-          //
-          // `?confirm=1` 才真写；不带就只算一遍给人看（dry-run）。真正的还原
-          // 动作在 soul 半边 —— 人设卡只有它读得到；本路由只负责收文件、
-          // 转手、回一句话。
-          kind: 'exact',
-          path: `${PANEL_BASE}/restore`,
-          handler: async (req, res) => {
-            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-            if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
-            const confirm = /[?&]confirm=(?:1|true|yes)\b/i.test(String(req.url ?? ''));
-            try {
-              const text = await readPanelTextBody(req);
-              if (!text.trim()) return panelReply(res, 400, { ok: false, error: '请求体是空的：没收到备份文件' });
-              await loadPromise;
-              await drainPromise;
-              await writeChain;
-              const restore = ctx.get('fishMemory')?.restoreBackup;
-              const result = typeof restore === 'function'
-                ? await restore({ text, confirm, sourceLabel: '面板上传' })
-                : await restoreViaRegistered({ text, confirm, sourceLabel: '面板上传' });
-              log(`备份导入${confirm ? '已落盘' : '（dry-run）'}：${result.writes} 个文件、${result.cards} 张人设卡`);
-              return panelReply(res, 200, { ok: true, ...result });
-            } catch (err) {
-              return panelReply(res, 400, {
-                ok: false,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            }
-          },
-        },
-        {
-          // 把四本账导出成一册 Markdown：给人读、能打印，不是给机器搬家用。
-          //
-          // 复用 buildRegisteredBackup()：它已经在另一个半边把备份对象组好了，
-          // 这里只换一种渲染方式，不重读磁盘。
-          kind: 'exact',
-          path: `${PANEL_BASE}/export-md`,
-          handler: async (req, res) => {
-            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-            if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: '只支持 GET' });
-            try {
-              const build = ctx.get('fishMemory')?.buildBackup;
-              const backup = typeof build === 'function' ? await build() : await buildRegisteredBackup();
-              const text = buildBook(backup);
-              const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-              res.writeHead(200, {
-                'content-type': 'text/markdown; charset=utf-8',
-                'content-disposition': `attachment; filename="archive-${stamp}.md"; filename*=UTF-8''${encodeURIComponent(`属于我们的回忆-${stamp}.md`)}`,
-                'cache-control': 'no-store',
-              });
-              res.end(text);
-              log(`导出 Markdown：${text.length} 字节`);
-            } catch (err) {
-              return panelReply(res, 500, {
-                ok: false,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            }
-          },
-        },
-        {
-          // 年册：一年的共度时光按月排，情感日记按天排。
-          //
-          // 2026-11-03 加。整册 export-md 是一整本，翻到去年要滚很久；
-          // 年册是「那一年」，更适合打印、或者发给谁看。
-          kind: 'exact',
-          path: `${PANEL_BASE}/export-year`,
-          handler: async (req, res) => {
-            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-            if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: '只支持 GET' });
-            try {
-              const url = new URL(req.url ?? '', 'http://127.0.0.1');
-              // 默认今年按他的钟点（UTC+8）算，跨年那几天不会串。
-              const year =
-                (url.searchParams.get('year') ?? '').trim() ||
-                String(new Date(Date.now() + TZ_OFFSET_MS).getUTCFullYear());
-              if (!/^\d{4}$/.test(year)) {
-                return panelReply(res, 400, { ok: false, error: 'year 要四位年份，比如 2026' });
-              }
-              const build = ctx.get('fishMemory')?.buildBackup;
-              const backup = typeof build === 'function' ? await build() : await buildRegisteredBackup();
-              const text = buildYearBook(backup, { year });
-              res.writeHead(200, {
-                'content-type': 'text/markdown; charset=utf-8',
-                'content-disposition': `attachment; filename="year-${year}.md"; filename*=UTF-8''${encodeURIComponent(`属于我们的回忆-${year}.md`)}`,
-                'cache-control': 'no-store',
-              });
-              res.end(text);
-              log(`导出年册 ${year}：${text.length} 字节`);
-            } catch (err) {
-              return panelReply(res, 500, {
-                ok: false,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            }
-          },
-        },
-        {
-          // 情感日记：面板里能读能改。
-          //
-          // 为什么走服务端：文件在 $DSH_HOME 下，浏览器碰不到；更要紧的是
-          // 写之前要自动存一份旧版 —— 这是整套记忆里唯一不会被别的进程
-          // 重写的一本账，覆盖了就真没了。
-          kind: 'exact',
-          path: `${PANEL_BASE}/feelings`,
-          handler: async (req, res) => {
-            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-            const file = path.join(archiveDirectory, FEELINGS_MD);
-            if (req.method === 'GET') {
-              let text = '';
-              try {
-                text = readFileSync(file, 'utf8');
-              } catch {
-                text = '';
-              }
-              return panelReply(res, 200, {
-                ok: true,
-                text,
-                chars: [...text].length,
-                lines: text ? text.split('\n').length : 0,
-              });
-            }
-            if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: '只支持 GET / POST' });
-            try {
-              const body = JSON.parse((await readPanelTextBody(req, { limit: 1024 * 1024 })) || '{}');
-              const text = String(body.text ?? '');
-              if (!text.trim()) return panelReply(res, 400, { ok: false, error: '内容不能为空（要整篇删掉就自己去删文件）' });
-              let previous = '';
-              try {
-                previous = readFileSync(file, 'utf8');
-              } catch {
-                previous = '';
-              }
-              if (previous === text) return panelReply(res, 200, { ok: true, unchanged: true, chars: [...text].length });
-              let snapshot = '';
-              if (previous) {
-                const dir = path.join(dshHome(), 'backups', 'feelings');
-                mkdirSync(dir, { recursive: true });
-                snapshot = path.join(dir, `${new Date().toISOString().replace(/[:.]/g, '-')}.md`);
-                writeFileSync(snapshot, previous);
-              }
-              writeFileSync(file, text.endsWith('\n') ? text : `${text}\n`);
-              log(`情感日记已保存（${[...text].length} 字符）`);
-              return panelReply(res, 200, { ok: true, chars: [...text].length, snapshot });
-            } catch (err) {
-              return panelReply(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
-            }
-          },
-        },
-        {
-          // 体检页「以这条为准」：把某一层里旧的值统一成新的值。
-          //
-          // 只替换「出现了这个值」的行，整行不动别的字；找不到就报错，
-          // 不做模糊匹配 —— 记忆文件里改错一个字，代价比漏改大。
-          kind: 'exact',
-          path: `${PANEL_BASE}/layer/value`,
-          handler: async (req, res) => {
-            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-            if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: '只支持 POST' });
-            try {
-              const body = JSON.parse((await readPanelTextBody(req, { limit: 64 * 1024 })) || '{}');
-              const target = String(body.target ?? '');
-              const memoryRoot = path.join(dshHome(), 'soul-md', 'memory');
-              let file = '';
-              if (target.startsWith('core:')) {
-                file = path.join(memoryRoot, target.slice(5), 'core.md');
-              } else if (target.startsWith('topic:')) {
-                const rest = target.slice(6);
-                const idx = rest.indexOf(':');
-                if (idx > 0) file = path.join(memoryRoot, rest.slice(0, idx), 'topics', `${rest.slice(idx + 1)}.md`);
-              } else if (target === 'handnote') {
-                file = path.join(archiveDirectory, HANDNOTE_FILE);
-              } else if (target === 'sticky') {
-                file = path.join(archiveDirectory, STICKY_FILE);
-              } else if (target === 'lesson') {
-                file = path.join(archiveDirectory, LESSON_FILE);
-              } else if (target === 'feelings') {
-                file = path.join(archiveDirectory, FEELINGS_MD);
-              }
-              if (!file) return panelReply(res, 400, { ok: false, error: '不认识这一层（浅层请在面板里改）' });
-              const from = String(body.from ?? '').trim();
-              const to = String(body.to ?? '').trim();
-              if (!from || !to) return panelReply(res, 400, { ok: false, error: '缺 from / to' });
-              if (!existsSync(file)) return panelReply(res, 404, { ok: false, error: '这一层的文件不存在' });
-              const lines = readFileSync(file, 'utf8').split('\n');
-              let changed = 0;
-              const next = lines.map((line) => {
-                if (!line.includes(from)) return line;
-                changed += 1;
-                return line.split(from).join(to);
-              });
-              if (changed === 0) return panelReply(res, 404, { ok: false, error: `这一层里找不到 ${from}` });
-              writeFileSync(file, next.join('\n'));
-              log(`层间冲突统一成 ${to}（${changed} 行，${target}）`);
-              return panelReply(res, 200, { ok: true, changed, target });
-            } catch (err) {
-              return panelReply(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
-            }
-          },
-        },
-        {
-          // 体检页「删掉重复的那一份」：不管重复落在哪一层都能删。
-          //
-          // 按 target 认文件（`core:<scope>` / `topic:<scope>:<key>` /
-          // `handnote` / `feelings`）。只做「整行精确匹配」，不做模糊删除。
-          // 2026-11-03：原先只认手记的 `/handnote/delete` 已删，功能被这条覆盖。
-          kind: 'exact',
-          path: `${PANEL_BASE}/layer/remove`,
-          handler: async (req, res) => {
-            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-            if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: '只支持 POST' });
-            try {
-              const body = JSON.parse((await readPanelTextBody(req, { limit: 64 * 1024 })) || '{}');
-              const target = String(body.target ?? '');
-              const memoryRoot = path.join(dshHome(), 'soul-md', 'memory');
-              let file = '';
-              if (target.startsWith('core:')) {
-                file = path.join(memoryRoot, target.slice(5), 'core.md');
-              } else if (target.startsWith('topic:')) {
-                const rest = target.slice(6);
-                const idx = rest.indexOf(':');
-                if (idx > 0) file = path.join(memoryRoot, rest.slice(0, idx), 'topics', `${rest.slice(idx + 1)}.md`);
-              } else if (target === 'handnote') {
-                file = path.join(archiveDirectory, HANDNOTE_FILE);
-              } else if (target === 'sticky') {
-                file = path.join(archiveDirectory, STICKY_FILE);
-              } else if (target === 'lesson') {
-                file = path.join(archiveDirectory, LESSON_FILE);
-              } else if (target === 'feelings') {
-                file = path.join(archiveDirectory, FEELINGS_MD);
-              }
-              if (!file) return panelReply(res, 400, { ok: false, error: '不认识这一层（浅层请用 shallow_forget）' });
-              const wanted = String(body.line ?? '').trim().replace(/^[-*+]\s+/, '');
-              if (!wanted) return panelReply(res, 400, { ok: false, error: '没给要删的那一行（line）' });
-              if (!existsSync(file)) return panelReply(res, 404, { ok: false, error: '这一层的文件不存在' });
-              const keep = [];
-              let removed = 0;
-              for (const line of readFileSync(file, 'utf8').split('\n')) {
-                if (line.trim().replace(/^[-*+]\s+/, '').trim() === wanted) {
-                  removed += 1;
-                  continue;
-                }
-                keep.push(line);
-              }
-              if (!removed) return panelReply(res, 404, { ok: false, error: '这一层里找不到那一行' });
-              // 删前留底：这里删的是"重复的那一份"，但判重复的是人 ——
-              // 判错了就是整行没了，而这一层多半只有一两行。
-              pushTrash({
-                kind: 'line',
-                payload: { target, line: wanted, file: path.basename(file) },
-                label: `${target}：${wanted.slice(0, 60)}`,
-              });
-              writeFileSync(file, keep.join('\n'));
-              log(`删掉重复的一行（${target}），共 ${removed} 行`);
-              return panelReply(res, 200, { ok: true, removed, target });
-            } catch (err) {
-              return panelReply(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
-            }
-          },
-        },
-        {
-          // 记忆体检：四本账条数、体积、注入估算、重复提示。
-          //
-          // 只读不写。走磁盘扫描而不是 memoryLayout —— 两个 cordis 入口的模块
-          // 实例不共享，host 这边拿不到 soul 的 layout 实例。
-          kind: 'exact',
-          path: `${PANEL_BASE}/stats`,
-          handler: async (req, res) => {
-            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-            if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: '只支持 GET' });
-            try {
-              const memoryRoot = path.join(dshHome(), 'soul-md', 'memory');
-              const diaryDir = path.join(dshHome(), 'feiyu-diary');
-              const stats = collectStatsFromDisk({ memoryRoot, diaryDir });
-              const layers = collectLayerReport({ memoryRoot, diaryDir });
-              return panelReply(res, 200, { ok: true, ...stats, ...layers });
-            } catch (err) {
-              return panelReply(res, 500, {
-                ok: false,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            }
-          },
-        },
-        {
-          // 回顾：共度时光按天分组，最近 N 天 +「X 天前的今天」。
-          kind: 'exact',
-          path: `${PANEL_BASE}/review`,
-          handler: async (req, res) => {
-            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-            if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: '只支持 GET' });
-            try {
-              const params = new URL(String(req.url ?? ''), 'http://localhost').searchParams;
-              const days = Math.min(Math.max(Number(params.get('days')) || 7, 1), 60);
-              const lookback = Math.min(Math.max(Number(params.get('lookback')) || 7, 1), 365);
-              const diaryDir = path.join(dshHome(), 'feiyu-diary');
-              const review = collectReview({ diaryDir, days, lookback });
-              return panelReply(res, 200, { ok: true, ...review });
-            } catch (err) {
-              return panelReply(res, 500, {
-                ok: false,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            }
-          },
-        },
-        {
-          // 云端备份（WebDAV）：POST = 立刻生成一份新备份并上传；GET = 看状态。
-          //
-          // 为什么不用前端上传文件：备份必须用**磁盘上那份**现在的内容，
-          // 不能在浏览器里拼 —— 人设卡与深层记忆只有服务端读得到。
-          kind: 'exact',
-          path: `${PANEL_BASE}/cloud`,
-          handler: async (req, res) => {
-            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-            const wd = normalizeWebdavConfig(cfgNow());
-            if (req.method === 'GET') {
-              let remote = null;
-              if (/[?&]list=1\b/.test(String(req.url ?? '')) && wd.configured && wd.enabled) {
-                try {
-                  remote = await listRemoteBackups(wd);
-                } catch (err) {
-                  remote = { error: err instanceof Error ? err.message : String(err) };
-                }
-              }
-              return panelReply(res, 200, {
-                ok: true,
-                enabled: wd.enabled,
-                configured: wd.configured,
-                dir: wd.dir,
-                auto: wd.auto,
-                keep: wd.keep,
-                username: wd.username,
-                url: wd.url,
-                user: wd.username,
-                passwordSet: wd.password !== '',
-                lastAt: cloudState.lastAt,
-                lastFile: cloudState.lastFile,
-                lastBytes: cloudState.lastBytes,
-                lastRemoved: cloudState.lastRemoved,
-                lastReason: cloudState.lastReason,
-                lastError: cloudState.lastError,
-                remote: Array.isArray(remote) ? remote : remote,
-              });
-            }
-            if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
-            try {
-              await loadPromise;
-              const result = await cloudBackupOnce({ reason: 'panel' });
-              return panelReply(res, 200, { ok: true, ...result });
-            } catch (err) {
-              return panelReply(res, 400, {
-                ok: false,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            }
-          },
-        },
-        {
-          // 测 WebDAV 连不连得上：POST 试一次「建目录 + 列目录」，不上传、不改数据。
-          //
-          // 接受表单里的**草稿**（url/user/password/dir），所以能在保存之前先试；
-          // 密码留空表示沿用已保存的那个（界面上从不回显密码）。
-          kind: 'exact',
-          path: `${PANEL_BASE}/cloud/test`,
-          handler: async (req, res) => {
-            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-            if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
-            try {
-              const text = await readPanelTextBody(req, { limit: 64 * 1024 });
-              const patch = JSON.parse(text || '{}');
-              const raw = { ...cfgNow() };
-              const take = (key, max) => {
-                if (patch[key] === undefined) return;
-                raw[key] = String(patch[key] ?? '').trim().slice(0, max);
-              };
-              take('webdavUrl', 512);
-              take('webdavUser', 256);
-              take('webdavDir', 200);
-              if (patch.webdavPassword) raw.webdavPassword = String(patch.webdavPassword).slice(0, 512);
-              const wd = normalizeWebdavConfig(raw);
-              const result = await testConnection(wd);
-              log(`云端连接测试通过：${result.url}（${result.elapsedMs} ms${result.listed ? `，云端 ${result.remoteCount} 份备份` : ''}）`);
-              return panelReply(res, 200, { ...result, dirWritable: true });
-            } catch (err) {
-              const message = explainWebdavError(err);
-              warn(`云端连接测试失败：${message}`);
-              return panelReply(res, 400, { ok: false, error: message });
-            }
-          },
-        },
-        {
-            // 配置备份：GET 列出云端有哪些 `配置-*.json`；POST 把当前配置传上去。
-            //
-            // 为什么只装配置：四本账有 fish_backup / /cloud 那条路，这里只解决
-            // 「换设备不用重填一遍 WebDAV 账号、保留份数、预算」这种小麻烦。
-            kind: 'exact',
-            path: `${PANEL_BASE}/cloud/config-backup`,
-            handler: async (req, res) => {
-              if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-              const wd = normalizeWebdavConfig(cfgNow());
-              if (req.method === 'GET') {
-                if (!wd.configured) return panelReply(res, 200, { ok: true, configured: false, files: [] });
-                try {
-                  const files = await listRemoteConfigs(wd);
-                  return panelReply(res, 200, { ok: true, configured: true, files });
-                } catch (err) {
-                  return panelReply(res, 400, { ok: false, error: explainWebdavError(err) });
-                }
-              }
-              if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
-              try {
-                if (!wd.configured) throw new Error('WebDAV 还没配置：先把服务器地址、账号、密码填上');
-                const payload = {
-                  format: CONFIG_BACKUP_FORMAT,
-                  version: CONFIG_BACKUP_VERSION,
-                  exportedAt: new Date().toISOString(),
-                  entryId: PLUGIN_ENTRY_ID,
-                  config: { ...cfgNow() },
-                };
-                const fileName = configFileName();
-                const text = `${JSON.stringify(payload, null, 2)}\n`;
-                const uploaded = await uploadBackupText(wd, { text, fileName });
-                log(`配置已传到云端：${uploaded.fileName}（${uploaded.bytes} 字节）`);
-                return panelReply(res, 200, { ok: true, ...uploaded });
-              } catch (err) {
-                const message = explainWebdavError(err);
-                warn(`配置上传失败：${message}`);
-                return panelReply(res, 400, { ok: false, error: message });
-              }
-            },
-          },
-          {
-            // 从云端恢复配置：默认 dry-run，只报「哪几项会变」；confirm 才写回 settings。
-            kind: 'exact',
-            path: `${PANEL_BASE}/cloud/config-restore`,
-            handler: async (req, res) => {
-              if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-              if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
-              try {
-                const text = await readPanelTextBody(req, { limit: 256 * 1024 });
-                const body = JSON.parse(text || '{}');
-                const fileName = String(body.file ?? '').split(/[\\/]/).pop() ?? '';
-                if (!fileName.startsWith('配置-')) throw new Error('请选一个 `配置-…json` 文件');
-                const wd = normalizeWebdavConfig(cfgNow());
-                if (!wd.configured) throw new Error('WebDAV 还没配置，恢复不了');
-                const got = await downloadRemoteText(wd, fileName);
-                let payload;
-                try {
-                  payload = JSON.parse(got.text);
-                } catch {
-                  throw new Error('这份文件不是 JSON，可能不是配置备份');
-                }
-                if (payload?.format !== CONFIG_BACKUP_FORMAT) throw new Error('这份文件不是本插件的配置备份');
-                const raw = payload?.config && typeof payload.config === 'object' ? payload.config : {};
-                const known = CONFIG_SPEC.map((item) => item.key);
-                const picked = {};
-                for (const key of known) {
-                  if (raw[key] !== undefined) picked[key] = raw[key];
-                }
-                const current = cfgNow();
-                const changes = {};
-                for (const [key, value] of Object.entries(picked)) {
-                  if (key === 'webdavPassword') {
-                    if (String(value ?? '') !== String(current[key] ?? '')) changes[key] = ['（已保存的密码）', '（备份里的密码）'];
-                    continue;
-                  }
-                  const before = current[key];
-                  if (JSON.stringify(before) !== JSON.stringify(value)) {
-                    changes[key] = [before, value];
-                  }
-                }
-                const result = {
-                  ok: true,
-                  file: fileName,
-                  exportedAt: payload.exportedAt ?? '',
-                  keys: Object.keys(picked).length,
-                  changes,
-                  passwordIncluded: typeof picked.webdavPassword === 'string' && picked.webdavPassword !== '',
-                };
-                if (body.confirm !== true) return panelReply(res, 200, { ...result, dryRun: true, applied: [] });
-                const settings = ctx.get('settings');
-                if (!settings || typeof settings.update !== 'function') throw new Error('设置服务不可用，恢复不了');
-                const next = { ...current, ...picked };
-                await settings.update(PLUGIN_ENTRY_ID, next);
-                const wd2 = normalizeWebdavConfig(cfgNow());
-                log(`配置已从云端恢复：${fileName}（${Object.keys(picked).length} 项）`);
-                return panelReply(res, 200, {
-                  ...result,
-                  dryRun: false,
-                  applied: Object.keys(picked),
-                  configured: wd2.configured,
-                  dir: wd2.dir,
-                  keep: wd2.keep,
-                });
-              } catch (err) {
-                const message = explainWebdavError(err);
-                warn(`配置恢复失败：${message}`);
-                return panelReply(res, 400, { ok: false, error: message });
-              }
-            },
-          },
-        {
-          // 云端记忆备份：GET = 列云端 备份-*.json；POST = 从云端拉一份回来还原。
-          //
-          // 和本地「导入备份」只差上游：这里从 WebDAV 下载整包 JSON，之后的
-          // dry-run / confirm / 还原前快照全都走同一条 restoreFromText，不另开一套。
-          kind: 'exact',
-          path: `${PANEL_BASE}/cloud/backups`,
-          handler: async (req, res) => {
-            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-            if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: 'method' });
-            const wd = normalizeWebdavConfig(cfgNow());
-            if (!wd.configured) return panelReply(res, 200, { ok: true, configured: false, files: [] });
-            try {
-              const files = await listRemoteBackups(wd);
-              return panelReply(res, 200, { ok: true, configured: true, dir: wd.dir, files });
-            } catch (err) {
-              return panelReply(res, 400, { ok: false, error: explainWebdavError(err) });
-            }
-          },
-        },
-        {
-          kind: 'exact',
-          path: `${PANEL_BASE}/cloud/restore`,
-          handler: async (req, res) => {
-            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-            if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
-            const confirm = /[?&]confirm=(?:1|true|yes)\b/i.test(String(req.url ?? ''));
-            try {
-              const text = await readPanelTextBody(req, { limit: 256 * 1024 });
-              const body = JSON.parse(text || '{}');
-              const fileName = String(body.file ?? '').split(/[\\/]/).pop() ?? '';
-              if (!/^备份-.+\.json$/.test(fileName)) throw new Error('请选一个 `备份-…json` 文件');
-              const wd = normalizeWebdavConfig(cfgNow());
-              if (!wd.configured) throw new Error('WebDAV 还没配置，恢复不了');
-              const got = await downloadRemoteText(wd, fileName);
-              await loadPromise;
-              await drainPromise;
-              await writeChain;
-              const restore = ctx.get('fishMemory')?.restoreBackup;
-              const mode = String(got.mode ?? '').toLowerCase() === 'merge' ? 'merge' : 'replace';
-            const input = { text: got.text, confirm, sourceLabel: `云端 ${fileName}`, mode };
-              const result = typeof restore === 'function'
-                ? await restore(input)
-                : await restoreViaRegistered(input);
-              log(`云端备份${confirm ? '已还原' : '（dry-run）'}：${fileName} · ${result.writes} 个文件、${result.cards} 张人设卡`);
-              return panelReply(res, 200, { ok: true, file: fileName, ...result });
-            } catch (err) {
-              return panelReply(res, 400, { ok: false, error: explainWebdavError(err) });
-            }
-          },
-        },
-        {
-          // 云端备份的配置写入：POST = 把表单内容写回 profile patch 里的本 entry。
-          //
-          // 为什么走服务端：配置是 cordis 的 settings 文档，写它要走
-          // `settings.update(entryId, …)`（带 revision 与重载）；前端直接改
-          // yaml 会踩缩进与转义，还会在下次装插件时被覆盖。
-          kind: 'exact',
-          path: `${PANEL_BASE}/cloud/config`,
-          handler: async (req, res) => {
-            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-            if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
-            try {
-              const text = await readPanelTextBody(req, { limit: 64 * 1024 });
-              const patch = JSON.parse(text || '{}');
-              const next = { ...cfgNow() };
-              const putString = (key, max) => {
-                if (patch[key] === undefined) return;
-                next[key] = String(patch[key] ?? '').trim().slice(0, max);
-              };
-              putString('webdavUrl', 512);
-              putString('webdavUser', 256);
-              putString('webdavDir', 200);
-              if (patch.webdavPassword !== undefined) {
-                // 空串 = 显式清空；前端不传这个键就保留原密码。
-                next.webdavPassword = String(patch.webdavPassword ?? '').slice(0, 512);
-              }
-              if (patch.webdavAuto !== undefined) next.webdavAuto = Boolean(patch.webdavAuto);
-              if (patch.webdavEnabled !== undefined) next.webdavEnabled = Boolean(patch.webdavEnabled);
-              if (patch.webdavKeep !== undefined) {
-                const keep = Number(patch.webdavKeep);
-                next.webdavKeep = Number.isFinite(keep) ? Math.min(200, Math.max(1, Math.round(keep))) : 10;
-              }
-              const settings = ctx.get('settings');
-              if (!settings || typeof settings.update !== 'function') {
-                throw new Error('设置服务不可用，改不了配置：可以直接改 profile 的 cordis.patch.yml');
-              }
-              await settings.update(PLUGIN_ENTRY_ID, next);
-              const wd = normalizeWebdavConfig(cfgNow());
-              log(`云端配置已保存：${wd.configured ? '已填地址' : '地址为空'}${wd.enabled ? '' : '（总开关关着）'}`);
-              return panelReply(res, 200, {
-                ok: true,
-                enabled: wd.enabled,
-                configured: wd.configured,
-                url: wd.url,
-                user: wd.username,
-                passwordSet: wd.password !== '',
-                dir: wd.dir,
-                auto: wd.auto,
-                keep: wd.keep,
-              });
-            } catch (err) {
-              return panelReply(res, 400, {
-                ok: false,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            }
-          },
-        },
-      ];
+      // 装配失败要喊出来：2026-11-16 搬这三百行时漏了一个 deps，
+      // `ctx.inject` 的回调抛错**不会**留下任何日志，面板只是安静地少了 20 条路由
+      // —— 界面上全是 404，日志里一个字都没有。后来是 curl 才发现的。
+      let routes;
+      try {
+        routes = createPanelRoutes({
+          panelBase: PANEL_BASE,
+          pluginEntryId: PLUGIN_ENTRY_ID,
+          log,
+          warn,
+          config,
+          archiveDirectory,
+          memoryRoot: path.join(dshHome(), 'soul-md', 'memory'),
+          panelReply,
+          isSameOrigin,
+          readPanelBody,
+          readPanelTextBody,
+          panelState,
+          panelNotes,
+          savePanelNote,
+          forgetEntry,
+          pushTrash,
+          cloudBackupOnce,
+          loadPromise,
+          drainPromise,
+          getWriteChain: () => writeChain,
+          getArchive: () => archive,
+          getService: (name) => ctx.get(name),
+          dshHome,
+          cfgNow,
+          configFileName,
+          configBackupFormat: CONFIG_BACKUP_FORMAT,
+          configBackupVersion: CONFIG_BACKUP_VERSION,
+          });
+      } catch (err) {
+        warn(`面板路由装配失败（界面上会全是 404）：${errorText(err)}`);
+        return () => {};
+      }
       const disposers = routes.map((r) => scope.webServer.register(r));
       // 清单从 routes 现算，别手写：手写过的那版已经漏掉一个（export-md）。
       const routeNames = routes
@@ -4044,7 +3239,7 @@ export function apply(ctx, rawConfig) {
         }
       }
     } catch (err) {
-      warn(`挑往事失败，退回字面：${err instanceof Error ? err.message : String(err)}`);
+      warn(`挑往事失败，退回字面：${errorText(err)}`);
       return null;
     }
 
@@ -4054,7 +3249,7 @@ export function apply(ctx, rawConfig) {
       markPick(pool.length, lines.length, usageChunk?.usage ?? usageChunk?.data ?? usageChunk);
       await persist();
     } catch (err) {
-      warn(`挑往事：记用量失败（不影响结果）：${err instanceof Error ? err.message : String(err)}`);
+      warn(`挑往事：记用量失败（不影响结果）：${errorText(err)}`);
     }
 
     const a = text.indexOf('{');
@@ -4977,7 +4172,7 @@ export function apply(ctx, rawConfig) {
                   }
                 }
               } catch (err) {
-                warn(`摘磁盘墓碑失败（内存那份已摘，这次仍会恢复）：${err instanceof Error ? err.message : String(err)}`);
+                warn(`摘磁盘墓碑失败（内存那份已摘，这次仍会恢复）：${errorText(err)}`);
               }
               // ⚠️ 基线也得改。`loadedIds` 记的是"加载时磁盘上有什么"，而
               // 落盘前的三路合并拿它判断删除归属：内存有、磁盘没有、基线有
@@ -5232,7 +4427,7 @@ export function apply(ctx, rawConfig) {
             if (!range) {
               return { ok: false, week: key, saved: false, path: '', text: `不认识的周「${key}」。要用 ISO 周的写法，比如 2026-W46。` };
             }
-            const span = { from: Date.parse(`${range.start}T00:00:00Z`) - 8 * 3600 * 1000 };
+            const span = { from: Date.parse(`${range.start}T00:00:00Z`) - TZ_OFFSET_MS };
             const entries = (archive?.diary ?? []).filter((e) => {
               const ts = Number(e?.created_at ?? e?.at ?? 0);
               return ts >= span.from && ts < span.from + 7 * 24 * 3600 * 1000;
@@ -5334,8 +4529,8 @@ export function apply(ctx, rawConfig) {
       if (!scopes.length) throw new Error('深层记忆目录读不到');
       file = path.join(memoryRoot, scopes[0], 'core.md');
     }
-    const stamp = new Date(Date.now() + TZ_OFFSET_MS).toISOString().slice(0, 10);
-    const prev = existsSync(file) ? readFileSync(file, 'utf8') : '';
+    const stamp = dayKey();
+    const prev = readTextOrNull(file) ?? '';
     const head = prev === '' || prev.endsWith('\n') ? prev : `${prev}\n`;
     await writeFile(file, `${head}- ${body}（${stamp}）\n`, 'utf8');
     log(`浅层升格进深层记忆：${body.slice(0, 24)}`);
@@ -5345,7 +4540,7 @@ export function apply(ctx, rawConfig) {
   try {
     registerShallow(ctx, { file: path.join(archiveDirectory, SHALLOW_FILE), log, promote: promoteShallow });
   } catch (err) {
-    warn(`浅层记忆注册失败（不影响聊天）：${err instanceof Error ? err.message : String(err)}`);
+    warn(`浅层记忆注册失败（不影响聊天）：${errorText(err)}`);
   }
 
   try {
@@ -5353,8 +4548,8 @@ export function apply(ctx, rawConfig) {
       file: path.join(archiveDirectory, STICKY_FILE),
       archiveFile: path.join(archiveDirectory, STICKY_ARCHIVE_FILE),
       log,
-      // 1.23.0：注入段改由 fragments.mjs 统一注册，这里只要它的工具。
-      section: false,
+      // 1.23.0 起注入段只由 fragments.mjs 注册，这里只要它的工具
+      // （2026-11-16 删掉了 `section` 开关本身 —— 没有任何调用方要它了）。
       config: () => ({
         enabled: config.stickyEnabled !== false,
         ttlDays: config.stickyTtlDays,
@@ -5363,7 +4558,7 @@ export function apply(ctx, rawConfig) {
     });
     log(`小纸条已注册：${path.join(archiveDirectory, STICKY_FILE)}`);
   } catch (err) {
-    warn(`小纸条注册失败（不影响聊天）：${err instanceof Error ? err.message : String(err)}`);
+    warn(`小纸条注册失败（不影响聊天）：${errorText(err)}`);
   }
 
   // ── 教训：重复踩过的坑 ──
@@ -5375,11 +4570,10 @@ export function apply(ctx, rawConfig) {
       file: path.join(archiveDirectory, LESSON_FILE),
       log,
       enabled: () => config.lessonEnabled !== false,
-      section: false,
     });
     log(`教训已注册：${path.join(archiveDirectory, LESSON_FILE)}`);
   } catch (err) {
-    warn(`教训注册失败（不影响聊天）：${err instanceof Error ? err.message : String(err)}`);
+    warn(`教训注册失败（不影响聊天）：${errorText(err)}`);
   }
 
   // ── 没说完的半句话，会自己发酵 ──
@@ -5392,11 +4586,10 @@ export function apply(ctx, rawConfig) {
       log,
       enabled: () => config.unfinishedEnabled !== false,
       config: () => ({ maxPerTurn: config.unfinishedPerTurn }),
-      section: false,
     });
     log(`未说完已注册：${path.join(archiveDirectory, UNFINISHED_FILE)}`);
   } catch (err) {
-    warn(`未说完注册失败（不影响聊天）：${err instanceof Error ? err.message : String(err)}`);
+    warn(`未说完注册失败（不影响聊天）：${errorText(err)}`);
   }
 
   // ── 三段零碎，合回一段 ──
@@ -5423,7 +4616,7 @@ export function apply(ctx, rawConfig) {
     });
     log(`零碎记忆已注册（一段装三段）：${FRAGMENTS_SECTION}`);
   } catch (err) {
-    warn(`零碎记忆注册失败（不影响聊天）：${err instanceof Error ? err.message : String(err)}`);
+    warn(`零碎记忆注册失败（不影响聊天）：${errorText(err)}`);
   }
 
   log(`已加载，档案目录：${archiveDirectory}`);

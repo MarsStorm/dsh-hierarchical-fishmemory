@@ -7,6 +7,7 @@
  */
 
 import { zipSync, unzipSync } from './zip.mjs';
+import { errorText } from './errors.mjs';
 
 /** 当前档案格式版本。改格式必须同时加迁移函数。 */
 export const SCHEMA_VERSION = 1;
@@ -188,7 +189,7 @@ export function archiveFromFiles(entries, options = {}) {
     try {
       byName.set(e.name, e.text());
     } catch (err) {
-      warnings.push(`读不出 ${e.name}：${err instanceof Error ? err.message : String(err)}`);
+      warnings.push(`读不出 ${e.name}：${errorText(err)}`);
     }
   }
 
@@ -416,7 +417,7 @@ function readJson(map, name, warnings, fallback) {
     const parsed = JSON.parse(text);
     return parsed && typeof parsed === 'object' ? parsed : fallback;
   } catch (err) {
-    warnings.push(`${name} 解析失败，用默认值顶上：${err instanceof Error ? err.message : String(err)}`);
+    warnings.push(`${name} 解析失败，用默认值顶上：${errorText(err)}`);
     return fallback;
   }
 }
@@ -453,7 +454,7 @@ export function unpackArchive(bytes, options = {}) {
   } catch (err) {
     return {
       archive: createEmptyArchive(options.now),
-      warnings: [`档案解不开，已按空档案处理：${err instanceof Error ? err.message : String(err)}`],
+      warnings: [`档案解不开，已按空档案处理：${errorText(err)}`],
       ok: false,
     };
   }

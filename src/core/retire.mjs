@@ -68,11 +68,6 @@ export function parseRetire(line) {
   return { at: m[1], by: (sm[2] ?? '').trim(), cue: sm[1].trim(), scoped: true };
 }
 
-/** 这一行只在某个线索出现时才算作废。 */
-export function isScopedLine(line) {
-  return parseRetire(line).scoped;
-}
-
 /**
  * 给一行加标记。已经标过就原样返回（幂等）。
  *
@@ -176,18 +171,3 @@ export function renderRetiredNote(retired) {
   return `（这几条已经不算数了，留着是为了让我看得见自己改过口）\n${lines.join('\n')}`;
 }
 
-/**
- * 带线索的那几条写成一句话（给 `memory_read` 用）。
- *
- * 它们**还在注入里** —— 所以这里不是"退场清单"，是"哪儿埋着条件"。
- * 分成两栏说清楚，省得我以为作废了、其实每轮还在读。
- */
-export function renderScopedNote(scoped) {
-  if (!Array.isArray(scoped) || scoped.length === 0) return '';
-  const lines = scoped.map((r) =>
-    r.by
-      ? `- 只在提到「${r.cue}」时不算数：${r.text}（后来：${r.by}）`
-      : `- 只在提到「${r.cue}」时不算数：${r.text}`,
-  );
-  return `（下面这几条还在注入里 —— 只在话题撞上那个词的时候才作废，别的场合照旧算数）\n${lines.join('\n')}`;
-}

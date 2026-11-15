@@ -25,6 +25,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { errorText } from './errors.mjs';
 
 export const SHALLOW_SECTION = 'shallow:memory';
 /** 紧跟 soul:memory(0.5)，早于 fish:memory(100)。 */
@@ -192,7 +193,7 @@ export function registerShallow(ctx, { file, log = () => {}, promote = null }) {
       if (pruneExpired(store, {}).length) saveStore(file, store);
       return renderSection(store, {});
     } catch (err) {
-      log(`浅层记忆：注入时出错（已忽略）：${err instanceof Error ? err.message : String(err)}`);
+      log(`浅层记忆：注入时出错（已忽略）：${errorText(err)}`);
       return '';
     }
   };

@@ -20,10 +20,8 @@
 export const VOICE_MAX_CHARS = 90;
 
 /** 段名。跟其它段并排，但它是唯一一段"我自己的话"。 */
-export const VOICE_SECTION = 'voice:memory';
 
 /** 晚于 fragments(0.6) / unfinished(0.65)，早于「今天还没写」（那条不留段）。 */
-export const VOICE_ORDER = 0.7;
 
 /** 标题的几种说法：按天轮换。 */
 const HEADS = [

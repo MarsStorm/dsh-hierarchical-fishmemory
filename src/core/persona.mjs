@@ -30,9 +30,6 @@ import { calendarDaysBetween, dayLabel, softWhen, startOfDay, stripTimeWords, wh
 /** 默认注入预算（token）。可被 config.budgetTokens 覆盖。 */
 export const DEFAULT_BUDGET = 2000;
 
-/** 低于这个 salience 的词汇不进注入区（还会留在档案里） */
-const LEXICON_MIN_SALIENCE = 0.25;
-
 /**
  * 按**整行**截断：装不下的行从末尾丢掉，一行不切开。
  *

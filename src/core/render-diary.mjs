@@ -15,16 +15,8 @@
  * JSONL 仍然是唯一真相源：追加安全、坏一行只丢一行。
  */
 
+import { kindLabel } from './kinds.mjs';
 import { TZ_OFFSET_MS, calendarDaysBetween } from './timeline.mjs';
-
-const KINDS = {
-  failure: '搞砸了',
-  win: '干得不错',
-  chat: '闲聊',
-  disclosure: '他说了点自己的事',
-  grievance: '他不高兴了',
-  note: '我自己写的',
-};
 
 const pad = (n) => String(n).padStart(2, '0');
 
@@ -142,7 +134,7 @@ export function renderDiaryMarkdown(archive, options = {}) {
     out.push('');
 
     for (const entry of list) {
-      const kind = KINDS[entry.kind] ?? '记一笔';
+      const kind = kindLabel(entry.kind);
       const when = entry.created_at ? localTime(entry.created_at) : '';
       const day = entry.date ? Number(entry.date.slice(8, 10)) : '';
       out.push(`### ${day} 日 ${when} · ${kind}`);

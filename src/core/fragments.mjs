@@ -22,6 +22,7 @@
 import { lessonSectionText } from './lesson.mjs';
 import { stickySectionText } from './sticky.mjs';
 import { unfinishedSectionText } from './unfinished.mjs';
+import { safeConfig } from './safe.mjs';
 
 /** 注入段名。改成三段合一的新名字，旧的三个名字不再注册。 */
 export const FRAGMENTS_SECTION = 'fragments:memory';
@@ -133,13 +134,7 @@ export function registerFragments(
   ctx,
   { stickyFile, lessonFile, unfinishedFile, config = () => ({}), log = () => {} } = {},
 ) {
-  const cfg = () => {
-    try {
-      return config() ?? {};
-    } catch {
-      return {};
-    }
-  };
+  const cfg = () => safeConfig(config);
 
   ctx.effect(
     () =>

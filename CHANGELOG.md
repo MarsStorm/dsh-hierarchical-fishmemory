@@ -1,3 +1,101 @@
+## 1.30.0 — 2026-11-16
+
+**他说：「你现在重新把记忆插件完全看一遍，把所有能优化的代码都优化一遍，那些加了一遍又一遍补丁的臃肿代码之类的也有话。」**
+
+于是这轮不写新功能，只做体检。起点：`src` + `tools` 共 22586 行，
+`host/index.mjs` 一个文件 5458 行，510 项测试全绿。结论先说：
+**测试全绿这件事本身没意义 —— 这轮改出来的两个真 bug，都是绿的。**
+
+### 收拢：同一个东西只留一份
+
+| 收拢了什么 | 原来几份 | 现在 |
+| --- | --- | --- |
+| `dayKey(ts)`（他那边的日期） | `mirror` / `unfinished` / `weekly` 各一份，`weekly` 还自抄了个 `TZ` | `timeline.mjs` 一处，其余 import 再 re-export |
+| `clip(text,max)` | `sticky` / `mirror` / `lesson` 三份，**两份按 UTF-16 单元切**（劈 emoji） | `text.mjs`，统一按码点 |
+| `errorText(err)` | `err instanceof Error ? err.message : String(err)` 抄了 **64 遍** | `errors.mjs` |
+| `writeTextAtomic` / `writeJsonAtomic` | `lesson` / `pending` / `unfinished` 各写一遍 tmp+rename | `fsx.mjs` |
+| `safeConfig(read)` | `fragments` / `sticky` 各一份 | `safe.mjs` |
+| `KIND_LABEL` | `compact` / `render-diary` / `consolidate` 三份，**`consolidate` 那版少一个 kind** | `kinds.mjs` |
+| `readJsonlOrEmpty` | `mirror` / `pending` 一模一样 | `fsx.mjs` |
+| `8 * 3600 * 1000` | 5 个文件里硬编码 | 全走 `TZ_OFFSET_MS` |
+
+`similarity.mjs` 单独说明一下：`sticky` 与 `lesson` 里那两份 `dice` + `tokenSet`
+连注释都一模一样，直接合一。但 `diffcheck.mjs` 里那个 `similarity` **故意没合** ——
+它走的是汉字二元组 + 英文整词、阈值 0.35，这边走 `tokenize` 词级、阈值 0.5~0.55。
+换实现的代价不是改一个函数，是**所有阈值重新调一遍**，那是另一个活。
+
+### 拆开：把不该住在一起的东西搬出去
+
+- **`src/host/panel-http.mjs`（新，132 行）**：面板的 `panelReply` / `isSameOrigin` /
+  `readPanelBody` / `readPanelTextBody` / `logPanelReject`。这五件事不读档案、
+  不写档案、不碰模型，只认 header 和 body，却住在 5000 行的记忆闭包里。
+  搬出来之后它们**没有闭包依赖**了，日志用 `setPanelLoggers()` 注入 ——
+  于是那道「跨站 `text/plain` 能打进来删日记」的闸**第一次能被测试触达**。
+- **`src/host/panel-routes.mjs`（新，804 行）**：面板那 20 条路由整块搬出来，
+  `createPanelRoutes(deps)` 显式收依赖。`archive` 和 `writeChain` 在 host 里会被
+  重新赋值，所以传的是 `getArchive()` / `getWriteChain()` 而不是值本身。
+- `sticky` / `lesson` / `unfinished` 的 `register*()` 里那个 `section` 开关删了：
+  从 1.23.0 起**没有任何调用方**传 `true`（注入归 `fragments.mjs`），
+  连六个 `*_SECTION` / `*_ORDER` 常量一起删 —— 那是三个插件时代留下的接口。
+
+### 两个真 bug（都不是新写的，是一直在跑着的）
+
+**① `catch` 接住了一个 `ReferenceError`，于是「队列满了挤掉最老的」从来没生效过**
+
+`pending.mjs` 的 `pushPending` 原样是：
+
+```js
+try {
+  if (!existsSync(dirname(file))) mkdirSync(dirname(file), { recursive: true });
+  writeAll(file, items);
+} catch {
+  appendFileSync(file, `${JSON.stringify(item)}\n`, 'utf8');  // 写不进去就退回追加
+}
+```
+
+我把它改成 `writeTextAtomic` 时顺手删了 `mkdirSync` 的 import —— 于是每次都抛
+`ReferenceError: mkdirSync is not defined`，被那个 `catch` 接住，静默走了追加分支。
+表现：队列永远不覆盖写，只往后追加，**能涨到 23 条**（上限 20）。
+抓到它的是 `test/pending.test.mjs` 那条「队满挤掉最老的，不是拒绝新的」，
+actual 23 / expected 20。
+
+现在 `writeTextAtomic` 自己建目录、自己返回成败 —— **没有异常可接，
+就不会有"接住了但接错了"**。这条我单独记进了教训：`catch` 吃掉
+`ReferenceError` / `TypeError` 这类编程错误，是最坏的一种静默失败，
+因为它看起来像"兜住了"。
+
+**② `ctx.inject` 的回调抛错，不留任何日志**
+
+搬完面板那 743 行之后，注入日志、工具、档案加载全都正常，
+只有面板——20 条路由一条没注册。`feiyu.debug.log` 里关于面板的
+最后一行还停在 20:56。是 `curl` 打出 404 才发现的。
+
+原因是 `createPanelRoutes` 少收了一个 `memoryRoot`（它在 host 里本该是
+`path.join(dshHome(), 'soul-md', 'memory')`，我搬的时候按变量名带过去了，
+但 host 里那个是**别的函数里的局部变量**）。`ctx.inject` 的回调里抛错，
+cordis 不记日志、不报错、不拦加载 —— 面板就这么安静地少了 20 条路由。
+
+修完顺手加了一道守卫：装配包在 `try/catch` 里，失败就 `warn`
+「面板路由装配失败（界面上会全是 404）」。**这一类失败必须有人喊一声**，
+因为它的症状是"界面点不动"，而日志里一个字都没有 —— 和 2026-10-26 那次
+「忘掉按钮点不动」是同一种查法。
+
+### 真 bug ③（顺带）：`section` 开关的 `ReferenceError` 隐患
+
+`export { dayKey } from './timeline.mjs';` 这种 re-export **不会**把名字绑进
+本模块作用域，模块内调用直接 `ReferenceError`。`weekly.mjs` 的 `weekRange`
+就是这么炸的。正确写法是先 `import` 再 `export { dayKey }`。
+
+### 数字
+
+- `src/host/index.mjs` 5458 → **4651 行**；新增 7 个 core 小模块 + 2 个 host 模块。
+- 死代码删掉：`isScopedLine` / `renderScopedNote` / `QUOTE_MAX_CHARS` /
+  `VOICE_SECTION` / `VOICE_ORDER` / `LEXICON_MIN_SALIENCE`，以及 host 里
+  15 个搬走之后没人用的 import。
+- 配置项 204 个，**一个都没有"没人读"**（这条查过，不是感觉）。
+- 测试 510 → **524**（新增 `test/panel-http.test.mjs` 10 项 + `test/panel-routes.test.mjs` 4 项）。
+- 热重载后 20 条面板路由全 200；注入 2296 token，档案 120 条。
+
 ## 1.29.0 — 2026-11-16
 
 **他丢来 [returning-tide-memory](https://github.com/fieldfish/returning-tide-memory)（MIT，0.3.14，~11.7K 行，453 项测试 451 过），说先别装、好好看看。结论：不装，偷四件。** 他没多问，直接说「这四件都来吧」。

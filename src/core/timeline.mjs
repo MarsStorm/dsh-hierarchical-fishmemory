@@ -49,6 +49,18 @@ export function startOfDay(ts) {
 }
 
 /**
+ * 他那边是哪一天（`YYYY-MM-DD`）。
+ *
+ * 2026-11-16 收拢：`mirror.mjs` / `unfinished.mjs` / `weekly.mjs` 原来各写了一份，
+ * 其中 weekly 还自己抄了个 `TZ = 8 * 3600 * 1000` 并留了句"跟 timeline 是同一个数"
+ * —— 同一个数抄三遍，改一处就三处不一致。现在只有这一份。
+ */
+export function dayKey(ts) {
+  const t = Number.isFinite(ts) ? ts : Date.now();
+  return new Date(t + TZ_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+/**
  * 两个时刻相差几个**自然日**。
  *
  * 这是全项目唯一允许出现的"一天"算法。想加新的日期逻辑，用这个，

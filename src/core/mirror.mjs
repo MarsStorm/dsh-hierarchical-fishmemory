@@ -35,7 +35,9 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { startOfDay, TZ_OFFSET_MS } from './timeline.mjs';
+import { readJsonlOrEmpty } from './fsx.mjs';
+import { clip } from './text.mjs';
+import { dayKey, startOfDay, TZ_OFFSET_MS } from './timeline.mjs';
 import { STICKY_FILE, readNotesSync } from './sticky.mjs';
 import { FEELINGS_MD } from './files.mjs';
 
@@ -52,33 +54,9 @@ function dayStart(ts) {
   return startOfDay(Number.isFinite(ts) ? ts : Date.now());
 }
 
-/** 他那边那天的 YYYY-MM-DD */
-export function dayKey(ts) {
-  const d = new Date(dayStart(ts) + TZ_OFFSET_MS);
-  return d.toISOString().slice(0, 10);
-}
+/** 他那边那天的 YYYY-MM-DD。实现在 timeline.mjs，这里只转出去。 */
+export { dayKey };
 
-/** 读 jsonl，坏行跳过 —— 归档被手改过也不能让镜子整块瞎掉。 */
-function readJsonl(file) {
-  let text = '';
-  try {
-    text = readFileSync(file, 'utf8');
-  } catch {
-    return [];
-  }
-  const out = [];
-  for (const line of text.split('\n')) {
-    const t = line.trim();
-    if (!t) continue;
-    try {
-      const parsed = JSON.parse(t);
-      if (parsed && typeof parsed === 'object') out.push(parsed);
-    } catch {
-      // 静默跳过：一行坏了不该让别人坏
-    }
-  }
-  return out;
-}
 
 /** 条目的时刻：优先 created_at，其次 at，最后用 date 字段补一个中午。 */
 function entryTime(entry) {
@@ -108,11 +86,6 @@ function busyHints(entries) {
     .map(([word, times]) => ({ word, times }));
 }
 
-function clip(text, max = 80) {
-  const s = String(text ?? '').replace(/\s+/g, ' ').trim();
-  return s.length <= max ? s : `${s.slice(0, Math.max(0, max - 1))}…`;
-}
-
 /**
  * 今天这一天的横切面。
  *
@@ -138,7 +111,7 @@ export function buildMirror({ dataDir, now = Date.now(), loops = null, sticky = 
   // ── 共度时光 ──
   const month = date.slice(0, 7);
   const diaryFile = join(dataDir, 'diary', `${month}.jsonl`);
-  const diary = readJsonl(diaryFile).filter((e) => {
+  const diary = readJsonlOrEmpty(diaryFile).filter((e) => {
     const t = entryTime(e);
     return t >= start && t < end;
   });
@@ -151,8 +124,8 @@ export function buildMirror({ dataDir, now = Date.now(), loops = null, sticky = 
     .slice(-MAX_LINES_PER_KIND * 2)
     .map((n) => ({
       time: String(n.time ?? ''),
-      said: clip(n.said, 60),
-      did: clip(n.did, 40),
+      said: clip(n.said, 60, { collapse: true }),
+      did: clip(n.did, 40, { collapse: true }),
     }));
 
   // ── 还挂着的事：今天记下的、已经陈了的 ──
@@ -166,7 +139,7 @@ export function buildMirror({ dataDir, now = Date.now(), loops = null, sticky = 
     .map((x) => {
       const at = Number(x.createdAt ?? x.created_at) || 0;
       const days = at ? Math.round((start - dayStart(at)) / 86400000) : 0;
-      return { text: clip(x.text, 60), days, id: x.id };
+      return { text: clip(x.text, 60, { collapse: true }), days, id: x.id };
     })
     .filter((x) => x.days >= STALE_DAYS)
     .sort((a, b) => b.days - a.days)

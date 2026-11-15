@@ -46,13 +46,14 @@ import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { TZ_OFFSET_MS, lookUnfinished, whenStamp } from './timeline.mjs';
-import { tokenize } from './keywords.mjs';
+import { dice, tokenSet } from './similarity.mjs';
+import { clip } from './text.mjs';
+import { safeConfig } from './safe.mjs';
+
 
 export const STICKY_FILE = '纸条.md';
 export const STICKY_ARCHIVE_FILE = '纸条-旧档.md';
-export const STICKY_SECTION = 'sticky:memory';
 /** 晚于 shallow:memory(0.55)，早于 fish:memory(100)。 */
-export const STICKY_ORDER = 0.6;
 
 /** 活跃纸条行数上限（超出挪进旧档，不删）。 */
 export const MAX_LINES = 200;
@@ -104,12 +105,6 @@ export function stamp(at = now()) {
  * 跟预算那条是同一个毛病：切得干净，但读起来像坏了。
  * 多一个"…"，读者才知道是这里没写完，而不是我本来只说了一半。
  */
-function clip(text, max) {
-  const s = String(text ?? '');
-  if (s.length <= max) return s;
-  return `${s.slice(0, Math.max(0, max - 1))}…`;
-}
-
 /**
  * 造一行纸条。
  *
@@ -296,20 +291,6 @@ const REPEAT_THRESHOLD = 0.55;
 /** 太短的话不做相似度判断（「好累」和「好饿」token 只有一个，系数 0.5 就过去了）。*/
 const REPEAT_MIN_TOKENS = 4;
 
-function tokenSet(text) {
-  try {
-    return new Set(tokenize(String(text ?? '')));
-  } catch {
-    return new Set();
-  }
-}
-
-function dice(a, b) {
-  if (a.size === 0 || b.size === 0) return 0;
-  let shared = 0;
-  for (const t of a) if (b.has(t)) shared += 1;
-  return (2 * shared) / (a.size + b.size);
-}
 
 /**
  * 这句话之前说过几次。
@@ -691,29 +672,13 @@ export function stickySectionText(file, config = {}) {
  */
 export function registerSticky(
   ctx,
-  { file, archiveFile = null, log = () => {}, config = () => ({}), section = true } = {},
+  { file, archiveFile = null, log = () => {}, config = () => ({}) } = {},
 ) {
-  const cfg = () => {
-    try {
-      return config() ?? {};
-    } catch {
-      return {};
-    }
-  };
+  const cfg = () => safeConfig(config);
 
   // ── 注入段 ──
   // 1.23.0 起默认不自己注册：三段零碎（小纸条 / 教训 / 未说完）合进一个
   // `fragments:memory` 段，由 fragments.mjs 统一渲染。传 section:false 即可。
-  if (section) {
-    ctx.effect(() =>
-      ctx.systemPrompt.section({
-        name: STICKY_SECTION,
-        order: STICKY_ORDER,
-        text: () => stickySectionText(file, cfg()),
-        interpolate: false,
-      }),
-    );
-  }
 
   // ── 工具 ──
   ctx.inject(['tools'], (scope) => {

@@ -16,6 +16,7 @@
 
 /** 远程目录里认得出的备份文件名（和 backupFileName() 的前缀一致）。 */
 import { gunzipSync, gzipSync } from 'node:zlib';
+import { errorText } from './errors.mjs';
 
 export const REMOTE_PREFIX = '备份-';
 /** 配置备份的文件前缀（只装插件配置，不装四本账）。 */
@@ -94,7 +95,7 @@ export async function webdavRequest(cfg, method, url, options = {}) {
   try {
     res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
   } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
+    const reason = errorText(err);
     throw new Error(`WebDAV 连不上（${method} ${url}）：${reason}`);
   }
   let text = '';
@@ -132,7 +133,7 @@ export async function ensureRemoteDir(cfg, options = {}) {
     try {
       await webdavRequest(cfg, 'MKCOL', encodePathUrl(current), { timeoutMs: options.timeoutMs });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorText(err);
       // 405/409/301：目录已经有了。别当成失败，否则第一次能传、第二次就报错。
       if (!/\b(405|409|301)\b/.test(message)) throw err;
     }
@@ -339,7 +340,7 @@ export async function testConnection(cfg, options = {}) {
  * 用登录密码会稳定 401，光看状态码很难猜到。
  */
 export function explainWebdavError(err) {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = errorText(err);
   if (/\b401\b/.test(message)) return `${message} —— 账号或应用专用密码不对（多数网盘不让用登录密码）`;
   if (/\b403\b/.test(message)) return `${message} —— 账号没权限写这个目录`;
   if (/\b404\b/.test(message)) return `${message} —— 地址路径不对，检查是否需要写到 /dav/ 或 /remote.php/dav/files/用户名/`;

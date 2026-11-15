@@ -24,8 +24,10 @@
  * 只有**它不认的文件**才活得下来。
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { appendFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { readJsonlOrEmpty, writeTextAtomic } from './fsx.mjs';
 
 /** 文件名（放在档案目录下，和 shallow.json 同级） */
 export const PENDING_FILE = '待重试.jsonl';
@@ -57,28 +59,11 @@ function safeParse(line) {
  * @returns {Array<{id:string,raw:string,reason:string,at:number,session:string,tries:number}>}
  */
 export function readPending(file) {
-  let text = '';
-  try {
-    text = readFileSync(file, 'utf8');
-  } catch {
-    return [];
-  }
-  const out = [];
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim();
-    if (trimmed === '') continue;
-    const v = safeParse(trimmed);
-    if (v) out.push(v);
-  }
-  return out;
+  return readJsonlOrEmpty(file);
 }
-
 function writeAll(file, items) {
   const body = items.map((v) => JSON.stringify(v)).join('\n');
-  const tmp = `${file}.tmp`;
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(tmp, body === '' ? '' : `${body}\n`, 'utf8');
-  renameSync(tmp, file);
+  writeTextAtomic(file, body === '' ? '' : `${body}\n`);
 }
 
 /**
@@ -111,11 +96,16 @@ export function pushPending(file, input = {}) {
     dropped += 1;
   }
   // 大文件就一次写整份；正常只有几行，无所谓
-  try {
-    if (!existsSync(dirname(file))) mkdirSync(dirname(file), { recursive: true });
-    writeAll(file, items);
-  } catch {
-    // 写不进去就退回追加 —— 至少别把这条彻底丢了
+  //
+  // 2026-11-16 修：这里原来包着 `try { mkdirSync...; writeAll() } catch { appendFileSync }`。
+  // 换掉 `writeAll` 的实现后，`mkdirSync` 的 import 被删了 —— 于是每次都抛
+  // ReferenceError，被这个 catch 接住，静默走了追加分支：**挤掉最老的从来没生效过**，
+  // 队列能涨到 23 条（测试抓到的是 23 而不是 20）。
+  // 现在 `writeTextAtomic` 自己建目录、自己返回成败，不再靠抛异常传信 ——
+  // 因为没有异常可接，就不会有"接住了但接错了"。
+  const ok = writeTextAtomic(file, items.map((v) => JSON.stringify(v)).join('\n') + '\n');
+  if (!ok) {
+    // 整份写不进去就退回追加 —— 至少别把这条彻底丢了
     try {
       appendFileSync(file, `${JSON.stringify(item)}\n`, 'utf8');
     } catch {
