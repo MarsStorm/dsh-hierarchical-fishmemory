@@ -27,6 +27,8 @@
  * ─────────────────────────────────────────────────────────────
  */
 
+import { dayKey, daysBetweenDates } from './timeline.mjs';
+
 /** 正文截断长度：注入里一行，再长就变成复述。 */
 const TEXT_MAX = 110;
 
@@ -34,17 +36,16 @@ const TEXT_MAX = 110;
 const LAST_MONTH_MIN = 28;
 const LAST_MONTH_MAX = 35;
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+/**
+ * 他那边某一天的 `YYYY-MM-DD`。
+ *
+ * 2026-11-17 起只是 `timeline.dayKey` 的别名（原来自己算了一遍 +8 小时）。
+ * 名字留着是因为测试与调用点都用它，而 `dayKey` 那三个字在这份文件里
+ * 读起来不像"日期"。
+ */
+export const localDate = dayKey;
 
-/** 他那边某一天的 `YYYY-MM-DD`。 */
-export function localDate(ts) {
-  return new Date(ts + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
-}
-
-/** 两个 `YYYY-MM-DD` 相差几个自然日（later − earlier）。 */
-function daysBetween(earlier, later) {
-  return Math.round((Date.parse(`${later}T00:00:00Z`) - Date.parse(`${earlier}T00:00:00Z`)) / DAY_MS);
-}
+const daysBetween = daysBetweenDates;
 
 /** 把正文压成一行：取第一段、去掉列表符号、裁到 TEXT_MAX。 */
 function oneLine(text) {

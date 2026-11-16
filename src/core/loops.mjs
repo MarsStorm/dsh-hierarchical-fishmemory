@@ -67,44 +67,41 @@ export function doneLoop(file, match) {
   return { done: true, item: hit };
 }
 
-/** 每轮注入那一行。别超过三行，也别把它写成待办清单。 */
-export function renderLoops(items, options = {}) {
-  const list = (items ?? []).filter((x) => x && typeof x.text === 'string' && x.text.trim());
-  if (list.length === 0) return '';
-  const limit = Number.isFinite(options.limit) ? options.limit : 8;
-  const shown = list.slice(-limit);
-  const head = `## 还挂着的事（${list.length} 件）`;
-  const lines = shown.map((x) => `- ${x.text}`);
-  const tail = list.length > shown.length ? `- …还有 ${list.length - shown.length} 件，用 loop_list 看全` : '';
-  const hint = '- 办完了用 loop_done 销掉，别让它一直挂着。';
-  return [head, ...lines, ...(tail ? [tail] : []), hint].join('\n');
-}
-
 /**
- * 带「陈了没」的版本（2026-11-10 加）。
+ * 每轮注入那一行。别超过三行，也别把它写成待办清单。
  *
- * loops.mjs 不该知道时间怎么算（那是 timeline 的事），也不该 import
- * mirror（会绕成一个圈：mirror → sticky → loops ← mirror）。
- * 所以这里只留一个口子：调用方给 annotate，这里负责拼。
- *
- * 刻意只加后缀、不加行 —— 账本一旦长出第二类行，就变成待办清单了。
+ * 2026-11-17 合过一次：原来这里有两个函数，`renderLoops` 和
+ * `renderLoopsAnnotated`，正文一模一样、只差每行要不要拼后缀 ——
+ * 一份拼装逻辑写两遍，改一处忘一处就是"注入里那行和工具输出不一样"。
+ * 现在只有这一个，`annotate` 给了就带后缀，不给就照原样。
  *
  * @param {Array} items
  * @param {{limit?:number, annotate?:(x:object)=>{text:string, suffix:string}}} [options]
  */
-export function renderLoopsAnnotated(items, options = {}) {
+export function renderLoops(items, options = {}) {
   const annotate = typeof options.annotate === 'function' ? options.annotate : null;
-  if (!annotate) return renderLoops(items, options);
   const list = (items ?? []).filter((x) => x && typeof x.text === 'string' && x.text.trim());
   if (list.length === 0) return '';
   const limit = Number.isFinite(options.limit) ? options.limit : 8;
   const shown = list.slice(-limit);
   const head = `## 还挂着的事（${list.length} 件）`;
   const lines = shown.map((x) => {
+    if (!annotate) return `- ${x.text}`;
     const hint = annotate(x);
     return `- ${x.text}${hint?.suffix ?? ''}`;
   });
   const tail = list.length > shown.length ? `- …还有 ${list.length - shown.length} 件，用 loop_list 看全` : '';
   const hint = '- 办完了用 loop_done 销掉，别让它一直挂着。';
   return [head, ...lines, ...(tail ? [tail] : []), hint].join('\n');
+}
+
+/**
+ * 带「陈了没」的版本（2026-11-10 加；2026-11-17 起只是 `renderLoops` 的薄壳）。
+ *
+ * 留着这个名字是因为 host 和 mirror 都按它调用，语义也确实是"带注记的"。
+ * 正文、行数、结尾那句提示都只有一份 —— 注入里那一行和工具输出必须一模一样，
+ * 两份拼装逻辑迟早各走各的。
+ */
+export function renderLoopsAnnotated(items, options = {}) {
+  return renderLoops(items, options);
 }

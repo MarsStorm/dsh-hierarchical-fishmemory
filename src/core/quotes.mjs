@@ -29,6 +29,7 @@
 import { readFileSync } from 'node:fs';
 import { parseNotes, whenLabel } from './sticky.mjs';
 import { tokenize } from './keywords.mjs';
+import { inDateRange } from './timeline.mjs';
 
 /** 一次最多回几条。多了不如让他自己说。 */
 export const MAX_QUOTES = 6;
@@ -107,14 +108,7 @@ export function searchQuotes(quotes, query, opts = {}) {
   const since = String(opts.since ?? '').trim().slice(0, 10);
   const until = String(opts.until ?? '').trim().slice(0, 10);
 
-  const pool = list.filter((n) => {
-    if (!since && !until) return true;
-    const day = String(n.date ?? '').slice(0, 10);
-    if (!day) return false;
-    if (since && day < since) return false;
-    if (until && day > until) return false;
-    return true;
-  });
+  const pool = list.filter((n) => inDateRange(n.date, since, until));
 
   const first = firstDay(list);
   if (q === '') return { hits: [], scanned: pool.length, total: list.length, first };

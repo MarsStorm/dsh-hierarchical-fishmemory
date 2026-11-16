@@ -39,7 +39,7 @@ import {
 } from '../core/archive.mjs';
 // 原来的 evaluateGate 那套关键词闸门拆了（见 turn-stopping 里的注释）。
 // SUPPRESS_RE 留着 —— "别记"是用户的控制，不是启发式。
-import { SUPPRESS_RE } from '../core/gate.mjs';
+import { SUPPRESS_RE } from '../core/judge.mjs';
 import { buildIndex, selectMemories, searchScores, searchChars, queryHasSubstance, looksLikeWork, parseTimeHint, DEFAULT_RECALL_OPTIONS } from '../core/recall.mjs';
 import { scrub } from '../core/privacy.mjs';
 import { pickRecent, renderMemoryBlock } from '../core/persona.mjs';
@@ -58,14 +58,15 @@ import { pickAnchors, renderAnchors } from '../core/anniversary.mjs';
 import { parseFeelingDays, pickFlashback, renderFlashback, FLASHBACK_FILE } from '../core/flashback.mjs';
 import { renderVoice } from '../core/voice.mjs';
 import { applyCompaction, planCompaction } from '../core/compact.mjs';
-import { checkLayers } from '../core/conflicts.mjs';
-import { TZ_OFFSET_MS, calendarDaysBetween, dayKey, stripTimeWords, softWhen } from '../core/timeline.mjs';
+
+import { TZ_OFFSET_MS, calendarDaysBetween, dayKey, inDateRange, stripTimeWords, softWhen } from '../core/timeline.mjs';
 import { readJsonOrNull, readTextOrNull } from '../core/fsx.mjs';
 import { silentStreak, renderSilenceNudge } from '../core/nudge.mjs';
 import { renderDiaryFile } from '../core/render-diary.mjs';
 import { DIARY_MD, FEELINGS_MD, HEALTH_LOG } from '../core/files.mjs';
 import { buildMaterial, feelingsOfWeek, groupByDay, previousWeekKey, renderWeekly, weekRange, weeklyPath } from '../core/weekly.mjs';
 import { buildJudgeInput, parseVerdict, JUDGE_MAX_TOKENS } from '../core/judge.mjs';
+import { collectLayerReport } from '../core/stats.mjs';
 import { selectHandNotes, HANDNOTE_FILE, HANDNOTE_TEMPLATE } from '../core/handnote.mjs';
 import {
   buildConsolidationInput,
@@ -3387,14 +3388,9 @@ export function apply(ctx, rawConfig) {
             const since = typeof args?.since === 'string' ? args.since.trim().slice(0, 10) : '';
             const until = typeof args?.until === 'string' ? args.until.trim().slice(0, 10) : '';
             const hasRange = Boolean(since || until);
-            const inRange = (entry) => {
-              if (!hasRange) return true;
-              const day = dayOf(entry);
-              if (!day) return false;
-              if (since && day < since) return false;
-              if (until && day > until) return false;
-              return true;
-            };
+            // 判断交给 timeline.inDateRange —— 同一套范围语义，fish_quote 和这里
+            // 必须一致，否则同一个查询在两处一个命中一个落空。
+            const inRange = (entry) => inDateRange(dayOf(entry), since, until);
 
             const byId0 = new Map(archive.diary.map((e) => [e.id, e]));
 
@@ -4395,41 +4391,14 @@ export function apply(ctx, rawConfig) {
             },
             isConcurrencySafe: () => true,
             async execute() {
-              const readText = (file) => {
-                try {
-                  return readFileSync(file, 'utf8');
-                } catch {
-                  return '';
-                }
-              };
-              const memoryRoot = path.join(dshHome(), 'soul-md', 'memory');
-              let core = '';
-              const topics = {};
-              try {
-                for (const scope of readdirSync(memoryRoot, { withFileTypes: true })) {
-                  if (!scope.isDirectory()) continue;
-                  core += readText(path.join(memoryRoot, scope.name, 'core.md'));
-                  const topicDir = path.join(memoryRoot, scope.name, 'topics');
-                  for (const topic of readdirSync(topicDir, { withFileTypes: true })) {
-                    if (!topic.isFile() || !topic.name.endsWith('.md')) continue;
-                    topics[topic.name.replace(/\.md$/, '')] = readText(path.join(topicDir, topic.name));
-                  }
-                }
-              } catch {
-                // 深层读不到就算了，剩下几层照样能查
-              }
-              let shallow = [];
-              try {
-                shallow = JSON.parse(readText(path.join(archiveDirectory, SHALLOW_FILE))).entries ?? [];
-              } catch {
-                shallow = [];
-              }
-              const report = checkLayers({
-                core,
-                topics,
-                handnote: readText(path.join(archiveDirectory, HANDNOTE_FILE)),
-                feelings: readText(path.join(archiveDirectory, FEELINGS_MD)),
-                shallow,
+              // 2026-11-17 合并：这里原来自己拼层（core/topics/handnote/feelings/shallow），
+              // 与体检页的 `collectLayerReport` 各算一遍 —— 而且口径还不一样：
+              // 它不认 sticky/lesson/pending，也不按文件过滤冲突，于是同一个档案
+              // 面板说"没打架"、工具说"有 3 处取值打架"，两个都是我，谁对？
+              // 现在只有一份拼装逻辑，工具只是把它说成人话。
+              const report = collectLayerReport({
+                memoryRoot: path.join(dshHome(), 'soul-md', 'memory'),
+                diaryDir: archiveDirectory,
               });
               const parts = [];
               parts.push(`查了 ${report.checked} 行`);
@@ -4437,7 +4406,7 @@ export function apply(ctx, rawConfig) {
               else {
                 parts.push(`同一句写了两遍：${report.duplicates.length} 处`);
                 for (const hit of report.duplicates.slice(0, 5)) {
-                  parts.push(`- 「${hit.text.slice(0, 40)}」在 ${hit.first} 和 ${hit.again} 里都有`);
+                  parts.push(`- 「${String(hit.text).slice(0, 40)}」在 ${hit.first} 和 ${hit.again} 里都有`);
                 }
               }
               if (report.conflicts.length === 0) parts.push('没有同一样东西写了两个值');
@@ -4446,6 +4415,9 @@ export function apply(ctx, rawConfig) {
                 for (const c of report.conflicts) {
                   parts.push(`- ${c.kind}：${c.values.join(' / ')}（${c.lines.map((l) => l.layer).join('、')}）`);
                 }
+              }
+              if (report.conflicts.length === 0 && report.duplicates.length === 0) {
+                parts.push('（这只说明层与层之间没打架，不代表内容都对。）');
               }
               return { ...report, text: parts.join('\n') };
             },

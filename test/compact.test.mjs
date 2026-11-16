@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import {
   applyCompaction,
   digestForMonth,
-  entryTime,
+  entryStamp,
   monthKeyOf,
   pickCompactionCandidates,
   planCompaction,
@@ -25,10 +25,10 @@ function entry(id, daysAgo, extra = {}) {
   };
 }
 
-test('entryTime 认得 date 与 at，认不出返回 0', () => {
-  assert.equal(entryTime({ date: '2026-10-01' }), Date.parse('2026-10-01T00:00:00Z'));
-  assert.equal(entryTime({ at: '2026-10-01T10:00:00Z' }), Date.parse('2026-10-01T10:00:00Z'));
-  assert.equal(entryTime({}), 0);
+test('entryStamp 认得 date 与 at，认不出返回 0', () => {
+  assert.equal(entryStamp({ date: '2026-10-01' }), Date.parse('2026-10-01T00:00:00Z'));
+  assert.equal(entryStamp({ at: '2026-10-01T10:00:00Z' }), Date.parse('2026-10-01T10:00:00Z'));
+  assert.equal(entryStamp({}), 0);
 });
 
 test('monthKeyOf 按月分组', () => {
@@ -79,8 +79,8 @@ test('apply 后得到「新条目 + 摘要」，按时间排序', () => {
   assert.ok(merged.some((e) => e.id === 'new'));
   assert.ok(merged.some((e) => e.compacted === true));
   assert.deepEqual(
-    merged.map((e) => entryTime(e)).sort((a, b) => a - b),
-    merged.map((e) => entryTime(e)),
+    merged.map((e) => entryStamp(e)).sort((a, b) => a - b),
+    merged.map((e) => entryStamp(e)),
   );
 });
 

@@ -124,26 +124,6 @@ function hanChars(text) {
 }
 
 /**
- * BM25-lite 检索，分数映射到 0~1（便于设阈值）。
- *
- * 归一化方式经过一次返工：最初用"命中证据 / 查询全部 token 的 idf 之和"，
- * 结果**永远匹配不上** —— 中文 bigram 会产生大量噪声 token（"序算""法还"），
- * 它们把分母顶得很大，一条明显相关的日记只能拿到 0.10 分。
- *
- * 现在改用**饱和函数**：只看命中了多少有区分度的证据，与查询长度解耦。
- *
- *     sim = 1 − exp(−Σgain / saturation)
- *
- * 好处：分数含义稳定 —— 命中 1 个实词约 0.4，命中 2 个约 0.67，完全无关是 0。
- * 阈值因此可以说人话，也不会因为用户多打几个字就掉到阈值以下。
- *
- * @param {ReturnType<typeof buildIndex>} index
- * @param {string} query
- * @param {{limit?: number, saturation?: number}} [options]
- * @returns {Map<string, number>} id → 相似度 0~1（未命中的条目不会出现在 map 里）
- */
-
-/**
  * 单字检索：只用来**扩候选**，不能拿来判「有」。
  *
  * ── 为什么单字要和 bigram 分开 ──
@@ -325,6 +305,21 @@ export function looksLikeWork(text) {
 
 /**
  * BM25-lite 检索，分数映射到 0~1（便于设阈值）。
+ *
+ * 归一化方式经过一次返工：最初用"命中证据 / 查询全部 token 的 idf 之和"，
+ * 结果**永远匹配不上** —— 中文 bigram 会产生大量噪声 token（"序算""法还"），
+ * 它们把分母顶得很大，一条明显相关的日记只能拿到 0.10 分。
+ *
+ * 现在改用**饱和函数**：只看命中了多少有区分度的证据，与查询长度解耦。
+ *
+ *     sim = 1 − exp(−Σgain / saturation)
+ *
+ * 好处：分数含义稳定 —— 命中 1 个实词约 0.4，命中 2 个约 0.67，完全无关是 0。
+ * 阈值因此可以说人话，也不会因为用户多打几个字就掉到阈值以下。
+ *
+ * 2026-11-17：这段说明原来挂在一个**没有函数**的注释块上（重构后函数搬去了
+ * 底下，注释留在原地），`searchScores` 自己只有一行。孤零零的文档等于没有 ——
+ * 现在挪到它该在的地方。
  *
  * @param {ReturnType<typeof buildIndex>} index
  * @param {string} query

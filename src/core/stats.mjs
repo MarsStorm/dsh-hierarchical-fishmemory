@@ -65,7 +65,9 @@ export function readDiaryEntries(diaryDir, { readText = readTextDefault } = {}) 
 }
 
 const dayKeyOf = (iso) => String(iso ?? "").slice(0, 10);
-const entryTime = (entry) => String(entry?.at ?? entry?.date ?? "");
+// 只取原始字符串（这里要的是"哪一天"的字面，不是时刻），
+  // 和 timeline.entryTime（毫秒）不是一回事，所以不共用、也不同名。
+  const rawStamp = (entry) => String(entry?.at ?? entry?.date ?? "");
 
 /**
  * 四本账体检。
@@ -188,7 +190,7 @@ export function collectStats(options = {}) {
   const entries = readDiaryEntries(diaryDir, { readText });
   const now = Date.now();
   const last7 = entries.filter((entry) => {
-    const raw = entryTime(entry);
+    const raw = rawStamp(entry);
     // 只有日期的条目按当天 00:00 UTC 算，免得整天都算不到「最近七天」。
     const at = Date.parse(raw.length === 10 ? `${raw}T00:00:00Z` : raw);
     return Number.isFinite(at) && now - at <= 7 * DAY_MS;
@@ -233,8 +235,8 @@ export function collectStats(options = {}) {
       files: listDiaryFiles(diaryDir).length,
       entries: entries.length,
       last7Days: last7,
-      oldest: entryTime(entries[0]),
-      newest: entryTime(entries.at(-1)),
+      oldest: rawStamp(entries[0]),
+      newest: rawStamp(entries.at(-1)),
     },
     feelings: { chars: feelingsText.length, lines: feelingsText.split("\n").length },
     handnote: {
@@ -265,7 +267,7 @@ export function collectReview(options = {}) {
   const entries = readDiaryEntries(diaryDir, { readText });
   const byDay = new Map();
   for (const entry of entries) {
-    const key = dayKeyOf(entryTime(entry));
+    const key = dayKeyOf(rawStamp(entry));
     if (!key) continue;
     if (!byDay.has(key)) byDay.set(key, []);
     byDay.get(key).push(entry);
@@ -384,5 +386,12 @@ export function collectLayerReport(options = {}) {
       return { ...c, lines: real.flatMap(([, list]) => list) };
     })
     .filter(Boolean);
-  return { duplicates, conflicts };
+  // 查了多少行：原来只有 `checkLayers` 报这个数，面板不报。
+  // 两处合并之后由这里出 —— 一个体检页和一个工具给出不同的"查了多少行"，
+  // 就是两份口径的开始。
+  const checked = layers.reduce(
+    (n, l) => n + l.lines.filter((x) => String(x ?? "").trim() !== "").length,
+    0,
+  );
+  return { checked, duplicates, conflicts };
 }

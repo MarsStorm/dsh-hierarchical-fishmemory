@@ -123,12 +123,32 @@ export function createPanelRoutes(deps) {
     configBackupVersion,
   } = deps;
 
+  /**
+   * 每条路由开头都要做的两件事：查同源、查方法。
+   *
+   * 2026-11-17 收拢。原来这四行抄了 18 遍，抄出了两个洞：
+   * `/state` 和 `/forget` 只查方法、**没查同源** —— 其中 `/forget`
+   * 是会删掉一条记忆的 POST。抄 18 遍的东西必然漏一遍，而漏的那一遍
+   * 不会报错，只会安静地少一道门。
+   *
+   * 返回 false 表示"我已经替你回过话了，你直接 return"。
+   */
+  const deny = (res, status, error) => {
+    panelReply(res, status, { ok: false, error });
+    return false;
+  };
+  const allow = (req, res, method = '') => {
+    if (!isSameOrigin(req)) return deny(res, 403, '跨站请求不予处理');
+    if (method !== '' && req.method !== method) return deny(res, 405, `只支持 ${method}`);
+    return true;
+  };
+
   const routes = [
   {
     kind: 'exact',
     path: `${panelBase}/state`,
     handler: async (req, res) => {
-      if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: 'method' });
+      if (!allow(req, res, 'GET')) return;
       await loadPromise;
       return panelReply(res, 200, panelState());
     },
@@ -137,7 +157,7 @@ export function createPanelRoutes(deps) {
     kind: 'exact',
     path: `${panelBase}/forget`,
     handler: async (req, res) => {
-      if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
+      if (!allow(req, res, 'POST')) return;
       try {
         const body = await readPanelBody(req);
         const removed = await forgetEntry(body?.id);
@@ -154,7 +174,7 @@ export function createPanelRoutes(deps) {
     kind: 'exact',
     path: `${panelBase}/notes`,
     handler: async (req, res) => {
-      if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
+      if (!allow(req, res)) return;
       if (req.method === 'GET') return panelReply(res, 200, { ok: true, notes: panelNotes() });
       if (req.method === 'POST') {
         try {
@@ -174,8 +194,7 @@ export function createPanelRoutes(deps) {
     kind: 'exact',
     path: `${panelBase}/export`,
     handler: async (req, res) => {
-      if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-      if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: 'method' });
+      if (!allow(req, res, 'GET')) return;
       try {
         // 等到挂起的写盘落定，导出的是**磁盘上那份**档案
         await loadPromise;
@@ -203,8 +222,7 @@ export function createPanelRoutes(deps) {
     kind: 'exact',
     path: `${panelBase}/backup`,
     handler: async (req, res) => {
-      if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-      if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: 'method' });
+      if (!allow(req, res, 'GET')) return;
       try {
         // 等挂起的写盘落定，备份的是磁盘上那份
         await loadPromise;
@@ -241,8 +259,7 @@ export function createPanelRoutes(deps) {
     kind: 'exact',
     path: `${panelBase}/restore`,
     handler: async (req, res) => {
-      if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-      if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
+      if (!allow(req, res, 'POST')) return;
       const confirm = /[?&]confirm=(?:1|true|yes)\b/i.test(String(req.url ?? ''));
       try {
         const text = await readPanelTextBody(req);
@@ -272,8 +289,7 @@ export function createPanelRoutes(deps) {
     kind: 'exact',
     path: `${panelBase}/export-md`,
     handler: async (req, res) => {
-      if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-      if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: '只支持 GET' });
+      if (!allow(req, res, 'GET')) return;
       try {
         const build = getService('fishMemory')?.buildBackup;
         const backup = typeof build === 'function' ? await build() : await buildRegisteredBackup();
@@ -302,8 +318,7 @@ export function createPanelRoutes(deps) {
     kind: 'exact',
     path: `${panelBase}/export-year`,
     handler: async (req, res) => {
-      if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-      if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: '只支持 GET' });
+      if (!allow(req, res, 'GET')) return;
       try {
         const url = new URL(req.url ?? '', 'http://127.0.0.1');
         // 默认今年按他的钟点（UTC+8）算，跨年那几天不会串。
@@ -340,7 +355,7 @@ export function createPanelRoutes(deps) {
     kind: 'exact',
     path: `${panelBase}/feelings`,
     handler: async (req, res) => {
-      if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
+      if (!allow(req, res)) return;
       const file = path.join(archiveDirectory, FEELINGS_MD);
       if (req.method === 'GET') {
         let text = '';
@@ -391,8 +406,7 @@ export function createPanelRoutes(deps) {
     kind: 'exact',
     path: `${panelBase}/layer/value`,
     handler: async (req, res) => {
-      if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-      if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: '只支持 POST' });
+      if (!allow(req, res, 'POST')) return;
       try {
         const body = JSON.parse((await readPanelTextBody(req, { limit: 64 * 1024 })) || '{}');
         const target = String(body.target ?? '');
@@ -443,8 +457,7 @@ export function createPanelRoutes(deps) {
     kind: 'exact',
     path: `${panelBase}/layer/remove`,
     handler: async (req, res) => {
-      if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-      if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: '只支持 POST' });
+      if (!allow(req, res, 'POST')) return;
       try {
         const body = JSON.parse((await readPanelTextBody(req, { limit: 64 * 1024 })) || '{}');
         const target = String(body.target ?? '');
@@ -502,8 +515,7 @@ export function createPanelRoutes(deps) {
     kind: 'exact',
     path: `${panelBase}/stats`,
     handler: async (req, res) => {
-      if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-      if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: '只支持 GET' });
+      if (!allow(req, res, 'GET')) return;
       try {
         const memoryRoot = path.join(dshHome(), 'soul-md', 'memory');
         const diaryDir = path.join(dshHome(), 'feiyu-diary');
@@ -546,8 +558,7 @@ export function createPanelRoutes(deps) {
     kind: 'exact',
     path: `${panelBase}/review`,
     handler: async (req, res) => {
-      if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-      if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: '只支持 GET' });
+      if (!allow(req, res, 'GET')) return;
       try {
         const params = new URL(String(req.url ?? ''), 'http://localhost').searchParams;
         const days = Math.min(Math.max(Number(params.get('days')) || 7, 1), 60);
@@ -571,7 +582,7 @@ export function createPanelRoutes(deps) {
     kind: 'exact',
     path: `${panelBase}/cloud`,
     handler: async (req, res) => {
-      if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
+      if (!allow(req, res)) return;
       const wd = normalizeWebdavConfig(cfgNow());
       if (req.method === 'GET') {
         let remote = null;
@@ -602,7 +613,7 @@ export function createPanelRoutes(deps) {
           remote: Array.isArray(remote) ? remote : remote,
         });
       }
-      if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
+      if (!allow(req, res, 'POST')) return;
       try {
         await loadPromise;
         const result = await cloudBackupOnce({ reason: 'panel' });
@@ -623,8 +634,7 @@ export function createPanelRoutes(deps) {
     kind: 'exact',
     path: `${panelBase}/cloud/test`,
     handler: async (req, res) => {
-      if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-      if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
+      if (!allow(req, res, 'POST')) return;
       try {
         const text = await readPanelTextBody(req, { limit: 64 * 1024 });
         const patch = JSON.parse(text || '{}');
@@ -656,7 +666,7 @@ export function createPanelRoutes(deps) {
       kind: 'exact',
       path: `${panelBase}/cloud/config-backup`,
       handler: async (req, res) => {
-        if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
+        if (!allow(req, res)) return;
         const wd = normalizeWebdavConfig(cfgNow());
         if (req.method === 'GET') {
           if (!wd.configured) return panelReply(res, 200, { ok: true, configured: false, files: [] });
@@ -667,7 +677,7 @@ export function createPanelRoutes(deps) {
             return panelReply(res, 400, { ok: false, error: explainWebdavError(err) });
           }
         }
-        if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
+        if (!allow(req, res, 'POST')) return;
         try {
           if (!wd.configured) throw new Error('WebDAV 还没配置：先把服务器地址、账号、密码填上');
           const payload = {
@@ -694,8 +704,7 @@ export function createPanelRoutes(deps) {
       kind: 'exact',
       path: `${panelBase}/cloud/config-restore`,
       handler: async (req, res) => {
-        if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-        if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
+        if (!allow(req, res, 'POST')) return;
         try {
           const text = await readPanelTextBody(req, { limit: 256 * 1024 });
           const body = JSON.parse(text || '{}');
@@ -767,8 +776,7 @@ export function createPanelRoutes(deps) {
     kind: 'exact',
     path: `${panelBase}/cloud/backups`,
     handler: async (req, res) => {
-      if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-      if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: 'method' });
+      if (!allow(req, res, 'GET')) return;
       const wd = normalizeWebdavConfig(cfgNow());
       if (!wd.configured) return panelReply(res, 200, { ok: true, configured: false, files: [] });
       try {
@@ -783,8 +791,7 @@ export function createPanelRoutes(deps) {
     kind: 'exact',
     path: `${panelBase}/cloud/restore`,
     handler: async (req, res) => {
-      if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-      if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
+      if (!allow(req, res, 'POST')) return;
       const confirm = /[?&]confirm=(?:1|true|yes)\b/i.test(String(req.url ?? ''));
       try {
         const text = await readPanelTextBody(req, { limit: 256 * 1024 });
@@ -819,8 +826,7 @@ export function createPanelRoutes(deps) {
     kind: 'exact',
     path: `${panelBase}/cloud/config`,
     handler: async (req, res) => {
-      if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
-      if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
+      if (!allow(req, res, 'POST')) return;
       try {
         const text = await readPanelTextBody(req, { limit: 64 * 1024 });
         const patch = JSON.parse(text || '{}');

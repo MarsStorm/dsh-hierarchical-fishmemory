@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import { listDiaryNames, listDiaryPaths, readJsonOrNull, readTextOrNull } from '../src/core/fsx.mjs';
-import { SUPPRESS_RE } from '../src/core/gate.mjs';
+import { SUPPRESS_RE } from '../src/core/judge.mjs';
 import { renderDiaryFile, renderDiaryMarkdown } from '../src/core/render-diary.mjs';
 
 const now = Date.parse('2026-11-05T00:00:00Z');

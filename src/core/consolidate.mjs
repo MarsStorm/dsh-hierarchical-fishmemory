@@ -11,7 +11,7 @@
  */
 
 import { scrub } from './privacy.mjs';
-import { TZ_OFFSET_MS } from './timeline.mjs';
+import { dayKey } from './timeline.mjs';
 import { REINFORCE_RELIEF_MAX, reinforcementOf } from './feedback.mjs';
 import { errorText } from './errors.mjs';
 import { LIVE_KINDS } from './kinds.mjs';
@@ -53,6 +53,24 @@ export function similarity(a, b) {
   for (const g of A) if (B.has(g)) inter += 1;
   return inter / (A.size + B.size - inter);
 }
+
+/**
+ * 输出格式只写一份。
+ *
+ * 2026-11-17 合并：`CONSOLIDATION_SYSTEM` 和 `RETRY_SYSTEM` 各抄了一遍这段
+ * schema，连字段顺序都一模一样。改一处忘一处，模型就会照着一个已经不存在的
+ * 格式写 —— 而这种错不会报错，只会被白名单静默丢掉（1.25.1 就是栽在这上面）。
+ */
+const OUTPUT_SCHEMA = `{
+  "skip": boolean,
+  "diary": {
+    "text": string,
+    "kind": "failure" | "win" | "chat" | "disclosure" | "grievance",
+    "salience": number,
+    "resolved": boolean | null
+  },
+  "relationship": { "nickname": string | null, "familiarityDelta": number }
+}`;
 
 export const CONSOLIDATION_SYSTEM = `你是一个日记作者。你的工作是把一段对话写成日记。
 
@@ -363,16 +381,7 @@ export const RETRY_SYSTEM = `上一次你写过一段日记，但格式不合格
 - 如果它其实表示"这轮没什么可记的"，输出 {"skip":true}。
 - 只输出 JSON 本身。不要解释，不要 markdown 围栏。
 
-{
-  "skip": boolean,
-  "diary": {
-    "text": string,
-    "kind": "failure" | "win" | "chat" | "disclosure" | "grievance",
-    "salience": number,
-    "resolved": boolean | null
-  },
-  "relationship": { "nickname": string | null, "familiarityDelta": number }
-}
+${OUTPUT_SCHEMA}
 
 text 一条 200 字以内，用「我」写，只写发生了什么，不写心情。
 不记可识别细节：真名、地址、电话、金额都不要。`;
@@ -509,10 +518,8 @@ function clamp(v, lo, hi, fallback) {
 }
 
 /** 生成一个不容易撞的日记 id */
-/** 他那边的 YYYY-MM-DD（本机是 UTC，直接 toISOString 会差一天） */
-export function hisDate(ts) {
-  return new Date(ts + TZ_OFFSET_MS).toISOString().slice(0, 10);
-}
+/** 他那边的 YYYY-MM-DD —— `timeline.dayKey` 的别名，别再算第二遍。 */
+export const hisDate = dayKey;
 
 export function makeDiaryId(now, existing) {
   const ymd = hisDate(now).replace(/-/g, '');

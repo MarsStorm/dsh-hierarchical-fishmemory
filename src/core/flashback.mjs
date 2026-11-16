@@ -27,6 +27,7 @@
  */
 
 import { pickBySeed, seedOfDay } from './voice.mjs';
+import { daysBetweenDates } from './timeline.mjs';
 
 /** 抽过哪几天的状态文件（放在数据目录里，跟 dates.json 同级）。 */
 export const FLASHBACK_FILE = 'flashback.json';
@@ -50,15 +51,13 @@ const EXCERPT_MAX = 180;
 /** 至少隔几天才算「回忆」；昨天的事不叫忽然想起。 */
 const MIN_AGE_DAYS = 2;
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** 两个 `YYYY-MM-DD` 相差几个自然日（later − earlier）。 */
-export function daysBetween(earlier, later) {
-  const a = Date.parse(`${earlier}T00:00:00Z`);
-  const b = Date.parse(`${later}T00:00:00Z`);
-  if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
-  return Math.round((b - a) / DAY_MS);
-}
+/**
+ * 两个 `YYYY-MM-DD` 差几天。名字留着（测试和调用点都用它），
+ * 实现只剩 timeline 那一份 —— 2026-11-17 收拢。
+ */
+export const daysBetween = daysBetweenDates;
 
 /** FNV-1a 32 位散列：把「今天」变成一个稳定的挑选种子。 */
 export function seedOf(text) {

@@ -1,3 +1,56 @@
+## 1.35.0 — 2026-11-17
+
+**「今天加的功能有点多，你把整个插件从头到尾检查一遍」——一次体检，顺手抓到一个真漏。**
+
+### 抓到的那个漏：`/state` 和 `/forget` 不查同源
+
+20 条面板路由，每条开头四行一样的守卫，手抄了 18 遍。抄漏一遍不报错，
+只是安静地少一道门 —— 而抄漏的正好是 `/forget`，一个**会删掉一条记忆**的 POST。
+现在守卫收成 `deny()` / `allow()` 两个函数，每条路由一行，并加了一条测试替它站岗：
+把 `isSameOrigin` 设成 `false`，20 条路由 × GET/POST 一条都不许回 200。
+
+**这就是"抄 18 遍"的真正代价**：不是难看，是漏一遍没人知道。
+
+### 合并掉的重复
+
+| 原来 | 现在 | 为什么 |
+| --- | --- | --- |
+| `timeline` / `anniversary` / `render-diary` / `flashback` / `consolidate` 各算一遍 +8 时区 | 全走 `timeline.dayKey` | 日期只有一个时区，这件事已经错过两次 |
+| `anniversary` / `flashback` / `quotes` / host 各写一遍"两个日期差几天" | `timeline.daysBetweenDates` | 同一个查询在两处一个命中一个落空，没人查得出来 |
+| `quotes` 与 host 各写一遍"这条在不在这个时间段" | `timeline.inDateRange` | 同上 |
+| `entryTime` 三个同名函数（一个给毫秒、一个给月份、一个给字符串） | 只剩 `timeline.entryTime`，另两个改名 `entryStamp` / `rawStamp` | 同名不同义，改错了编译器不管 |
+| `loops.renderLoops` + `renderLoopsAnnotated` 两份一模一样的正文 | 一份带 `annotate` 选项，另一个成薄壳 | 逐字重复的渲染函数 |
+| `gate.mjs`（整份只剩一条正则 + 一段重复说明） | 并进 `judge.mjs` | 一个文件只为一条正则 |
+| `conflicts.checkLayers` + `stats.collectLayerReport` 两套层间体检 | 只留 `collectLayerReport` | 同一个档案，面板说"没打架"、工具说"有 3 处打架" |
+| `consolidate.mjs` 里两份 JSON schema 文本 | `OUTPUT_SCHEMA` 常量 | 改一处忘一处，模型就会照旧格式答 |
+| 删死导出 `ledger.textLength`、`similarity.similarText` | 删 | 全仓零引用 |
+
+### 层间体检原来在报假冲突（比不报更坏）
+
+真实档案 1128 行，改前报「重复 1 处」= `| --- | --- |`（markdown 表格分隔行），
+「打架 2 处」= 插件/DSHBox/node 各是各的版本号、SSH 端口/临时实例端口/备份端口
+各是各的端口。**不同东西的取值当然不同。**
+
+- 加了 `isNoiseLine`：空行、表格分隔行、代码围栏、纯符号不参与比较。
+- port / version 的**主语改成必填**，按「主语 + 类别」分组；没主语的不参与比较。
+  代价是单纯一句「端口 3080」不再被拿来比较 —— **宁可不报，也不要报一堆让人学会无视的假冲突**。
+- 改后真实档案：重复 0、打架 0。
+
+### 刻意没合并的
+
+- `renderSection` 有 4 份（小纸条 / 教训 / 未说完 / 零碎记忆），语义各不相同。
+- `similarity`（Dice）与 `diffcheck.similarity`（Jaccard + 归一化）：**换实现等于换判据**，
+  阈值要重调，收益不抵风险。已在 `similarity.mjs` 头注释里写明。
+- `oneLine` / `whenLabel` / `today` 这些同名小工具各在各的模块里：抄一行不值得引一次 import。
+
+### 体检结论（没有改动的部分）
+
+- **37 个配置项，零个没人读**。
+- **无未用 import**、**无死导出**（重扫都为空）。
+- `src/host/index.mjs` 4809 → 4781 行，`panel-routes.mjs` 877 → 883（守卫收拢省了行，
+  补注释又花回去）。
+- 测试 547 → **553**。
+
 ## 1.34.0 — 2026-11-17
 
 **「设置界面有点太简陋了，功能分布也有点杂」——把设置页重排一遍。**

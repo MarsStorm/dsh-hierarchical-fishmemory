@@ -51,10 +51,6 @@ export function digestOf(text) {
   return createHash('sha256').update(canonical(text), 'utf8').digest('hex');
 }
 
-export function textLength(text) {
-  return canonical(text).length;
-}
-
 /**
  * 读账本。同一个 id 多次出现时以**最后一条**为准。
  *

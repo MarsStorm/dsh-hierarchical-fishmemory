@@ -35,8 +35,3 @@ export function dice(a, b) {
   for (const t of a) if (b.has(t)) shared += 1;
   return (2 * shared) / (a.size + b.size);
 }
-
-/** 两段文本的相似度（一步到位，省得每个调用方自己先切再算）。 */
-export function similarText(a, b) {
-  return dice(tokenSet(a), tokenSet(b));
-}

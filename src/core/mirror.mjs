@@ -37,7 +37,7 @@ import { join } from 'node:path';
 
 import { readJsonlOrEmpty } from './fsx.mjs';
 import { clip } from './text.mjs';
-import { dayKey, startOfDay, TZ_OFFSET_MS } from './timeline.mjs';
+import { dayKey, entryTime, startOfDay, TZ_OFFSET_MS } from './timeline.mjs';
 import { STICKY_FILE, readNotesSync } from './sticky.mjs';
 import { FEELINGS_MD } from './files.mjs';
 
@@ -58,14 +58,6 @@ function dayStart(ts) {
 export { dayKey };
 
 
-/** 条目的时刻：优先 created_at，其次 at，最后用 date 字段补一个中午。 */
-function entryTime(entry) {
-  const n = Number(entry?.created_at ?? entry?.at);
-  if (Number.isFinite(n) && n > 0) return n;
-  const d = String(entry?.date ?? '');
-  const t = Date.parse(`${d}T12:00:00+08:00`);
-  return Number.isFinite(t) ? t : 0;
-}
 
 /** 日记正文里用到的工具/文件线索，抽几个词当"今天在忙什么"。 */
 const BUSY_RE = /([\w./-]+\.(?:mjs|js|json|jsonl|md|yml|yaml|py|sh|ts))|(下载|重启|安装|卸载|修复|升级|推送|部署|备份|还原|测试|压缩|删|验证)/g;

@@ -127,6 +127,33 @@ test('每条路由都调一次：不许出现「xxx is not defined」', async ()
   assert.deepEqual(missing, [], `有路由引用了没声明也没传进来的变量：\n${missing.join('\n')}`);
 });
 
+// 每一条路由都必须先查同源。
+//
+// 2026-11-17 抓到两个漏的：`/state` 和 `/forget` 只查了方法、没查同源 ——
+// 其中 `/forget` 是会删掉一条记忆的 POST。那四行守卫原来是手抄 18 遍的，
+// 抄漏一遍不会报错，只会安静地少一道门。现在收成一个 `allow()`，
+// 这条测试替它站岗：关掉同源，**一条都不许回 200**。
+test('每条路由都查同源：isSameOrigin 为 false 时一律 403', async () => {
+  const base = deps();
+  const routes = createPanelRoutes({
+    ...base,
+    isSameOrigin: () => false,
+    panelReply: (res, status, body) => {
+      res.statusCode = status;
+      res.replies.push({ status, body });
+      res.writableEnded = true;
+      return body;
+    },
+  });
+  for (const route of routes) {
+    for (const method of ['GET', 'POST']) {
+      const res = fakeRes();
+      await route.handler({ method, url: `${route.path}?confirm=1`, headers: {} }, res);
+      assert.equal(res.statusCode, 403, `${route.path} ${method} 没查同源，回了 ${res.statusCode}`);
+    }
+  }
+});
+
 // guardHandler：抛出去的错误必须变成一句能读的话，不能是空身子。
 test('guardHandler：抛错时回 500 + 一句人话（不是空 400）', async () => {
   const warns = [];

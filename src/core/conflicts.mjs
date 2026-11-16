@@ -11,6 +11,21 @@
 
 const BULLET = /^[-*+]\s+/;
 
+/**
+ * 不参与比较的行：markdown 表格的分隔行、代码围栏、纯符号。
+ *
+ * 2026-11-17 加。真实档案里 `| --- | --- |` 出现了十几次，全被当成"同一句写了
+ * 两遍"报出来 —— 一个报得太多的检查，等于没有检查。
+ */
+const NOISE_LINE = /^\s*(?:\|?[\s:|-]*-{3,}[\s:|-]*\|?|```.*|~~~.*)$/u;
+
+function isNoiseLine(raw) {
+  const text = String(raw ?? '').trim();
+  if (text === '') return true;
+  if (NOISE_LINE.test(text)) return true;
+  return !/[\p{L}\p{N}]/u.test(text);
+}
+
 /** 去掉列表符号、压空白、统一标点，用于"是不是同一句"的比较。 */
 export function normalizeLine(line) {
   return String(line ?? '')
@@ -31,6 +46,7 @@ export function findDuplicates(layers, { minChars = 12 } = {}) {
   const hits = [];
   for (const layer of layers ?? []) {
     for (const raw of layer?.lines ?? []) {
+      if (isNoiseLine(raw)) continue;
       const text = normalizeLine(raw);
       if ([...text].length < minChars) continue;
       const prev = seen.get(text);
@@ -44,11 +60,32 @@ export function findDuplicates(layers, { minChars = 12 } = {}) {
   return hits;
 }
 
-/** 一句话里能当"同一个主体"的锚：路径、版本号、端口这类带值的短标签。 */
+/**
+ * 一句话里能当"同一个主体"的锚：版本号、端口这类带值的短标签。
+ *
+ * **主语是必填的**（2026-11-17 改）。原来不要主语，于是 env-ops 里
+ * 「GitHub SSH 端口 2026」「临时实例 端口 3099」「备份 端口 48888」
+ * 被算成"端口打架"，版本号那边更糟：插件 1.9.9、DSHBox 1.5.4、node 4.1
+ * 全被塞进同一条"version 打架"里。**不同东西的取值当然不同。**
+ *
+ * 现在按「主语 + 类别」分组：主语不同就各算各的。代价是单纯一句
+ * 「端口 3080」（没有主语）不再参与比较 —— 宁可不报，也不要报一堆
+ * 让人学会无视的假冲突。
+ */
 const PAIRS = [
-  { kind: 'port', re: /(端口|port)[^\d]{0,6}?(\d{2,5})/iu },
-  { kind: 'version', re: /(?:版本|version|v)\s*(?:是|为|升到|:|：|=)?\s*v?(\d+\.\d+(?:\.\d+)?)/iu },
-  { kind: 'path', re: /((?:~|\/)[\w./-]{3,})/u },
+  {
+    kind: 'port',
+    re: /([\p{Script=Han}]{2,8}|[A-Za-z][\w-]{1,15})\s*(?:的)?\s*(?:端口|port)[^\d]{0,6}?(\d{2,5})/iu,
+    subject: 1,
+    value: 2,
+  },
+  {
+    kind: 'version',
+    re: /([\p{Script=Han}]{2,10}|[A-Za-z][\w.-]{1,20})\s*(?:的)?\s*(?:版本号|版本|version)[^\d]{0,8}?v?(\d+\.\d+(?:\.\d+)*)/iu,
+    subject: 1,
+    value: 2,
+  },
+  { kind: 'path', re: /((?:~|\/)[\w./-]{3,})/u, subject: 0, value: 1 },
 ];
 
 /**
@@ -62,47 +99,49 @@ export function findValueConflicts(layers) {
   const facts = [];
   for (const layer of layers ?? []) {
     for (const raw of layer?.lines ?? []) {
-      for (const { kind, re } of PAIRS) {
+      if (isNoiseLine(raw)) continue;
+      const flat = normalizeLine(raw);
+      for (const { kind, re, subject, value } of PAIRS) {
         const m = re.exec(String(raw ?? ''));
         if (!m) continue;
-        const value = m[2] ?? m[1];
-        facts.push({ kind, value: String(value), layer: layer.name, line: normalizeLine(raw) });
+        // 没主语的不参与比较：那正是"端口 2026 vs 3099"这类假冲突的来源。
+        const who = String(m[subject] ?? '').trim().toLowerCase();
+        if (kind !== 'path' && who === '') continue;
+        facts.push({ kind, who, value: String(m[value]), layer: layer.name, line: flat });
       }
     }
   }
   const out = [];
-  const byKind = new Map();
+  const byKey = new Map();
   for (const fact of facts) {
-    if (!byKind.has(fact.kind)) byKind.set(fact.kind, []);
-    byKind.get(fact.kind).push(fact);
+    const key = `${fact.kind}::${fact.who}`;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(fact);
   }
-  for (const [kind, list] of byKind) {
+  for (const [key, list] of byKey) {
+    const kind = list[0].kind;
     if (kind === 'path') continue; // 路径不同是正常的，不报
     const values = [...new Set(list.map((f) => f.value))];
     if (values.length > 1) {
-      out.push({ kind, values, lines: list.map((f) => ({ layer: f.layer, value: f.value, line: f.line })) });
+      out.push({
+        kind,
+        subject: list[0].who,
+        values,
+        lines: list.map((f) => ({ layer: f.layer, value: f.value, line: f.line })),
+      });
     }
   }
   return out;
 }
 
-/** 一次算完，给工具和体检页用。 */
-export function checkLayers({ core = '', topics = {}, handnote = '', shallow = [], feelings = '' } = {}) {
-  const splitLines = (text) => String(text ?? '').split('\n');
-  const layers = [
-    { name: '深层 core', lines: splitLines(core) },
-    { name: '人格手记', lines: splitLines(handnote) },
-    { name: '情感日记', lines: splitLines(feelings) },
-    { name: '浅层', lines: (shallow ?? []).map((e) => e?.text ?? '') },
-  ];
-  for (const [key, text] of Object.entries(topics ?? {})) {
-    layers.push({ name: `深层 ${key}`, lines: splitLines(text) });
-  }
-  const duplicates = findDuplicates(layers);
-  const conflicts = findValueConflicts(layers);
-  return {
-    checked: layers.reduce((n, l) => n + l.lines.filter((x) => normalizeLine(x) !== '').length, 0),
-    duplicates,
-    conflicts,
-  };
-}
+/**
+ * 层间体检只剩一份拼装逻辑：`stats.collectLayerReport`。
+ *
+ * 2026-11-17 删掉这里原来的 `checkLayers`。它和 `collectLayerReport` 算的是
+ * 同一件事，但拼的层不一样（它不认 sticky/lesson/pending）、对冲突的过滤也
+ * 不一样（它把"不同文件各写各的版本号"这种正常现象也报出来）。结果是同一个
+ * 档案，面板说"没打架"、`fish_layer_check` 说"有 3 处打架" —— 两个都是我，
+ * 谁对？这种问题不该靠读者猜。
+ *
+ * 这个文件现在只留两样纯函数：认重复、认取值打架。拼层是调用方的事。
+ */

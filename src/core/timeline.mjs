@@ -72,6 +72,60 @@ export function calendarDaysBetween(from, to) {
 }
 
 /**
+ * 两个 `YYYY-MM-DD` 差几天（later − earlier）。
+ *
+ * 2026-11-17 收拢：`anniversary.mjs` 和 `flashback.mjs` 各写了一份一模一样的，
+ * 连除的都是 `DAY_MS`。日期算法每多一份，就多一个改一处忘一处的地方 ——
+ * 8 小时时区那个坑我已经踩过四次了。
+ */
+export function daysBetweenDates(earlier, later) {
+  const a = Date.parse(`${String(earlier ?? '')}T00:00:00Z`);
+  const b = Date.parse(`${String(later ?? '')}T00:00:00Z`);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
+  return Math.round((b - a) / 86400000);
+}
+
+/**
+ * 落在 `since ~ until` 里吗（两个 `YYYY-MM-DD`，任一端留空表示不限）。
+ *
+ * 没写日期的条目在给了范围时算「不确定」，不算命中 —— 宁可少一条，
+ * 也别把别的日子混进来。
+ *
+ * 2026-11-17 抽出来：`quotes.mjs` 和 host 的 `fish_recall` 各写了一份
+ * 一模一样的四行判断。两份「日期范围」的语义一旦走偏，同一个查询在
+ * `fish_quote` 里命中、在 `fish_recall` 里落空，没人查得出来。
+ */
+export function inDateRange(day, since, until) {
+  const start = String(since ?? '').trim().slice(0, 10);
+  const end = String(until ?? '').trim().slice(0, 10);
+  if (!start && !end) return true;
+  const date = String(day ?? '').trim().slice(0, 10);
+  if (!date) return false;
+  if (start && date < start) return false;
+  if (end && date > end) return false;
+  return true;
+}
+
+/**
+ * 条目里那个「什么时候」的毫秒数。
+ *
+ * `created_at`（数字）优先；其次 `at`（ISO 或数字）；最后拿 `date` 补当天中午
+ * —— 补中午是为了让"只有日期"的旧条目在跨时区排序时不掉到前一天。
+ */
+export function entryTime(entry) {
+  const stamp = entry?.created_at ?? entry?.at;
+  const num = Number(stamp);
+  if (Number.isFinite(num) && num > 0) return num;
+  if (typeof stamp === 'string' && stamp !== '') {
+    const parsed = Date.parse(stamp.length === 10 ? `${stamp}T12:00:00+08:00` : stamp);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  const day = String(entry?.date ?? '');
+  const fallback = Date.parse(`${day}T12:00:00+08:00`);
+  return Number.isFinite(fallback) ? fallback : 0;
+}
+
+/**
  * 「最近的事」用的日期标签：今天 / 昨天 / 3 天前 / 10-05
  *
  * 语气偏准确 —— 这一栏是"我本来就知道的事"，说清楚是哪天很正常。

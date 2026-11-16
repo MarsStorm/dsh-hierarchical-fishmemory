@@ -16,15 +16,12 @@
  */
 
 import { kindLabel } from './kinds.mjs';
-import { TZ_OFFSET_MS, calendarDaysBetween } from './timeline.mjs';
+import { TZ_OFFSET_MS, calendarDaysBetween, dayKey } from './timeline.mjs';
 
 const pad = (n) => String(n).padStart(2, '0');
 
-/** 他那边的 YYYY-MM-DD（本机是 UTC，直接取本地日期会差一天） */
-function localDate(ts) {
-  const d = new Date(ts + TZ_OFFSET_MS);
-  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
-}
+/** 他那边的 YYYY-MM-DD —— 直接借 timeline.dayKey，别在这儿再算一遍。 */
+const localDate = dayKey;
 
 /** 他那边的 HH:MM */
 function localTime(ts) {

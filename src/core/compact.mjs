@@ -13,7 +13,15 @@ import { KIND_LABEL } from './kinds.mjs';
 export const DAY_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_OLDER_THAN_DAYS = 45;
 
-export function entryTime(entry) {
+/**
+ * 条目落在哪个月的依据（毫秒）。
+ *
+ * 2026-11-17 改名：原来也叫 `entryTime`，但语义和 `timeline.entryTime`
+ * **不一样** —— 这里只关心"哪个月"，所以 `date` 字段一律补 UTC 零点；
+ * 那个函数关心"什么时候"，补的是他那边的中午。同一个名字两种尺子，
+ * 迟早有人把一处当另一处用。名字分开，脚就不会踩错。
+ */
+export function entryStamp(entry) {
   const raw = String(entry?.at ?? entry?.date ?? '');
   if (!raw) return 0;
   const iso = raw.length === 10 ? `${raw}T00:00:00Z` : raw;
@@ -22,7 +30,7 @@ export function entryTime(entry) {
 }
 
 export function monthKeyOf(entry) {
-  const t = entryTime(entry);
+  const t = entryStamp(entry);
   if (!t) return '';
   return new Date(t).toISOString().slice(0, 7);
 }
@@ -34,7 +42,7 @@ export function pickCompactionCandidates(entries, options = {}) {
   const cutoff = now - days * DAY_MS;
   return (entries ?? []).filter((e) => {
     if (!e || e.compacted) return false;
-    const t = entryTime(e);
+    const t = entryStamp(e);
     return t > 0 && t < cutoff;
   });
 }
@@ -110,5 +118,5 @@ export function planCompaction(entries, options = {}) {
 /** 按 plan 组出「归档后」的条目数组：保留的 + 每条月度摘要。 */
 export function applyCompaction(plan) {
   const digests = (plan?.groups ?? []).map((g) => g.digest);
-  return [...(plan?.keep ?? []), ...digests].sort((a, b) => entryTime(a) - entryTime(b));
+  return [...(plan?.keep ?? []), ...digests].sort((a, b) => entryStamp(a) - entryStamp(b));
 }
