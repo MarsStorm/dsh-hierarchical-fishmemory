@@ -29,7 +29,13 @@ import { buildBook, buildYearBook } from '../core/export-md.mjs';
 import { FEELINGS_MD } from '../core/files.mjs';
 import { HANDNOTE_FILE } from '../core/handnote.mjs';
 import { LESSON_FILE } from '../core/lesson.mjs';
-import { collectLayerReport, collectReview, collectStatsFromDisk } from '../core/stats.mjs';
+import { LEDGER_FILE, ledgerReport } from '../core/ledger.mjs';
+import {
+  collectLayerReport,
+  collectReview,
+  collectStatsFromDisk,
+  readDiaryEntries,
+} from '../core/stats.mjs';
 import { STICKY_FILE } from '../core/sticky.mjs';
 import { TZ_OFFSET_MS } from '../core/timeline.mjs';
 import {
@@ -503,7 +509,30 @@ export function createPanelRoutes(deps) {
         const diaryDir = path.join(dshHome(), 'feiyu-diary');
         const stats = collectStatsFromDisk({ memoryRoot, diaryDir });
         const layers = collectLayerReport({ memoryRoot, diaryDir });
-        return panelReply(res, 200, { ok: true, ...stats, ...layers });
+        // 对账：账本 vs 磁盘 vs **注入真正用的那份**。
+        //
+        // 第三个数只有面板才知道：注入读的是内存里的 archive，磁盘读的是
+        // 日志文件，两边平时一样，但「持久化失败」这种事不会报错 ——
+        // 于是我会看到一个数、他看到另一个数，谁都没错，就是不一样。
+        // 2026-11-16 那两份设计文档里都管这叫「一个事实源」，我这里是三条线。
+        let recon = null;
+        try {
+          let memoryCount = null;
+          try {
+            const live = getArchive();
+            memoryCount = Array.isArray(live?.diary) ? live.diary.length : null;
+          } catch {
+            memoryCount = null;
+          }
+          recon = ledgerReport({
+            file: path.join(diaryDir, LEDGER_FILE),
+            entries: readDiaryEntries(diaryDir),
+            memoryCount,
+          });
+        } catch (err) {
+          recon = { ok: false, text: `对账失败：${errorText(err)}`, line: '账本=?', missing: [], rewritten: [] };
+        }
+        return panelReply(res, 200, { ok: true, ...stats, ...layers, recon });
       } catch (err) {
         return panelReply(res, 500, {
           ok: false,

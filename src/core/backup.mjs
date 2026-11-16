@@ -23,6 +23,7 @@ import { HANDNOTE_FILE } from "./handnote.mjs";
 import { SHALLOW_FILE } from "./shallow.mjs";
 import { STICKY_FILE, STICKY_ARCHIVE_FILE } from "./sticky.mjs";
 import { LESSON_FILE } from "./lesson.mjs";
+import { LEDGER_FILE } from "./ledger.mjs";
 import { UNFINISHED_FILE } from "./unfinished.mjs";
 
 /** 备份文件的格式标签，写在 `backup.meta.format` 里。 */
@@ -120,6 +121,8 @@ export function collectBackup(options = {}) {
     sticky: diaryDir ? readText(join(diaryDir, STICKY_FILE)) ?? "" : "",
     stickyArchive: diaryDir ? readText(join(diaryDir, STICKY_ARCHIVE_FILE)) ?? "" : "",
     lesson: diaryDir ? readText(join(diaryDir, LESSON_FILE)) ?? "" : "",
+    // 账本要一起带走：换设备之后第一次对账，靠它证明「搬过来的就是原来那些」。
+    ledger: diaryDir ? readText(join(diaryDir, LEDGER_FILE)) ?? "" : "",
     unfinished: diaryDir ? readJsonDefault(join(diaryDir, UNFINISHED_FILE)) : null,
     shallow: shallowRaw ?? { version: 1, entries: [], expired: [] },
     archive: {
@@ -307,6 +310,10 @@ export function planRestore(backup, { memoryLayout, diaryDir, mode = "replace", 
     writes.push({ kind: "lesson", file: join(diaryDir, LESSON_FILE), content: backup.lesson });
   }
   if (merge) skipped.push({ kind: "lesson", reason: "合并模式下教训以本地为准" });
+  if (!merge && typeof backup?.ledger === "string" && backup.ledger !== "") {
+    writes.push({ kind: "ledger", file: join(diaryDir, LEDGER_FILE), content: backup.ledger });
+  }
+  if (merge) skipped.push({ kind: "ledger", reason: "合并模式下账本以本地为准（两本账混起来就对不上了）" });
   if (!merge && backup?.unfinished && Array.isArray(backup.unfinished.records)) {
     writes.push({
       kind: "unfinished",

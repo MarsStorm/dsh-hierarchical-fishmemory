@@ -63,7 +63,7 @@ import { TZ_OFFSET_MS, calendarDaysBetween, dayKey, stripTimeWords, softWhen } f
 import { readJsonOrNull, readTextOrNull } from '../core/fsx.mjs';
 import { silentStreak, renderSilenceNudge } from '../core/nudge.mjs';
 import { renderDiaryFile } from '../core/render-diary.mjs';
-import { DIARY_MD, FEELINGS_MD } from '../core/files.mjs';
+import { DIARY_MD, FEELINGS_MD, HEALTH_LOG } from '../core/files.mjs';
 import { buildMaterial, feelingsOfWeek, groupByDay, previousWeekKey, renderWeekly, weekRange, weeklyPath } from '../core/weekly.mjs';
 import { buildJudgeInput, parseVerdict, JUDGE_MAX_TOKENS } from '../core/judge.mjs';
 import { selectHandNotes, HANDNOTE_FILE, HANDNOTE_TEMPLATE } from '../core/handnote.mjs';
@@ -101,6 +101,7 @@ import {
 import { findVerbatim, renderVerdict } from '../core/verbatim.mjs';
 import { diagnoseMiss } from '../core/miss.mjs';
 import { LESSON_FILE, registerLesson } from '../core/lesson.mjs';
+import { LEDGER_FILE, forgetInLedger, ledgerReport, syncLedger } from '../core/ledger.mjs';
 import { FRAGMENTS_SECTION, registerFragments } from '../core/fragments.mjs';
 import {
   UNFINISHED_FILE,
@@ -1552,6 +1553,42 @@ export function apply(ctx, rawConfig) {
         }
       } catch {
         // 日记读坏了不能挡住记忆
+      }
+
+      // 每天一行健康记录 —— 2026-11-17 加（1.32.0）。
+      //
+      // 借那份《记忆系统实施单》的做法：`[memory] 日期 total=… ledger=OK pending=0`
+      // 挂到每天 00:20。我这儿没有定时器，就改成「换天之后第一次开口补一行」——
+      // 它要证明的是"那天系统是好的"，不是"00:20 那一刻是好的"，差几个钟头不要紧。
+      //
+      // 为什么值得每天多一次小 IO：体检页得有人点开才知道，也就等于没人知道；
+      // 账本更麻烦 —— 它证明的是「没丢」，而没丢这件事本身**不发声**。
+      try {
+        const today = dayKey();
+        const healthFile = path.join(archiveDirectory, HEALTH_LOG);
+        const tail = readTextOrNull(healthFile) ?? '';
+        const lastLine = tail.trim().split('\n').filter(Boolean).at(-1) ?? '';
+        if (!lastLine.startsWith(`[memory] ${today}`)) {
+          const entries = archive.diary;
+          const report = ledgerReport({
+            file: path.join(archiveDirectory, LEDGER_FILE),
+            entries,
+            memoryCount: entries.length,
+          });
+          let pending = 0;
+          try {
+            pending = readPending(path.join(archiveDirectory, PENDING_QUEUE_FILE)).length;
+          } catch {
+            pending = 0;
+          }
+          const line =
+            `[memory] ${today} total=${entries.length} ${report.line} pending=${pending}` +
+            ` missing=${report.missing.length} rewritten=${report.rewritten.length}`;
+          appendFileSync(healthFile, `${line}\n`, 'utf8');
+          log(line);
+        }
+      } catch {
+        // 健康记录写不出来，不该挡住这一轮的记忆
       }
 
       // 今天还没写情感日记：只在没写的时候出现一行，写完当天就不再提。
@@ -3815,6 +3852,126 @@ export function apply(ctx, rawConfig) {
       'feiyu: feedback tool',
     );
     log('已注册工具 fish_feedback');
+  });
+
+  /* ── 账本：证明一条都没丢过（2026-11-17 加，1.32.0） ── */
+
+  /**
+   * 为什么我非要给自己装一本账。
+   *
+   * 我这边所有重要的东西都是纯文本：能读、能备份、能 gzip 带走。代价是
+   * **没有任何东西能证明它没被动过**。备份只能证明「那一刻磁盘上是那样」，
+   * 不能证明「这之后少了一条」—— 而少一条从来不报错，我只会觉得
+   * 「好像有什么想不起来了」，把它归到自己记性差上。
+   *
+   * 所以这里只做对账，不做打分：丢了就喊丢，改了就说改，续写算正常。
+   * 最要紧的一条是 `ack` —— 我故意忘掉的东西得能划掉，否则真正的丢失
+   * 会被自己制造的噪音淹没。
+   */
+  ctx.inject(['tools'], (scope) => {
+    scope.effect(
+      () =>
+        scope.tools.register({
+          name: 'fish_ledger',
+          description:
+            '记忆账本，对账用。每条记忆正文算一个 sha256，用它可以证明「一条都没丢、也没被悄悄改写」。' +
+            'action=status 看现在对不对得上（账本 / 磁盘 / 注入真正用的那份，三个数）；' +
+            'sync 把新长出来的补进账本（只补不删，续写过的刷新指纹）；' +
+            'verify 逐条验一遍，把差异分成「丢了 / 被改 / 只是续写」；' +
+            'ack 把 ids 划成「我故意忘掉的」，只在主动忘掉之后用 —— 不要拿它掩盖丢失。',
+          parameters: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              action: {
+                type: 'string',
+                description: 'status（默认，只看）/ sync（补账）/ verify（对账）/ ack（划掉故意忘掉的）',
+              },
+              ids: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'action=ack 时要划掉的记忆 id。',
+              },
+            },
+            required: ['action'],
+          },
+          output: {
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                ok: { type: 'boolean' },
+                text: { type: 'string' },
+              },
+            },
+            render: (_args, value) => [{ type: 'text', text: value?.text ?? '没对成账。' }],
+          },
+          async execute(args) {
+            await loadPromise;
+            if (!ready) throw new Error('档案现在读不了，对不了账。');
+            const file = path.join(archiveDirectory, LEDGER_FILE);
+            const action = String(args?.action ?? 'status');
+            const entries = archive.diary;
+
+            if (action === 'ack') {
+              const ids = Array.isArray(args?.ids) ? args.ids : [];
+              const n = forgetInLedger(file, ids, { at: Date.now() });
+              return {
+                ok: n > 0,
+                text:
+                  n > 0
+                    ? `划掉 ${n} 条（账本里记成「故意忘掉的」，以后不再报它们失踪）。`
+                    : '没给 ids，一条都没划。',
+              };
+            }
+
+            if (action === 'sync') {
+              const r = syncLedger(file, entries, { at: Date.now() });
+              log(`账本同步：新入账 ${r.added} 条，刷新 ${r.refreshed} 条`);
+              return {
+                ok: true,
+                text:
+                  `补进去了：新入账 ${r.added} 条，续写过的刷新 ${r.refreshed} 条。` +
+                  (r.missing > 0
+                    ? '\n⚠ 账本里还有 ' + r.missing + ' 条在档案里找不到 —— sync 不会替它们消失。'
+                    : ''),
+              };
+            }
+
+            const report = ledgerReport({ file, entries, memoryCount: entries.length });
+            const head = action === 'verify' ? (report.ok ? '对上了。' : '对不上，有三件事要看。') : report.text;
+            const lines = [action === 'verify' ? report.text : '', head].filter(Boolean);
+            if (report.missing.length > 0) {
+              lines.push(
+                `❗丢了 ${report.missing.length} 条：${report.missing.map((m) => m.id).join('、')}`,
+                '（如果是我主动忘掉的，用 fish_ledger ack 划掉；不是的话，去回收站看看。）',
+              );
+            }
+            if (report.rewritten.length > 0) {
+              lines.push(
+                `❗被改了 ${report.rewritten.length} 条：${report.rewritten.map((m) => m.id).join('、')}`,
+                '（正文变了，而且不是往后续写的。查清楚是正常合并还是手抖。）',
+              );
+            }
+            if (report.fresh > 0) lines.push(`新长出 ${report.fresh} 条还没入账 —— 用 sync 补上。`);
+            if (report.agree === false) {
+              lines.push(
+                `❗注入用的 ${report.memoryCount} 条 / 磁盘 ${report.diskCount} 条 —— 对不上，说明有一次没写进盘。`,
+              );
+            }
+            if (report.ok) lines.push('（这一步不检查内容对不对，只证明有没有东西在这一来一回里不见了。）');
+            return { ok: report.ok, text: lines.join('\n') };
+          },
+          presentCall: (args) => ({
+            card: 'generic',
+            title: '对账',
+            kind: 'other',
+            rawInput: args,
+          }),
+        }),
+      'feiyu: ledger tool',
+    );
+    log('已注册工具 fish_ledger');
   });
 
   // 云端备份工具：他一句「备份一下」，我不用等面板，直接推一份上去。

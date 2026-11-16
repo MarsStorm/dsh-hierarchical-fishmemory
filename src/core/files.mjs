@@ -11,3 +11,6 @@ export const DIARY_MD = '日记.md';
 
 /** 我自己写的日记：当时的感受，插件不碰它的内容。 */
 export const FEELINGS_MD = '鱼的日子.md';
+
+/** 每天一行健康记录。给人一眼看见"那天系统是好的"，不用点开面板。 */
+export const HEALTH_LOG = '健康.log';

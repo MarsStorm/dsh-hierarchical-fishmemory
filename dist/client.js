@@ -2788,6 +2788,20 @@ window.__ModuleLoader__.load({
           h(KV, { label: '每轮注入估计', value: `约 ${d.estimate.injectedTokens} token` }),
         ),
 
+        // 对账：账本 / 磁盘 / 注入真正用的那份，三个数。
+        // 「一致」不值得喜庆，「对不上」必须刺眼 —— 这是唯一能证明
+        // 记忆没在这一来一回里少一条的东西。
+        d.recon
+          ? d.recon.ok
+            ? h(KV, { key: 'recon', label: '账本', value: d.recon.text })
+            : h(
+                'div',
+                { className: 'fs-warn', key: 'recon' },
+                h('b', null, '⚠ 对账没对平'),
+                h('div', { className: 'fs-note fs-note--tiny' }, d.recon.text),
+              )
+          : null,
+
         d.duplicates && d.duplicates.length
           ? h(
               'div',
