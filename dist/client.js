@@ -22,77 +22,262 @@ window.__ModuleLoader__.load({
     var h = react.createElement;
 
     // ── CSS (theme tokens) ────────────────────────────────────────────────
-    var CSS = ".__sm_root{max-width:640px;display:flex;flex-direction:column;gap:10px}" +
-      ".__sm_field{display:flex;flex-direction:column;gap:4px}" +
-      ".__sm_label{font-size:12px;font-weight:600;color:var(--dsw-alias-label-primary);display:flex;align-items:center;gap:6px}" +
-      ".__sm_hint{font-size:11px;color:var(--dsw-alias-label-tertiary)}" +
-      ".__sm_input{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);font:inherit;color:var(--dsw-alias-label-primary);border-radius:8px;padding:6px 10px;font-size:13px;box-sizing:border-box;width:100%}" +
-      ".__sm_textarea{min-height:160px;resize:vertical;font-family:ui-monospace,Consolas,monospace;font-size:12px;line-height:1.6}" +
-      ".__sm_row{display:flex;align-items:center;gap:8px}" +
-      ".__sm_check{accent-color:var(--dsw-alias-state-business-primary)}" +
-      ".__sm_actions{display:flex;gap:8px;align-items:center;margin-top:4px}" +
-      ".__sm_btn{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);border-radius:8px;padding:6px 14px;font:inherit;font-size:13px;cursor:pointer}" +
-      ".__sm_btn:hover:not(:disabled){border-color:var(--dsw-alias-state-business-primary)}" +
-      ".__sm_btn:disabled{opacity:.5;cursor:default}" +
-      ".__sm_btnPrimary{border-color:var(--dsw-alias-state-business-primary, #3964fe);background:var(--dsw-alias-state-business-primary, #3964fe);color:#fff}" +
-      ".__sm_btnDanger{border-color:var(--dsw-alias-state-error-primary, #f85149);color:var(--dsw-alias-state-error-primary, #f85149)}" +
-      ".__sm_status{font-size:12px;color:var(--dsw-alias-label-tertiary)}" +
-      ".__sm_error{font-size:12px;color:var(--dsw-alias-state-error-primary)}" +
-      ".__sm_unavailable{font-size:13px;color:var(--dsw-alias-label-tertiary)}" +
-      ".__sm_group{border:1px solid var(--dsw-alias-border-l2);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px}" +
-      ".__sm_cardList{display:flex;flex-direction:column;gap:6px}" +
-      ".__sm_cardRow{display:flex;align-items:center;gap:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:6px 10px}" +
-      ".__sm_cardName{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}" +
-      ".__sm_cardPreview{font-size:11px;color:var(--dsw-alias-label-tertiary);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}" +
-      ".__sm_badge{border:1px solid var(--dsw-alias-state-business-primary);color:var(--dsw-alias-state-business-primary);border-radius:999px;padding:0 8px;font-size:10px;white-space:nowrap}" +
-      ".__sm_switch{display:inline-flex;align-items:center;gap:6px;font-size:12px;margin-right:8px}" +
-      ".__sm_switchLabel{color:var(--dsw-alias-label-tertiary);white-space:nowrap}" +
-      ".__sm_switchSelect{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);border-radius:8px;padding:3px 6px;font:inherit;font-size:12px;max-width:180px}";
-    // Scoped flat controls retain native keyboard and form behavior.
-    CSS += `
-.dsh-flat.__sm_root{width:100%;max-width:720px;gap:14px;font-size:13px;line-height:1.65;color:var(--dsw-alias-label-primary);--flat-accent:var(--dsw-alias-state-business-primary,#3964fe);--flat-border:var(--dsw-alias-border-l2,#dce2eb)}
+    // ── CSS ───────────────────────────────────────────────────────────────
+    //
+    // 2026-11-17 重排。原来这些规则是一条条字符串拼的，只有「能用」的水准：
+    // 卡片没有层次、开关和说明挤在一行、输入框和按钮几乎一样高。这次换成
+    // 一段模板字符串，颜色全走 --dsw-alias-* 并带兜底值，另外加几个本地的
+    // `--sm-*` 变量（圆角、阴影、分隔线），这样宿主换肤时不用改样式表。
+    //
+    // 一个刻意的选择：**不引入任何图标库**。设置页只需要三个小图标（人设卡、
+    // 记忆、云），用内联 SVG 画在 `__sm_orb` 里就够了。
+    var CSS = `
+.dsh-flat.__sm_root{
+  width:100%;max-width:760px;display:flex;flex-direction:column;gap:16px;
+  font-size:13px;line-height:1.65;color:var(--dsw-alias-label-primary);
+  --sm-accent:var(--dsw-alias-state-business-primary,#3964fe);
+  /* 不用 color-mix：Android System WebView 版本不可控，Chromium 111 以下
+     会把整条声明丢掉，渐变里的方块就变成透明的了。宁可手写 rgba。 */
+  --sm-accent-soft:rgba(57,100,254,.10);
+  --sm-accent-line:rgba(57,100,254,.28);
+  --sm-err:var(--dsw-alias-state-error-primary,#f85149);
+  --sm-t1:var(--dsw-alias-label-primary,#1b1f26);
+  --sm-t2:var(--dsw-alias-label-secondary,#5a6472);
+  --sm-t3:var(--dsw-alias-label-tertiary,#8a93a2);
+  --sm-l1:var(--dsw-alias-bg-layer-1,#ffffff);
+  --sm-l2:var(--dsw-alias-bg-layer-2,#f6f8fa);
+  --sm-l3:var(--dsw-alias-bg-layer-3,#ffffff);
+  --sm-line:var(--dsw-alias-border-l2,#e3e8ef);
+  --sm-line-soft:var(--dsw-alias-separator-primary,#eef1f5);
+  --sm-radius:14px;
+  --sm-shadow:0 1px 2px rgba(16,24,40,.04),0 8px 24px -18px rgba(16,24,40,.35);
+}
 .dsh-flat.__sm_root *{box-sizing:border-box;min-width:0}
 .dsh-flat.__sm_root p{margin:0}
-.dsh-flat.__sm_root label[class$="_field"]{gap:7px}
-.dsh-flat.__sm_root [class$="_label"]{font-size:13px;font-weight:500}
-.dsh-flat.__sm_root [class$="_hint"]{font-size:12px;line-height:1.65}
-.dsh-flat.__sm_root input:not([type=checkbox]),.dsh-flat.__sm_root select,.dsh-flat.__sm_root textarea{width:100%;border:1px solid var(--flat-border);border-radius:6px;background:var(--dsw-alias-bg-layer-3);color:inherit;font:inherit;padding:9px 12px;min-height:40px;box-shadow:none;transition:border-color .15s}
-.dsh-flat.__sm_root input:hover:not(:disabled),.dsh-flat.__sm_root select:hover:not(:disabled),.dsh-flat.__sm_root textarea:hover:not(:disabled){border-color:var(--dsw-alias-label-tertiary)}
-.dsh-flat.__sm_root select{appearance:none;padding-right:34px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='m2 2 4 4 4-4' fill='none' stroke='%23778091' stroke-width='1.5'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center}
-.dsh-flat.__sm_root input[type=checkbox]{appearance:none;flex:none;width:30px;height:18px;margin:0;border:1px solid var(--flat-border);border-radius:12px;background:var(--dsw-alias-bg-layer-2);position:relative;cursor:pointer;transition:background .15s,border-color .15s}
-.dsh-flat.__sm_root input[type=checkbox]::before{content:"";position:absolute;left:2px;top:2px;width:12px;height:12px;border-radius:50%;background:var(--dsw-alias-label-secondary);transition:transform .15s}
-.dsh-flat.__sm_root input[type=checkbox]:checked{background:var(--flat-accent);border-color:var(--flat-accent)}
-.dsh-flat.__sm_root input[type=checkbox]:checked::before{transform:translateX(12px);background:#fff}
-.dsh-flat.__sm_root :is(input,select,textarea,button,summary,a):focus-visible{outline:2px solid var(--flat-accent);outline-offset:3px}
-.dsh-flat.__sm_root :is(input,select,textarea,button):disabled{opacity:.5;cursor:default}
-.dsh-flat.__sm_root [class$="_actions"]{flex-wrap:wrap;gap:10px;margin-top:4px;padding-top:16px;border-top:1px solid var(--flat-border)}
-.dsh-flat.__sm_root .__sm_group{border:0;border-top:1px solid var(--flat-border);border-radius:0;padding:20px 0 0;gap:14px}
-.dsh-flat.__sm_root .__sm_cardRow{flex-wrap:wrap;border:0;border-bottom:1px solid var(--flat-border);border-radius:0;padding:10px 0;background:none}
-.dsh-flat.__sm_root .__sm_cardPreview{flex-basis:100%;order:2}
-.dsh-flat.__sm_root .__sm_textarea{font-family:ui-monospace,Consolas,monospace;line-height:1.7;min-height:180px;resize:vertical}
-@media(max-width:480px){.dsh-flat.__sm_root{gap:16px}.dsh-flat.__sm_root .__sm_cardRow{gap:8px}}
-@media(prefers-reduced-motion:reduce){.dsh-flat.__sm_root *,.dsh-flat.__sm_root input[type=checkbox]::before{transition:none}}
-.dsh-flat.__sm_root button{border-radius:6px;min-height:34px;padding:7px 14px;font:inherit;font-size:12px;box-shadow:none}
-.dsh-flat.__sm_root :is(h2,h3){margin:0;font-size:14px;font-weight:600}
-.dsh-flat.__sm_root .__sm_head{display:flex;flex-direction:column;gap:5px;padding-bottom:2px}
-.dsh-flat.__sm_root .__sm_title{display:flex;align-items:center;gap:8px;font-size:16px;font-weight:600;letter-spacing:-.01em}
-.dsh-flat.__sm_root .__sm_tabs{display:flex;gap:2px;border-bottom:1px solid var(--flat-border);margin-top:2px}
-.dsh-flat.__sm_root .__sm_tab{appearance:none;border:0;border-bottom:2px solid transparent;border-radius:0;background:none;box-shadow:none;min-height:0;margin-bottom:-1px;padding:8px 12px 9px;font:inherit;font-size:13px;color:var(--dsw-alias-label-tertiary);cursor:pointer}
-.dsh-flat.__sm_root .__sm_tab:hover{color:var(--dsw-alias-label-primary)}
-.dsh-flat.__sm_root .__sm_tab[aria-selected="true"]{color:var(--dsw-alias-label-primary);font-weight:600;border-bottom-color:var(--flat-accent)}
-.dsh-flat.__sm_root .__sm_panel{display:flex;flex-direction:column;gap:14px;padding-top:4px}
-.dsh-flat.__sm_root .__sm_fieldGroup{display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--dsw-alias-separator-primary);padding-top:8px}
+.dsh-flat.__sm_root :is(input,select,textarea,button,summary,a):focus-visible{outline:2px solid var(--sm-accent);outline-offset:2px}
+.dsh-flat.__sm_root :is(input,select,textarea,button):disabled{opacity:.55;cursor:default}
+
+/* ── 页头：一块带渐变的 hero，把「这是哪一页」说清楚 ─────────────── */
+.dsh-flat.__sm_root .__sm_head{
+  position:relative;display:flex;flex-direction:column;gap:10px;
+  padding:18px 20px 16px;border:1px solid var(--sm-line);border-radius:var(--sm-radius);
+  background:
+    radial-gradient(120% 140% at 0% 0%,rgba(57,100,254,.09),transparent 58%),
+    var(--sm-l1);
+  box-shadow:var(--sm-shadow);
+}
+.dsh-flat.__sm_root .__sm_titleRow{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.dsh-flat.__sm_root .__sm_orb{
+  width:38px;height:38px;flex:none;border-radius:12px;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(140deg,var(--sm-accent),#7c5cff);
+  box-shadow:0 6px 16px -8px rgba(57,100,254,.55);
+  color:#fff;
+}
+.dsh-flat.__sm_root .__sm_title{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  font-size:17px;font-weight:650;letter-spacing:-.01em;color:var(--sm-t1);margin:0;
+}
+.dsh-flat.__sm_root .__sm_sub{font-size:12.5px;line-height:1.7;color:var(--sm-t2);max-width:56ch}
+.dsh-flat.__sm_root .__sm_facts{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:2px}
+.dsh-flat.__sm_root .__sm_fact{
+  display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:999px;
+  border:1px solid var(--sm-line);background:var(--sm-l2);
+  font-size:11.5px;color:var(--sm-t2);white-space:nowrap;
+}
+.dsh-flat.__sm_root .__sm_fact b{font-weight:600;color:var(--sm-t1)}
+
+/* ── 页签：药丸式分段控件 ───────────────────────────────────────────── */
+.dsh-flat.__sm_root .__sm_tabs{
+  display:inline-flex;gap:2px;align-self:flex-start;
+  padding:3px;border:1px solid var(--sm-line);border-radius:999px;background:var(--sm-l2);
+}
+.dsh-flat.__sm_root .__sm_tab{
+  appearance:none;border:0;background:none;box-shadow:none;cursor:pointer;
+  min-height:0;margin:0;padding:7px 16px;border-radius:999px;
+  font:inherit;font-size:12.5px;font-weight:500;color:var(--sm-t2);
+  transition:background .16s ease,color .16s ease,box-shadow .16s ease;
+}
+.dsh-flat.__sm_root .__sm_tab:hover{color:var(--sm-t1);background:rgba(16,24,40,.05)}
+.dsh-flat.__sm_root .__sm_tab[aria-selected="true"]{
+  color:var(--sm-t1);font-weight:600;background:var(--sm-l1);
+  box-shadow:0 1px 2px rgba(16,24,40,.10),0 4px 12px -8px rgba(16,24,40,.5);
+}
+.dsh-flat.__sm_root .__sm_panel{display:flex;flex-direction:column;gap:14px}
+
+/* ── 卡片（设置块） ─────────────────────────────────────────────────── */
+.dsh-flat.__sm_root .__sm_group{
+  display:flex;flex-direction:column;gap:12px;
+  padding:16px 18px 18px;border:1px solid var(--sm-line);border-radius:var(--sm-radius);
+  background:var(--sm-l1);box-shadow:var(--sm-shadow);
+}
+.dsh-flat.__sm_root .__sm_groupTitle{
+  display:flex;flex-direction:column;gap:3px;
+  padding-bottom:10px;border-bottom:1px solid var(--sm-line-soft);
+}
+.dsh-flat.__sm_root .__sm_groupTitle>span:first-child{
+  font-size:13.5px;font-weight:650;letter-spacing:-.005em;color:var(--sm-t1);
+}
+.dsh-flat.__sm_root .__sm_groupTitle .__sm_chip{
+  display:inline-flex;align-items:center;gap:4px;padding:1px 8px;border-radius:999px;
+  font-size:11px;font-weight:500;color:var(--sm-accent);
+  background:var(--sm-accent-soft);border:1px solid var(--sm-accent-line);
+}
+
+/* ── 字段 ───────────────────────────────────────────────────────────── */
+.dsh-flat.__sm_root .__sm_field{display:flex;flex-direction:column;gap:6px}
+.dsh-flat.__sm_root .__sm_label{font-size:12.5px;font-weight:600;color:var(--sm-t1);display:flex;align-items:center;gap:6px}
+.dsh-flat.__sm_root .__sm_hint{font-size:11.5px;line-height:1.65;color:var(--sm-t3)}
+.dsh-flat.__sm_root .__sm_grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+.dsh-flat.__sm_root .__sm_input{
+  width:100%;min-height:38px;padding:8px 12px;border:1px solid var(--sm-line);border-radius:10px;
+  background:var(--sm-l3);color:inherit;font:inherit;font-size:12.5px;box-shadow:none;
+  transition:border-color .15s ease,box-shadow .15s ease;
+}
+.dsh-flat.__sm_root .__sm_input:hover:not(:disabled){border-color:var(--sm-t3)}
+.dsh-flat.__sm_root .__sm_input:focus{border-color:var(--sm-accent);box-shadow:0 0 0 3px rgba(57,100,254,.16)}
+.dsh-flat.__sm_root select.__sm_input{
+  appearance:none;padding-right:32px;cursor:pointer;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='m2 2 4 4 4-4' fill='none' stroke='%238a93a2' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 12px center;
+}
+.dsh-flat.__sm_root .__sm_textarea{
+  min-height:200px;resize:vertical;line-height:1.75;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;
+  font-size:12px;padding:12px 14px;
+}
+
+/* ── 开关行：字在左、开关在右，谁都别跟说明挤在一起 ─────────────────── */
+.dsh-flat.__sm_root .__sm_toggle{
+  display:flex;align-items:flex-start;gap:14px;justify-content:space-between;
+  padding:9px 0;border-bottom:1px dashed var(--sm-line-soft);cursor:pointer;
+}
+.dsh-flat.__sm_root .__sm_toggle:last-of-type{border-bottom:0}
+.dsh-flat.__sm_root .__sm_toggleText{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
+.dsh-flat.__sm_root .__sm_toggleTitle{font-size:12.5px;font-weight:600;color:var(--sm-t1)}
+.dsh-flat.__sm_root .__sm_toggle .__sm_hint{font-size:11.5px}
+.dsh-flat.__sm_root input[type=checkbox].__sm_check{
+  appearance:none;flex:none;width:34px;height:20px;margin:1px 0 0;border:1px solid var(--sm-line);
+  border-radius:999px;background:var(--sm-l2);position:relative;cursor:pointer;
+  transition:background .18s ease,border-color .18s ease;
+}
+.dsh-flat.__sm_root input[type=checkbox].__sm_check::before{
+  content:"";position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;
+  background:var(--sm-t3);transition:transform .18s ease,background .18s ease;
+}
+.dsh-flat.__sm_root input[type=checkbox].__sm_check:checked{background:var(--sm-accent);border-color:var(--sm-accent)}
+.dsh-flat.__sm_root input[type=checkbox].__sm_check:checked::before{transform:translateX(13px);background:#fff}
+.dsh-flat.__sm_root .__sm_row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+
+/* ── 按钮 ───────────────────────────────────────────────────────────── */
+.dsh-flat.__sm_root .__sm_actions{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  margin-top:6px;padding-top:14px;border-top:1px solid var(--sm-line-soft);
+}
+.dsh-flat.__sm_root .__sm_btn{
+  appearance:none;border:1px solid var(--sm-line);background:var(--sm-l1);color:var(--sm-t1);
+  border-radius:10px;padding:8px 15px;min-height:34px;font:inherit;font-size:12.5px;font-weight:500;
+  box-shadow:0 1px 2px rgba(16,24,40,.05);cursor:pointer;white-space:nowrap;
+  transition:border-color .15s ease,background .15s ease,transform .1s ease,box-shadow .15s ease;
+}
+.dsh-flat.__sm_root .__sm_btn:hover:not(:disabled){
+  border-color:var(--sm-accent-line);
+  background:var(--sm-l2);
+}
+.dsh-flat.__sm_root .__sm_btn:active:not(:disabled){transform:translateY(1px);box-shadow:none}
+.dsh-flat.__sm_root .__sm_btnPrimary{
+  border-color:transparent;color:#fff;
+  background:linear-gradient(180deg,var(--sm-accent),var(--sm-accent));
+  box-shadow:0 6px 16px -10px rgba(57,100,254,.6);
+}
+.dsh-flat.__sm_root .__sm_btnPrimary:hover:not(:disabled){
+  filter:brightness(1.06);border-color:transparent;
+  background:linear-gradient(180deg,var(--sm-accent),var(--sm-accent));
+}
+.dsh-flat.__sm_root .__sm_btnDanger{
+  border-color:rgba(248,81,73,.42);color:var(--sm-err);background:transparent;
+}
+.dsh-flat.__sm_root .__sm_btnDanger:hover:not(:disabled){
+  border-color:var(--sm-err);background:rgba(248,81,73,.08);
+}
+.dsh-flat.__sm_root .__sm_status{font-size:11.5px;color:var(--sm-t3)}
+.dsh-flat.__sm_root .__sm_error{font-size:11.5px;color:var(--sm-err)}
+.dsh-flat.__sm_root .__sm_unavailable{font-size:12.5px;color:var(--sm-t3)}
+
+/* ── 卡片列表 ───────────────────────────────────────────────────────── */
+.dsh-flat.__sm_root .__sm_cardList{display:flex;flex-direction:column;gap:8px}
+.dsh-flat.__sm_root .__sm_cardRow{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:10px 12px;border:1px solid var(--sm-line);border-radius:12px;background:var(--sm-l2);
+  transition:border-color .15s ease,background .15s ease,box-shadow .15s ease;
+}
+.dsh-flat.__sm_root .__sm_cardRow:hover{
+  border-color:var(--sm-accent-line);
+  background:var(--sm-l1);box-shadow:0 6px 18px -14px rgba(16,24,40,.5);
+}
+.dsh-flat.__sm_root .__sm_cardMain{display:flex;flex-direction:column;gap:1px;flex:1;min-width:150px}
+.dsh-flat.__sm_root .__sm_cardName{font-size:12.5px;font-weight:650;color:var(--sm-t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsh-flat.__sm_root .__sm_cardPreview{font-size:11px;color:var(--sm-t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsh-flat.__sm_root .__sm_cardActions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.dsh-flat.__sm_root .__sm_badge{
+  display:inline-flex;align-items:center;padding:1px 8px;border-radius:999px;
+  font-size:10.5px;font-weight:600;white-space:nowrap;
+  color:var(--sm-accent);background:var(--sm-accent-soft);
+  border:1px solid var(--sm-accent-line);
+}
+.dsh-flat.__sm_root .__sm_empty{
+  padding:18px 14px;border:1px dashed var(--sm-line);border-radius:12px;
+  font-size:11.5px;color:var(--sm-t3);text-align:center;background:var(--sm-l2);
+}
+
+/* ── 回忆开关的折叠组 ───────────────────────────────────────────────── */
+.dsh-flat.__sm_root .__sm_fieldGroup{display:flex;flex-direction:column;gap:2px;border-top:1px solid var(--sm-line-soft);padding-top:10px}
 .dsh-flat.__sm_root .__sm_fieldGroup:first-of-type{border-top:0;padding-top:0}
-.dsh-flat.__sm_root .__sm_groupHead{display:flex;align-items:baseline;gap:6px;cursor:pointer;user-select:none;outline:none}
-.dsh-flat.__sm_root .__sm_groupHead:hover .__sm_label{color:var(--dsw-alias-label-primary)}
-.dsh-flat.__sm_root .__sm_groupHead:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px;border-radius:4px}
-.dsh-flat.__sm_root .__sm_caret{font-size:11px;opacity:.7;width:12px;flex-shrink:0}
-.dsh-flat.__sm_root .__sm_fieldBody{display:flex;flex-direction:column;gap:6px;padding-left:18px}
-.dsh-flat.__sm_root .__sm_groupTitle{display:flex;flex-direction:column;gap:2px}
-.dsh-flat.__sm_root .__sm_groupTitle>span:first-child{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary)}
-/* 标题右边那颗「当前默认卡」：小、圆、像标签，但真的是个能点的下拉。 */
-.dsh-flat.__sm_root .__sm_pick{width:auto;min-height:0;padding:1px 26px 1px 10px;border-radius:999px;border-color:var(--dsw-alias-state-business-primary);background-position:right 7px center;font-size:11px;line-height:1.7;color:var(--dsw-alias-state-business-primary);cursor:pointer}
-.dsh-flat.__sm_root .__sm_pick:hover:not(:disabled){border-color:var(--dsw-alias-state-business-primary)}
+.dsh-flat.__sm_root .__sm_groupHead{
+  display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;outline:none;
+  padding:6px 8px;margin:0 -8px;border-radius:10px;transition:background .15s ease;
+}
+.dsh-flat.__sm_root .__sm_groupHead:hover{background:rgba(16,24,40,.04)}
+.dsh-flat.__sm_root .__sm_groupHead:focus-visible{outline:2px solid var(--sm-accent);outline-offset:2px}
+.dsh-flat.__sm_root .__sm_caret{font-size:10px;color:var(--sm-t3);width:10px;flex:none}
+.dsh-flat.__sm_root .__sm_fieldGroup .__sm_label{font-size:12.5px}
+.dsh-flat.__sm_root .__sm_fieldGroup .__sm_hint{margin-left:auto;text-align:right}
+.dsh-flat.__sm_root .__sm_fieldBody{display:flex;flex-direction:column;gap:0;padding:2px 0 4px 18px}
+
+/* 标题旁边那颗「当前默认卡」：小、圆、像标签，但真的是个能点的下拉。 */
+.dsh-flat.__sm_root .__sm_pick{
+  width:auto;min-height:26px;padding:2px 26px 2px 10px;border-radius:999px;
+  border:1px solid var(--sm-accent-line);
+  background-color:var(--sm-accent-soft);background-position:right 8px center;
+  font-size:11.5px;line-height:1.5;color:var(--sm-accent);cursor:pointer;
+}
+.dsh-flat.__sm_root .__sm_pick:hover:not(:disabled){border-color:var(--sm-accent)}
+
+/* 云端那几个文件列表 */
+.dsh-flat.__sm_root .__sm_fileList{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+.dsh-flat.__sm_root .__sm_fileRow{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:8px 10px;border:1px solid var(--sm-line);border-radius:10px;background:var(--sm-l2);
+}
+.dsh-flat.__sm_root .__sm_fileName{font-size:11px;color:var(--sm-t2);flex:1 1 180px;word-break:break-all}
+.dsh-flat.__sm_root .__sm_switch{display:inline-flex;align-items:center;gap:6px;font-size:12px;margin-right:8px}
+.dsh-flat.__sm_root .__sm_switchLabel{color:var(--sm-t3);white-space:nowrap}
+.dsh-flat.__sm_root .__sm_switchSelect{
+  border:1px solid var(--sm-line);background:var(--sm-l3);color:inherit;border-radius:8px;
+  padding:3px 6px;font:inherit;font-size:12px;max-width:180px;
+}
+
+@media(max-width:560px){
+  .dsh-flat.__sm_root .__sm_head{padding:14px 14px 12px}
+  .dsh-flat.__sm_root .__sm_group{padding:14px}
+  .dsh-flat.__sm_root .__sm_cardMain{flex-basis:100%}
+  .dsh-flat.__sm_root .__sm_cardActions{width:100%}
+  .dsh-flat.__sm_root .__sm_actions .__sm_btn{flex:1 1 auto}
+  .dsh-flat.__sm_root .__sm_tabs{width:100%;justify-content:space-between}
+  .dsh-flat.__sm_root .__sm_tab{flex:1;text-align:center;padding:7px 8px}
+}
+@media(prefers-reduced-motion:reduce){
+  .dsh-flat.__sm_root *,
+  .dsh-flat.__sm_root input[type=checkbox].__sm_check::before{transition:none}
+}
 `;
     var tagId = "dsh-soul-md/main.css";
     if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
@@ -201,6 +386,8 @@ window.__ModuleLoader__.load({
       loading: "加载中…",
       memoryTitle: "长期记忆（插件托管）",
       memoryIntro: "AI 用 memory_append / memory_read / memory_rewrite 读写记忆：当前人设卡有自己的记忆，没选卡时用全局记忆。记忆文件由插件自动管理。",
+      memoryFieldsTitle: "本子怎么读",
+      memoryFieldsHint: "这几项决定记忆往哪儿写、翻的时候多宽——改完点下面的保存。",
       memoryInjectHint: "把记忆渲染为 soul:memory 提示词段落（AI 可随时读到记忆）。",
       memoryLayeredHint: "默认关闭。开启后优先保留 topics/*.md 的标题和摘要索引；core.md 超过注入上限时保留首尾。AI 可用 memory_read(topic) 按需读取全文。",
       fieldMemoryRecall: "自动关键词召回",
@@ -247,6 +434,8 @@ window.__ModuleLoader__.load({
       cloudTestOk: "连接正常",
       cloudTestNoList: "（这个网盘不让列目录，但目录建得起来）",
       cloudRemote: "云端已有",
+      cloudMemTitle: "整份记忆",
+      cloudCfgTitle: "云上配置",
       cloudCfgHint: "配置很小：地址、账号、保留份数这些。四本账走上面那份整包备份，别混。",
       cloudCfgUpload: "配置传到云端",
       cloudCfgUploaded: "配置已上传：{name}（{bytes} 字节）",
@@ -343,6 +532,8 @@ window.__ModuleLoader__.load({
       loading: "Loading…",
       memoryTitle: "Long-term memory (plugin-managed)",
       memoryIntro: "The AI reads/writes memory with memory_append / memory_read / memory_rewrite: the active persona card has its own memory, otherwise the global memory is used. Files are managed by the plugin.",
+      memoryFieldsTitle: "How the notebook is read",
+      memoryFieldsHint: "Where memory gets written and how wide a lookup reaches — save below to apply.",
       memoryInjectHint: "Also render the memory as the soul:memory prompt section (the agent always sees its memory).",
       memoryLayeredHint: "Off by default. The topics/*.md title and summary index takes priority; if core.md exceeds the injection cap, its beginning and end remain visible. memory_read(topic) retrieves full topic text on demand.",
       fieldMemoryRecall: "Automatic keyword recall",
@@ -389,6 +580,8 @@ window.__ModuleLoader__.load({
       cloudTestOk: "Connected",
       cloudTestNoList: " (this server does not allow listing, but the folder was created)",
       cloudRemote: "on the server:",
+      cloudMemTitle: "Whole memory backup",
+      cloudCfgTitle: "Config backup",
       cloudCfgHint: "Small stuff only: URL, account, keep-count. The four ledgers ride on the full backup above.",
       cloudCfgUpload: "Upload config",
       cloudCfgUploaded: "Config uploaded: {name} ({bytes} bytes)",
@@ -645,18 +838,26 @@ window.__ModuleLoader__.load({
             isOpen
               ? h("div", { className: "__sm_fieldBody" },
                   RECALL_FIELDS.filter(function (f) { return g.keys.indexOf(f.key) !== -1; }).map(function (f) {
+                    // 开关行与数字行分开画：开关占满一行（字左、开关右），
+                    // 数字是「标签 + 输入框」的小块。混在一起才是"功能分布杂"。
                     if (f.type === "checkbox") {
-                      return h("label", { key: f.key, className: "__sm_field" },
-                        h("span", { className: "__sm_row" },
-                          h("input", { className: "__sm_check", type: "checkbox", checked: Boolean(fieldValue(f)), onChange: function (e) { setField(f, e.target.checked); } }),
-                          h("span", { className: "__sm_label" }, t(f.label))
+                      return h("label", { key: f.key, className: "__sm_toggle" },
+                        h("span", { className: "__sm_toggleText" },
+                          h("span", { className: "__sm_toggleTitle" }, t(f.label)),
+                          f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
                         ),
-                        f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
+                        h("input", {
+                          className: "__sm_check", type: "checkbox", checked: Boolean(fieldValue(f)),
+                          onChange: function (e) { setField(f, e.target.checked); }
+                        })
                       );
                     }
                     return h("label", { key: f.key, className: "__sm_field" },
                       h("span", { className: "__sm_label" }, t(f.label)),
-                      h("input", { className: "__sm_input", type: "number", min: f.min, max: f.max, step: 1, value: fieldValue(f), onChange: function (e) { setField(f, e.target.value); } }),
+                      h("input", {
+                        className: "__sm_input", type: "number", min: f.min, max: f.max, step: 1,
+                        value: fieldValue(f), onChange: function (e) { setField(f, e.target.value); }
+                      }),
                       f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
                     );
                   })
@@ -719,8 +920,13 @@ window.__ModuleLoader__.load({
 
       if (state.status === "loading") return h("p", { className: "__sm_status" }, t("loading"));
       if (state.status === "error") {
+        // 读不到云端设置时也保留这块的标题，否则设置页上会突然缺一块，
+        // 看着像整个功能被我删了。
         return h("div", { className: "__sm_group" },
-          h("p", { className: "__sm_label", style: { margin: 0 } }, t("cloudTitle")),
+          h("div", { className: "__sm_groupTitle" },
+            h("span", null, t("cloudTitle")),
+            h("span", { className: "__sm_hint" }, t("cloudHint"))
+          ),
           h("p", { className: "__sm_error", role: "alert" }, messageText(t, { key: "cloudLoadFail", detail: state.detail }))
         );
       }
@@ -947,8 +1153,10 @@ window.__ModuleLoader__.load({
       }
 
       return h("div", { className: "__sm_group" },
-        h("p", { className: "__sm_label", style: { margin: 0 } }, t("cloudTitle")),
-        h("p", { className: "__sm_hint", style: { margin: "0 0 2px" } }, t("cloudHint")),
+        h("div", { className: "__sm_groupTitle" },
+          h("span", null, t("cloudTitle")),
+          h("span", { className: "__sm_hint" }, t("cloudHint"))
+        ),
 
         h("label", { className: "__sm_field" },
           h("span", { className: "__sm_label" }, t("cloudUrl")),
@@ -988,17 +1196,23 @@ window.__ModuleLoader__.load({
             onChange: function (e) { field("keep", e.target.value); }
           })
         ),
-        h("label", { className: "__sm_field" },
-          h("span", { className: "__sm_row" },
-            h("input", { className: "__sm_check", type: "checkbox", checked: Boolean(d.enabled), onChange: function (e) { field("enabled", e.target.checked); } }),
-            h("span", { className: "__sm_label" }, t("cloudEnabled"))
-          )
+        h("label", { className: "__sm_toggle" },
+          h("span", { className: "__sm_toggleText" },
+            h("span", { className: "__sm_toggleTitle" }, t("cloudEnabled"))
+          ),
+          h("input", {
+            className: "__sm_check", type: "checkbox", checked: Boolean(d.enabled),
+            onChange: function (e) { field("enabled", e.target.checked); }
+          })
         ),
-        h("label", { className: "__sm_field" },
-          h("span", { className: "__sm_row" },
-            h("input", { className: "__sm_check", type: "checkbox", checked: Boolean(d.auto), onChange: function (e) { field("auto", e.target.checked); } }),
-            h("span", { className: "__sm_label" }, t("cloudAuto"))
-          )
+        h("label", { className: "__sm_toggle" },
+          h("span", { className: "__sm_toggleText" },
+            h("span", { className: "__sm_toggleTitle" }, t("cloudAuto"))
+          ),
+          h("input", {
+            className: "__sm_check", type: "checkbox", checked: Boolean(d.auto),
+            onChange: function (e) { field("auto", e.target.checked); }
+          })
         ),
         h("div", { className: "__sm_actions" },
           h("button", { type: "button", className: "__sm_btn __sm_btnPrimary", onClick: save, disabled: busy }, t("cloudSave")),
@@ -1011,7 +1225,10 @@ window.__ModuleLoader__.load({
           ? h("p", { className: testResult.error ? "__sm_error" : "__sm_status", role: testResult.error ? "alert" : undefined }, testResult.text)
           : null,
 
-        h("p", { className: "__sm_hint", style: { margin: "8px 0 2px" } }, t("cloudMemHint")),
+        h("div", { className: "__sm_groupTitle", style: { marginTop: "10px" } },
+          h("span", null, t("cloudMemTitle")),
+          h("span", { className: "__sm_hint" }, t("cloudMemHint"))
+        ),
         h("div", { className: "__sm_actions" },
           h("button", { type: "button", className: "__sm_btn __sm_btnPrimary", onClick: listMemBackups, disabled: memBusy }, t("cloudMemList")),
           memBusy ? h("span", { className: "__sm_status" }, t("saving")) : null,
@@ -1021,11 +1238,11 @@ window.__ModuleLoader__.load({
         memFiles
           ? (memFiles.length === 0
             ? h("p", { className: "__sm_hint" }, t("cloudMemEmpty"))
-            : h("div", { className: "__sm_group" }, memFiles.slice().reverse().map(function (name) {
+            : h("div", { className: "__sm_fileList" }, memFiles.slice().reverse().map(function (name) {
               var plan = memPlan && memPlan.file === name ? memPlan : null;
               return h("div", { key: name },
-                h("div", { className: "__sm_row" },
-                  h("span", { className: "__sm_hint", style: { flex: "1 1 auto", wordBreak: "break-all" } }, name),
+                h("div", { className: "__sm_fileRow" },
+                  h("span", { className: "__sm_fileName" }, name),
                   plan
                     ? h("span", {},
                       h("button", { type: "button", className: "__sm_btn __sm_btnPrimary", onClick: function () { restoreMem(name, true); } }, t("cloudMemConfirm")),
@@ -1038,7 +1255,10 @@ window.__ModuleLoader__.load({
             })))
           : null,
 
-        h("p", { className: "__sm_hint", style: { margin: "8px 0 2px" } }, t("cloudCfgHint")),
+        h("div", { className: "__sm_groupTitle", style: { marginTop: "10px" } },
+          h("span", null, t("cloudCfgTitle")),
+          h("span", { className: "__sm_hint" }, t("cloudCfgHint"))
+        ),
         h("div", { className: "__sm_actions" },
           h("button", { type: "button", className: "__sm_btn", onClick: backupConfig, disabled: cfgBusy }, t("cloudCfgUpload")),
           h("button", { type: "button", className: "__sm_btn", onClick: listConfigs, disabled: cfgBusy }, t("cloudCfgList")),
@@ -1049,11 +1269,11 @@ window.__ModuleLoader__.load({
         cfgFiles
           ? (cfgFiles.length === 0
             ? h("p", { className: "__sm_hint" }, t("cloudCfgEmpty"))
-            : h("div", { className: "__sm_group" }, cfgFiles.slice().reverse().map(function (name) {
+            : h("div", { className: "__sm_fileList" }, cfgFiles.slice().reverse().map(function (name) {
               var plan = cfgPlan && cfgPlan.file === name ? cfgPlan : null;
               return h("div", { key: name },
-                h("div", { className: "__sm_row" },
-                  h("span", { className: "__sm_hint", style: { flex: "1 1 auto", wordBreak: "break-all" } }, name),
+                h("div", { className: "__sm_fileRow" },
+                  h("span", { className: "__sm_fileName" }, name),
                   plan
                     ? h("span", {},
                       h("button", { type: "button", className: "__sm_btn __sm_btnPrimary", onClick: function () { restoreConfig(name, true); } }, t("cloudCfgConfirm")),
@@ -1263,12 +1483,21 @@ window.__ModuleLoader__.load({
 
       return h("div", { className: "__sm_root dsh-flat" },
         // ── 页头 ─────────────────────────────────────────────────────────
+        // 页头：一块带渐变的 hero。标题旁边那个下拉不是装饰 —— 2026-11-03
+        // 它还是只读徽章，看着能点其实点不动（未央伸手点过一次）。现在它跟
+        // 「默认卡」写同一处 active，点哪个都算数。
         h("div", { className: "__sm_head" },
-          h("h2", { className: "__sm_title" },
-            t("pageTitle"),
-            // 2026-11-03：原来这里是个只读徽章，看着能点其实点不动（未央就
-            // 伸手点了一次）。改成真的选择器，跟下面「默认卡」那个下拉写同
-            // 一处 active，随便点哪个都算数。
+          h("div", { className: "__sm_titleRow" },
+            h("span", { className: "__sm_orb", "aria-hidden": "true" },
+              h("svg", {
+                width: 20, height: 20, viewBox: "0 0 24 24", fill: "none",
+                stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round", strokeLinejoin: "round"
+              },
+                h("path", { d: "M3.6 12.2c3-4.2 7.1-6.2 10.6-6.2 2.5 0 4.6 1.2 4.6 3 0 3.5-3.5 8.2-6.8 8.2-2 0-2.5-1.2-4-1.2-1.4 0-2.6-.9-4.4-3.8Z" }),
+                h("circle", { cx: 15.2, cy: 9.7, r: 0.95, fill: "currentColor", stroke: "none" })
+              )
+            ),
+            h("h2", { className: "__sm_title" }, t("pageTitle")),
             cardNames.length === 0
               ? (active ? h("span", { className: "__sm_badge" }, active) : null)
               : h("select", {
@@ -1286,7 +1515,13 @@ window.__ModuleLoader__.load({
                   cardNames.map(function (n) { return h("option", { key: n, value: n }, n); })
                 )
           ),
-          h("p", { className: "__sm_hint" }, t("intro"))
+          h("p", { className: "__sm_sub" }, t("intro")),
+          h("div", { className: "__sm_facts" },
+            h("span", { className: "__sm_fact" }, t("cardListTitle"), " ", h("b", null, String(cardNames.length))),
+            wsList.length > 0
+              ? h("span", { className: "__sm_fact" }, t("wsTitle"), " ", h("b", null, String(wsList.length)))
+              : null
+          )
         ),
 
         h("div", { className: "__sm_tabs", role: "tablist" },
@@ -1303,39 +1538,66 @@ window.__ModuleLoader__.load({
         ),
 
         // ── 人设卡 ───────────────────────────────────────────────────────
+        //
+        // 2026-11-17 重排成三块，顺序照「先做什么」排：上面写、中间看有哪些、
+        // 下面管哪个会话用哪张。原来三块长得一模一样，眼睛分不出层次。
         panel("cards",
+          // ① 正在写的那张
           h("div", { className: "__sm_group" },
             h("div", { className: "__sm_groupTitle" },
-              h("span", null, t("writeTitle")),
-              h("span", { className: "__sm_hint" }, t("writeHint")),
-              h("span", { style: { flex: 1 } }),
-              // 正在编辑哪一张，明说。保存完草稿还留在框里，不标一下的话
-              // 分不清自己是在改旧卡还是在写新卡。
-              h("span", { className: "__sm_hint" },
-                cardDraft.name && Object.prototype.hasOwnProperty.call(cards, cardDraft.name)
-                  ? t("editingCard", { name: cardDraft.name })
-                  : t("editingNew")
-              )
+              h("span", null,
+                t("writeTitle"),
+                " ",
+                // 正在编辑哪一张，明说。保存完草稿还留在框里，不标一下的话
+                // 分不清自己是在改旧卡还是在写新卡。
+                h("span", { className: "__sm_chip" },
+                  cardDraft.name && Object.prototype.hasOwnProperty.call(cards, cardDraft.name)
+                    ? t("editingCard", { name: cardDraft.name })
+                    : t("editingNew")
+                )
+              ),
+              h("span", { className: "__sm_hint" }, t("writeHint"))
             ),
             h("label", { className: "__sm_field" },
               h("span", { className: "__sm_label" }, t("cardName")),
-              h("span", { className: "__sm_hint" }, t("cardNameHint")),
-              h("input", { className: "__sm_input", type: "text", value: cardDraft.name, placeholder: t("cardNamePlaceholder"), onChange: function (e) { setCardDraft(function (p) { return Object.assign({}, p, { name: e.target.value }); }); setNotice0(); } })
+              h("input", {
+                className: "__sm_input", type: "text", value: cardDraft.name,
+                placeholder: t("cardNamePlaceholder"),
+                onChange: function (e) {
+                  setCardDraft(function (prev) {
+                    return Object.assign({}, prev, { name: e.target.value });
+                  });
+                  setNotice0();
+                }
+              }),
+              h("span", { className: "__sm_hint" }, t("cardNameHint"))
             ),
             h("label", { className: "__sm_field" },
               h("span", { className: "__sm_label" }, t("cardContent")),
-              h("span", { className: "__sm_hint" }, t("cardContentHint")),
-              h("textarea", { className: "__sm_input __sm_textarea", value: cardDraft.content, onChange: function (e) { setCardDraft(function (p) { return Object.assign({}, p, { content: e.target.value }); }); setNotice0(); } })
+              h("textarea", {
+                className: "__sm_input __sm_textarea", value: cardDraft.content,
+                onChange: function (e) {
+                  setCardDraft(function (prev) {
+                    return Object.assign({}, prev, { content: e.target.value });
+                  });
+                  setNotice0();
+                }
+              }),
+              h("span", { className: "__sm_hint" }, t("cardContentHint"))
             ),
             h("div", { className: "__sm_actions" },
               h("button", { type: "button", className: "__sm_btn __sm_btnPrimary", onClick: onSaveCard, disabled: busy }, t("saveCard")),
-              h("button", { type: "button", className: "__sm_btn", onClick: function () { setCardDraft({ name: "", content: "" }); setNotice0(); }, disabled: busy }, t("newCard")),
+              h("button", {
+                type: "button", className: "__sm_btn", disabled: busy,
+                onClick: function () { setCardDraft({ name: "", content: "" }); setNotice0(); }
+              }, t("newCard")),
               notice ? h("span", { className: "__sm_status" }, messageText(t, notice)) : null,
               busy ? h("span", { className: "__sm_status" }, t("saving")) : null,
-              error ? h("span", { className: "__sm_error" }, messageText(t, error)) : null
+              error ? h("span", { className: "__sm_error", role: "alert" }, messageText(t, error)) : null
             )
           ),
 
+          // ② 现在有哪些张
           h("div", { className: "__sm_group" },
             h("div", { className: "__sm_groupTitle" },
               h("span", null, t("cardListTitle")),
@@ -1343,43 +1605,58 @@ window.__ModuleLoader__.load({
             ),
             h("label", { className: "__sm_field" },
               h("span", { className: "__sm_label" }, t("defaultBadge")),
-              h("span", { className: "__sm_hint" }, t("activeHint")),
-              h("select", { className: "__sm_input", value: active || "", disabled: busy, onChange: function (e) { var v = e.target.value; if (!v) runWrite([{ op: "unset", path: ["active"] }]); else onSetActive(v); } },
+              h("select", {
+                className: "__sm_input", value: active || "", disabled: busy,
+                onChange: function (e) {
+                  var v = e.target.value;
+                  if (!v) runWrite([{ op: "unset", path: ["active"] }]);
+                  else onSetActive(v);
+                }
+              },
                 h("option", { value: "" }, t("noneOption")),
                 cardNames.map(function (n) { return h("option", { key: n, value: n }, n); })
-              )
+              ),
+              h("span", { className: "__sm_hint" }, t("activeHint"))
             ),
             cardNames.length === 0
-              ? h("p", { className: "__sm_hint" }, t("emptyCards"))
+              ? h("p", { className: "__sm_empty" }, t("emptyCards"))
               : h("div", { className: "__sm_cardList" },
                   cardNames.map(function (n) {
                     var preview = String(cards[n] || "").split("\n").filter(Boolean)[0] || "";
                     return h("div", { key: n, className: "__sm_cardRow" },
-                      h("span", { className: "__sm_cardName", title: n }, n),
+                      h("div", { className: "__sm_cardMain" },
+                        h("span", { className: "__sm_cardName", title: n }, n),
+                        h("span", { className: "__sm_cardPreview", title: preview }, preview)
+                      ),
                       n === active ? h("span", { className: "__sm_badge" }, t("defaultBadge")) : null,
-                      h("span", { className: "__sm_cardPreview" }, preview),
-                      h("button", { type: "button", className: "__sm_btn", onClick: function () { onEditCard(n); }, disabled: busy }, t("editCard")),
-                      n === active ? null : h("button", { type: "button", className: "__sm_btn", onClick: function () { onSetActive(n); }, disabled: busy }, t("setDefault")),
-                      h("button", { type: "button", className: "__sm_btn __sm_btnDanger", onClick: function () { onDeleteCard(n); }, disabled: busy }, t("deleteCard"))
+                      h("div", { className: "__sm_cardActions" },
+                        h("button", { type: "button", className: "__sm_btn", onClick: function () { onEditCard(n); }, disabled: busy }, t("editCard")),
+                        n === active ? null : h("button", { type: "button", className: "__sm_btn", onClick: function () { onSetActive(n); }, disabled: busy }, t("setDefault")),
+                        h("button", { type: "button", className: "__sm_btn __sm_btnDanger", onClick: function () { onDeleteCard(n); }, disabled: busy }, t("deleteCard"))
+                      )
                     );
                   })
                 )
           ),
 
+          // ③ 哪个会话用哪张
           h("div", { className: "__sm_group" },
             h("div", { className: "__sm_groupTitle" },
               h("span", null, t("wsTitle")),
               h("span", { className: "__sm_hint" }, t("wsHint"))
             ),
             wsList.length === 0
-              ? h("p", { className: "__sm_hint" }, t("wsEmpty"))
+              ? h("p", { className: "__sm_empty" }, t("wsEmpty"))
               : h("div", { className: "__sm_cardList" },
                   wsList.map(function (ws) {
                     var current = wsMap[ws.path] || "";
                     if (current && current !== "none" && !(current in cards)) current = "";
                     return h("label", { key: ws.path, className: "__sm_field" },
                       h("span", { className: "__sm_label", title: ws.path }, (ws.title || ws.path)),
-                      h("select", { className: "__sm_input", value: current, disabled: busy, onChange: function (e) { onWsChange(ws.path, e.target.value); } },
+                      h("select", {
+                        className: "__sm_input", value: current, disabled: busy,
+                        onChange: function (e) { onWsChange(ws.path, e.target.value); }
+                      },
                         h("option", { value: "" }, t("wsFollow")),
                         h("option", { value: "none" }, t("noneOption")),
                         cardNames.map(function (n) { return h("option", { key: n, value: n }, n); })
@@ -1392,47 +1669,67 @@ window.__ModuleLoader__.load({
         ),
 
         // ── 长期记忆 ─────────────────────────────────────────────────────
+        //
+        // 2026-11-17：这一页原来十个字段一字排开，开关和说明挤在同一行，
+        // 看不出哪些是"攒不攒"、哪些是"塞多少"。拆成三块：
+        //   ① 攒什么（两个开关）② 本子怎么读（MEMORY_FIELDS）③ 每轮塞多少（RecallConfig）
         panel("memory",
           h("div", { className: "__sm_group" },
             h("div", { className: "__sm_groupTitle" },
               h("span", null, t("memoryTitle")),
               h("span", { className: "__sm_hint" }, t("memoryIntro"))
             ),
-            h("label", { className: "__sm_field" },
-              h("span", { className: "__sm_row" },
-                h("input", { className: "__sm_check", type: "checkbox", checked: skipValue(), onChange: function (e) { setSkipDraft(e.target.checked); setNotice0(); } }),
-                h("span", { className: "__sm_label" }, t("fieldSkipSubagents"))
+            h("label", { className: "__sm_toggle" },
+              h("span", { className: "__sm_toggleText" },
+                h("span", { className: "__sm_toggleTitle" }, t("fieldSkipSubagents")),
+                h("span", { className: "__sm_hint" }, t("skipSubagentsHint"))
               ),
-              h("span", { className: "__sm_hint" }, t("skipSubagentsHint"))
+              h("input", {
+                className: "__sm_check", type: "checkbox", checked: skipValue(),
+                onChange: function (e) { setSkipDraft(e.target.checked); setNotice0(); }
+              })
             ),
-            h("label", { className: "__sm_field" },
-              h("span", { className: "__sm_row" },
-                h("input", { className: "__sm_check", type: "checkbox", checked: templatesValue(), onChange: function (e) { setTemplatesDraft(e.target.checked); setNotice0(); } }),
-                h("span", { className: "__sm_label" }, t("fieldAllowTemplates"))
+            h("label", { className: "__sm_toggle" },
+              h("span", { className: "__sm_toggleText" },
+                h("span", { className: "__sm_toggleTitle" }, t("fieldAllowTemplates")),
+                h("span", { className: "__sm_hint" }, t("allowTemplatesHint"))
               ),
-              h("span", { className: "__sm_hint" }, t("allowTemplatesHint"))
+              h("input", {
+                className: "__sm_check", type: "checkbox", checked: templatesValue(),
+                onChange: function (e) { setTemplatesDraft(e.target.checked); setNotice0(); }
+              })
+            )
+          ),
+
+          h("div", { className: "__sm_group" },
+            h("div", { className: "__sm_groupTitle" },
+              h("span", null, t("memoryFieldsTitle")),
+              h("span", { className: "__sm_hint" }, t("memoryFieldsHint"))
             ),
             MEMORY_FIELDS.map(function (f) {
-              if (f.type === "select") {
-                return h("label", { key: f.key, className: "__sm_field" },
-                  h("span", { className: "__sm_label" }, t(f.label)),
-                  h("select", { className: "__sm_input", value: memDraftValue(f), onChange: function (e) { setMemField(f, e.target.value); } },
-                    f.options.map(function (option) { return h("option", { key: option[0], value: option[0] }, t(option[1])); })),
-                  f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
-                );
-              }
+              // 开关：字在左、开关在右，别和说明挤成一行。
               if (f.type === "checkbox") {
-                return h("label", { key: f.key, className: "__sm_field" },
-                  h("span", { className: "__sm_row" },
-                    h("input", { className: "__sm_check", type: "checkbox", checked: Boolean(memDraftValue(f)), onChange: function (e) { setMemField(f, e.target.checked); } }),
-                    h("span", { className: "__sm_label" }, t(f.label))
+                return h("label", { key: f.key, className: "__sm_toggle" },
+                  h("span", { className: "__sm_toggleText" },
+                    h("span", { className: "__sm_toggleTitle" }, t(f.label)),
+                    f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
                   ),
-                  f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
+                  h("input", {
+                    className: "__sm_check", type: "checkbox", checked: Boolean(memDraftValue(f)),
+                    onChange: function (e) { setMemField(f, e.target.checked); }
+                  })
                 );
               }
+              // 下拉与数字：两列自适应，数字框窄一点更好按。
               return h("label", { key: f.key, className: "__sm_field" },
                 h("span", { className: "__sm_label" }, t(f.label)),
-                h("input", { className: "__sm_input", type: "number", min: 1, max: f.max, step: 1, value: memDraftValue(f), onChange: function (e) { setMemField(f, e.target.value); } }),
+                f.type === "select"
+                  ? h("select", { className: "__sm_input", value: memDraftValue(f), onChange: function (e) { setMemField(f, e.target.value); } },
+                      f.options.map(function (option) { return h("option", { key: option[0], value: option[0] }, t(option[1])); }))
+                  : h("input", {
+                      className: "__sm_input", type: "number", min: 1, max: f.max, step: 1,
+                      value: memDraftValue(f), onChange: function (e) { setMemField(f, e.target.value); }
+                    }),
                 f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
               );
             }),
@@ -1440,9 +1737,10 @@ window.__ModuleLoader__.load({
               h("button", { type: "button", className: "__sm_btn __sm_btnPrimary", onClick: onSaveMemory, disabled: busy }, t("save")),
               notice ? h("span", { className: "__sm_status" }, messageText(t, notice)) : null,
               busy ? h("span", { className: "__sm_status" }, t("saving")) : null,
-              error ? h("span", { className: "__sm_error" }, messageText(t, error)) : null
+              error ? h("span", { className: "__sm_error", role: "alert" }, messageText(t, error)) : null
             )
           ),
+
           // 「那年今天」「忽然想起那一天」住在**主插件**的配置命名空间，
           // 和上面 soul-md 的 memory 字段不是同一个文档 —— 所以这块自己拿
           // 另一个 scope，不能混进 onSaveMemory 那批 ops。
