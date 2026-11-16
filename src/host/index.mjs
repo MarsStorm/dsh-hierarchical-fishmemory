@@ -3083,6 +3083,7 @@ export function apply(ctx, rawConfig) {
           forgetEntry,
           pushTrash,
           cloudBackupOnce,
+          cloudState,
           loadPromise,
           drainPromise,
           getWriteChain: () => writeChain,

@@ -39,7 +39,45 @@ import {
   listRemoteConfigs,
   normalizeWebdavConfig,
   testConnection,
+  uploadBackupText,
 } from '../core/webdav.mjs';
+
+/**
+ * 给每条 handler 包一层：抛出去的错误要变成**一句能读的话**，不能变成空身子。
+ *
+ * 2026-11-16 的教训，一天里犯了两次。第一次是把这七百多行搬出 host 时漏传
+ * `memoryRoot`，二十条路由一条都没注册（装配期抛，连日志都没有）。第二次是
+ * 漏传 `cloudState`：装配成功，只有 `/cloud` 那一行在运行时抛 ReferenceError，
+ * webServer 兜底回一个 **400 + 零字节**，前端 `r.json()` 于是报
+ * 「Unexpected end of JSON input」—— 用户在界面上看到的是这句话，
+ * 而不是「cloudState is not defined」。
+ *
+ * 一个没内容的错误比一句难听的错误坏得多：它把「我哪里漏了一个参数」
+ * 伪装成「网络或服务端出了玄学问题」，于是没人会去查代码。
+ */
+export function guardHandler(handler, { path, warn, panelReply }) {
+  return async function guardedHandler(req, res) {
+    try {
+      return await handler(req, res);
+    } catch (err) {
+      const message = errorText(err);
+      try {
+        warn(`面板接口 ${String(path)} 出错：${message}`);
+      } catch {
+        // 日志本身出错不该再抛一次
+      }
+      if (res.headersSent || res.writableEnded) {
+        try {
+          res.destroy?.();
+        } catch {
+          // 连不上就算了
+        }
+        return undefined;
+      }
+      return panelReply(res, 500, { ok: false, error: message });
+    }
+  };
+}
 
 /**
  * 造出整张路由表。要什么给什么，缺一个就在启动时报错 ——
@@ -66,6 +104,7 @@ export function createPanelRoutes(deps) {
     forgetEntry,
     pushTrash,
     cloudBackupOnce,
+    cloudState,
     loadPromise,
     drainPromise,
     getWriteChain,
@@ -78,7 +117,7 @@ export function createPanelRoutes(deps) {
     configBackupVersion,
   } = deps;
 
-  return [
+  const routes = [
   {
     kind: 'exact',
     path: `${panelBase}/state`,
@@ -136,7 +175,7 @@ export function createPanelRoutes(deps) {
         await loadPromise;
         await drainPromise;
         await getWriteChain();
-        const bytes = packArchive(archive);
+        const bytes = packArchive(getArchive());
         const name = `feiyu-diary-${new Date().toISOString().slice(0, 10)}.dshpack`;
         res.statusCode = 200;
         res.setHeader('Content-Type', 'application/octet-stream');
@@ -800,5 +839,10 @@ export function createPanelRoutes(deps) {
       }
     },
   },
-];
+  ];
+  // 每一条都包上 guardHandler：抛出去也不许出现「400 + 零字节」。
+  return routes.map((route) => ({
+    ...route,
+    handler: guardHandler(route.handler, { path: route.path, warn, panelReply }),
+  }));
 }

@@ -1,3 +1,52 @@
+## 1.31.1 — 2026-11-16
+
+**他说：「插件设置页里的云端备份报错了，显示读不到云端设置：
+`Failed to execute 'json' on 'Response': Unexpected end of JSON input`。」**
+
+这条错误是我昨晚那次重构（1.30.0，把面板七百多行搬出 `host/index.mjs`）
+留下的，一共漏了三个变量，一个比一个安静：
+
+| 界面上的症状 | 真正的错 | 藏了多久 |
+| --- | --- | --- |
+| 设置页云端备份「读不到云端设置：Unexpected end of JSON input」 | `/cloud` 里用了没传进来的 `cloudState`，抛 ReferenceError → webServer 兜底 **400 + 零字节** → 前端 `r.json()` 空字符串 | 1 天 |
+| 面板「导出整包」点了没反应 | `/export` 里 `packArchive(archive)` —— `archive` 是 host 的闭包变量，搬出来之后没有了 | 1 天 |
+| 「配置传到云端」必失败 | `uploadBackupText` 没 import（清理未用 import 时从 host 删掉了，忘了新家也要） | 1 天 |
+
+### 真正该改的不是这三行
+
+三行改起来一分钟。值得记的是它为什么能活一天：
+
+- **装配期的 try/catch 挡不住运行时**。搬完之后我给 `ctx.inject` 的装配包了
+  try/catch（因为漏 `memoryRoot` 那次二十条路由一条不注册、连日志都没有），
+  但那只管「表造不出来」。表造出来了，某一条 handler 在请求进来时抛，谁也接不住。
+- **webServer 的兜底是 400 + 零字节**，还会往它自己的 logger 打一条 warn
+  —— 那条 warn 不在我的 debug 日志里，所以我「翻日志」翻了个空。
+- **最要命的一条：我自己看见过它。** 昨晚验证时我 curl 过 `/cloud`，拿到 400，
+  当时心想「400 是 normal 的，GET 方法不对」就翻过去了。**一个 400 没有身子，
+  本身就不 normal** —— 正常的方法不对应该回 `{ok:false,error:'method'}`。
+  我把异常解释掉，比没看见还坏，因为它让我以为已经验过了。
+
+### 改了什么
+
+1. `createPanelRoutes` 里每条 handler 都过一遍 **`guardHandler`**：抛错先 `warn`
+   一句「面板接口 /xxx 出错：<原因>」，再回 `500 + {ok:false,error}`。
+   已经写出响应头的不再补一个，`destroy` 收尾。**从今往后「空身子」这一档没有了。**
+2. 补上 `cloudState` 与 `uploadBackupText`，`packArchive(getArchive())`。
+3. 新增两条测试：
+   - **「每条路由都调一次：不许出现 xxx is not defined」** —— 20 条 handler 各用
+     GET / POST 跑一遍，捕获 warn，断言里面没有 `is not defined`。
+     验证过它会红：把 `cloudState,` 从解构里抽掉，它立刻报
+     `面板接口 /feiyu-diary/cloud 出错：cloudState is not defined`。
+   - **`guardHandler` 两条**：抛错回 500 + 人话；已经发过头的不再补。
+
+### 验证
+
+`npm test` 527 项全过（524 + 3）。热重载后逐条 curl：`cloud` 200/388 字节、
+`export` 200/48888 字节（真 `.dshpack`）、`backup` 200/433928、`export-md` 200、
+`export-year` 200、`review` 200、`stats` 200、`state` 200/90143、`feelings` 200/81141。
+
+---
+
 ## 1.31.0 — 2026-11-16
 
 **他说：「现在插件的ui有点简陋，你们不能把整个插件的ui重做，变得高大上一点。」**
