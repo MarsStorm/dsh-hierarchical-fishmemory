@@ -65,9 +65,29 @@ export function renderFragments({
   const maxChars = clampInt(c.fragmentsMaxChars, 200, 4000, FRAGMENTS_MAX_CHARS);
   const parts = [];
 
+  // ── 先把「边界话」的位置扣出来，再往里填内容（2026-11-18 加，1.36.0）──
+  //
+  // 抄的是 memory-brain 的 `retrieval.py:371`：
+  //
+  //     reserve = estimate_tokens(_CONFLICT_LINE) + 1 if 有存疑 and 预算够 else 0
+  //     evidence_budget = token_budget - reserve
+  //
+  // 它在打包证据**之前**就把那一行不确定提示的预算扣下来 ——
+  // 否则证据一多，最先被挤掉的恰恰是"这些材料不一定对"这句话。
+  //
+  // 我原来反着来：先填纸条，剩下的缝里才塞那句"没说完的能接着问一句"。
+  // 结果就是纸条一多，那句分寸话先消失 —— 而它比任何一条纸条都不该被挤掉。
+  //
+  // 扣多少：只扣**一行**（大约 24 字）。不是给所有尾巴都留座，
+  // 是给"最后一句话"留座。留多了就变成用预算养姿态。
+  const TAIL_RESERVE = 24;
+  const budget = Math.max(0, maxChars - TAIL_RESERVE);
+
   // ① 教训（最多 5 行，且只放踩过两次以上的）
   if (c.lessonEnabled !== false && lessonFile) {
-    const text = lessonSectionText(lessonFile, { limit: c.lessonLimit });
+    // 教训先扣掉尾巴那一行要留的位（TAIL_RESERVE），再拿它自己那份。
+    // 它原来没有字数上限，"三部分共用总字数"只是句说法（见 lesson.mjs 注释）。
+    const text = lessonSectionText(lessonFile, { limit: c.lessonLimit, maxChars: budget });
     if (text) parts.push(text);
   }
 
@@ -84,7 +104,7 @@ export function renderFragments({
   // ③ 小纸条（拿剩下的预算；不够留就整段不出现）
   if (c.stickyEnabled !== false && stickyFile) {
     const used = parts.reduce((sum, p) => sum + p.length + 2, 0);
-    const room = maxChars - used;
+    const room = budget - used;
     if (room >= STICKY_MIN_CHARS) {
       const text = stickySectionText(stickyFile, {
         ttlDays: c.stickyTtlDays,
@@ -113,7 +133,64 @@ export function renderFragments({
     }
   }
 
-  return parts.join('\n\n');
+  // ── 出口再量一次总长（2026-11-18，1.36.0）──
+  //
+  // 上面每一段都收了 `maxChars`，但段与段之间那两个空行、以及各段自己
+  // 内部额外拼的提示行（"还有 N 条没挤进来""没说完的能接着问一句"）
+  // 都不是谁单独算得清的。**总字数只有一个地方可以量准：出口。**
+  //
+  // 超了就先丢最贵的那段（小纸条）—— 它是三段里唯一"少一条也还好"的。
+  // 丢完还不够就把纸条截短，截到"至少还留一条"为止；连一条都放不下，
+  // 整段撤掉并说一声（1.27.0 立的规矩：挤掉了要说）。
+  let text = parts.join('\n\n');
+  if (text.length > maxChars && parts.length > 0) {
+    const stickyIdx = parts.findIndex((p) => p.startsWith('## 小纸条'));
+    const lessonIdx = parts.findIndex((p) => p.startsWith('## 踩过的坑'));
+
+    // 第一刀：把纸条按"剩下的位置"重装。上一轮它拿到的是 `budget`
+    // （= maxChars − 24），但教训和"没说完"最后装了多少只有这里知道。
+    if (stickyIdx >= 0) {
+      const others = parts.filter((_, i) => i !== stickyIdx);
+      const othersText = others.join('\n\n');
+      const gap = others.length > 0 ? 2 : 0;
+      const room = maxChars - othersText.length - gap;
+      if (room >= STICKY_MIN_CHARS) {
+        const kept = stickySectionText(stickyFile, {
+          ttlDays: c.stickyTtlDays,
+          maxInject: c.stickyMaxInject,
+          maxChars: room,
+          at,
+        });
+        if (kept && kept.length <= room) parts.splice(stickyIdx, 1, kept);
+        else parts.splice(stickyIdx, 1);
+      } else {
+        parts.splice(stickyIdx, 1);
+      }
+      text = parts.join('\n\n');
+    }
+
+    // 第二刀：撤了纸条还是超，就只剩教训那一段太长这一种可能。
+    // 它的 `maxChars` 上一轮给的是 `budget`，现在按真实剩下的位置重装。
+    if (text.length > maxChars) {
+      const li = parts.findIndex((p) => p.startsWith('## 踩过的坑'));
+      if (li >= 0) {
+        const others = parts.filter((_, i) => i !== li);
+        const othersText = others.join('\n\n');
+        const room = maxChars - othersText.length - (others.length > 0 ? 2 : 0);
+        const smaller = room > 0 ? lessonSectionText(lessonFile, { limit: c.lessonLimit, maxChars: room }) : '';
+        if (smaller) parts.splice(li, 1, smaller);
+        else parts.splice(li, 1);
+        text = parts.join('\n\n');
+      }
+    }
+    if (text.length > maxChars) {
+      // 兜底：连教训都放不下，就只剩"没说完"那一段 —— 它是三样里最短、
+      // 也最不能整段丢的（一次最多一条）。到这里还超，说明句子本身就长，
+      // 硬截会截出半句话，宁可留一句日志。
+      log(`零碎记忆：出口仍然超预算 ${text.length} > ${maxChars}（教训与纸条已让位）`);
+    }
+  }
+  return text;
 }
 
 /**

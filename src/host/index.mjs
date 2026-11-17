@@ -99,7 +99,7 @@ import {
   correctionNote,
   renderEvent,
 } from '../core/feedback.mjs';
-import { findVerbatim, renderVerdict } from '../core/verbatim.mjs';
+import { findSpans, findVerbatim, renderSpans, renderVerdict } from '../core/verbatim.mjs';
 import { diagnoseMiss } from '../core/miss.mjs';
 import { LESSON_FILE, registerLesson } from '../core/lesson.mjs';
 import { LEDGER_FILE, forgetInLedger, ledgerReport, syncLedger } from '../core/ledger.mjs';
@@ -3683,6 +3683,11 @@ export function apply(ctx, rawConfig) {
                 return true;
               });
               const verdict = findVerbatim(pool.map((n) => n.said), query);
+              // 顺手把「在哪、唯一不唯一」也算出来（1.36.0）——
+              // `findVerbatim` 只回答"在不在"，引用的时候还要知道位置。
+              // 抄的是 memory-brain 的 `quote_ambiguous`：同一句原话里这串字
+              // 出现两次，就只说"他说过"，不替他指定"引的是哪一处"。
+              const spans = findSpans(pool.map((n) => n.said), query);
               // 「逐字没有」不等于「他没说过」—— 这个库只从 1.10.0 开始存，
               // 在那之前他说的话，这儿一个字都没有。不说清边界，"没有"会被读成"没发生"。
               const since0 = firstDay(pool);
@@ -3698,6 +3703,7 @@ export function apply(ctx, rawConfig) {
                 first: lines[0]?.date ?? '',
                 text:
                   renderVerdict(verdict, { label: '原话' }) +
+                  (spans.ambiguous > 0 ? `\n${renderSpans(spans, { label: '原话' })}` : '') +
                   (verdict.hits.length === 0 && since0
                     ? `\n（这库最早只到 ${since0} —— 在那之前他说的话，这儿一个字都没存。所以"没有"只是"我没存着"，不是"他没说过"。）`
                     : '') +

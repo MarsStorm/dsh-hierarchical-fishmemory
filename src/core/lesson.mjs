@@ -201,24 +201,35 @@ export function addLesson(file, input = {}) {
 export function renderSection(lessons, options = {}) {
   const limit = Number.isFinite(options.limit) ? options.limit : MAX_INJECT;
   const minCount = Number.isFinite(options.minCount) ? options.minCount : REPEAT_TO_INJECT;
+  // ── 字数上限（2026-11-18 加，1.36.0）──
+  //
+  // `fragmentsMaxChars` 从 1.23.0 起就号称是「三部分共用的一个总字数」，
+  // 但它一直只约束小纸条 —— 这一栏没有上限，5 条长坑就能把预算吃爆，
+  // 然后小纸条整段被挤掉。**"总字数"这个说法从来没成立过。**
+  const maxChars = Number.isFinite(options.maxChars) ? Math.max(0, options.maxChars) : Infinity;
   const eligible = (lessons ?? [])
     .filter((l) => Number.isFinite(l.count) && l.count >= minCount)
     .sort((a, b) => b.count - a.count || String(b.date).localeCompare(String(a.date)));
   const hit = eligible.slice(0, limit);
   if (hit.length === 0) return '';
+
+  const head = '## 踩过的坑（重复犯的，先看一眼再动手）';
+  const tailLine = '（不是提醒你别犯错 —— 是提醒你，这一类你上次就已经犯过了。）';
+
   const lines = hit.map((l) => `- 这个坑踩过 ${l.count} 次：${l.text}`);
-  // 挤掉了几条就说一声（1.27.0）。踩过两次以上的坑本身就少，
-  // 真有第 6 条被挤掉的时候，那一条很可能正是我最需要看见的那条。
-  const dropped = eligible.length - hit.length;
-  const tail = ['（不是提醒你别犯错 —— 是提醒你，这一类你上次就已经犯过了。）'];
-  if (dropped > 0) tail.push(`（还有 ${dropped} 条同样踩过两次以上，这次没位置 —— 用 lesson_list 看全。）`);
-  return [
-    '## 踩过的坑（重复犯的，先看一眼再动手）',
-    '',
-    ...lines,
-    '',
-    ...tail,
-  ].join('\n');
+  // 装完量一次总长，超了就吐一行 —— **量到真的不超为止**。
+  // 只做一次减法不够：帧（标题、两个空行、尾巴、"还有 N 条"那句自己也是字）
+  // 少估了就会 200 装出 208。这跟前几天那个"看着行实际上超了"是同一个坑。
+  const render = () => {
+    const dropped = eligible.length - lines.length;
+    const tail = [tailLine];
+    if (dropped > 0) tail.push(`（还有 ${dropped} 条同样踩过两次以上，这次没位置 —— 用 lesson_list 看全。）`);
+    return [head, '', ...lines, '', ...tail].join('\n');
+  };
+  while (lines.length > 0 && render().length > maxChars) lines.pop();
+  // 一条都装不下（预算比帧还小）：什么都不给，别留一个秃标题。
+  if (lines.length === 0) return '';
+  return render();
 }
 
 /**

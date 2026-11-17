@@ -132,6 +132,37 @@ test('预算被教训吃光：小纸条整段不出现，不留半行标题', ()
   }
 });
 
+// ── 边界话先占位（2026-11-18，1.36.0）──
+//
+// 抄自 memory-brain 的 `retrieval.py:371`：先在预算里扣下那一行
+// "这些材料不一定对"，再往剩下的地方填证据。我原来反着来。
+
+test('尾巴那一行有位置：留了 24 字，纸条不会把预算吃干净', () => {
+  // 200 字的总预算，纸条要 200 → 实际只拿得到 176 附近
+  const box = sandbox();
+  try {
+    writeNotes(box.files.stickyFile, 40);
+    const text = renderFragments({ ...box.files, config: { fragmentsMaxChars: 200 }, at: AT });
+    assert.ok(text.length <= 200, `不许超总预算（现在 ${text.length}）`);
+  } finally {
+    box.done();
+  }
+});
+
+test('总预算小到留不出尾巴：仍然不许超', () => {
+  const box = sandbox();
+  try {
+    writeNotes(box.files.stickyFile, 40);
+    const text = renderFragments({ ...box.files, config: { fragmentsMaxChars: 200 }, at: AT });
+    assert.ok(text.length <= 200);
+    // 200 的下限在 clampInt 里 —— 比它还小的值会被抬到 200，不会变负数
+    const tight = renderFragments({ ...box.files, config: { fragmentsMaxChars: 50 }, at: AT });
+    assert.ok(tight.length <= 200);
+  } finally {
+    box.done();
+  }
+});
+
 test('文件都不存在：返回空串，不炸', () => {
   const box = sandbox();
   try {
@@ -191,6 +222,60 @@ test('预算里没写数字时按默认走，不出现 NaN', () => {
     });
     assert.equal(text.includes('NaN'), false);
     assert.match(text, /## 小纸条/);
+  } finally {
+    box.done();
+  }
+});
+
+// ── 出口那一刀（2026-11-18，1.36.0）──
+//
+// 上面每一段都收了字数，但段与段之间的空行、各段自己额外拼的提示行
+// （"还有 N 条没挤进来""没说完的能接着问一句"）都不是谁单独算得清的。
+// 所以真正能保证的只有出口那一次量。这里要的就是"不管怎么塞都不超"。
+
+test('压测矩阵：纸条 × 教训 × 预算，一个组合都不许超', () => {
+  for (const nNotes of [0, 3, 10, 40]) {
+    for (const nLessons of [0, 2, 6]) {
+      for (const len of [10, 60]) {
+        const box = sandbox();
+        try {
+          writeNotes(box.files.stickyFile, nNotes);
+          const ls = [];
+          for (let i = 0; i < nLessons; i += 1) ls.push(`- [9] 2026-11-11 ｜${'啪'.repeat(len / 2)}${i}`);
+          writeFileSync(box.files.lessonFile, ls.length > 0 ? ls.join('\n') + '\n' : '', 'utf8');
+          for (const cap of [200, 300, 400, 600, 1400]) {
+            const text = renderFragments({
+              ...box.files,
+              config: { fragmentsMaxChars: cap },
+              at: AT,
+            });
+            assert.ok(
+              text.length <= cap,
+              `纸条 ${nNotes} × 教训 ${nLessons} × ${len} 字 × 预算 ${cap} → 出了 ${text.length}`,
+            );
+          }
+        } finally {
+          box.done();
+        }
+      }
+    }
+  }
+});
+
+test('超预算时先让纸条让位，教训那栏留着', () => {
+  const box = sandbox();
+  try {
+    writeNotes(box.files.stickyFile, 40);
+    writeFileSync(
+      box.files.lessonFile,
+      Array.from({ length: 6 }, (_, i) => `- [9] 2026-11-11 ｜${'啪'.repeat(40)}${i}`).join('\n') + '\n',
+      'utf8',
+    );
+    const text = renderFragments({ ...box.files, config: { fragmentsMaxChars: 300 }, at: AT });
+    assert.ok(text.length <= 300);
+    // 纸条是"少一条也还好"的那段，教训是"下次还会犯"的那段 —— 先让路的是纸条。
+    assert.ok(!text.includes('## 小纸条'), '纸条应该整段让位');
+    assert.ok(text.includes('踩过的坑'), '教训应该留着');
   } finally {
     box.done();
   }

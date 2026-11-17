@@ -70,6 +70,92 @@ export function findVerbatim(lines, quote) {
 }
 
 /**
+ * 这句话在这一行原文里的**位置**，不是一个"有/没有"。
+ *
+ * ── 抄的是 memory-brain 的 `derivation.py:141-147` ──
+ *
+ * 它存引用时存的不是「引用了什么」，是 `{message_id, start, end}` 三元组，
+ * 校验三件事：
+ *
+ *     if start < 0:                          raise 'quote_absent'
+ *     if text.find(quote, start + 1) >= 0:   raise 'quote_ambiguous'
+ *     if quote != text[start:end]:            raise 'quote_span_mismatch'
+ *
+ * 中间那条是我原来没有的：**引用必须唯一**。同一句话在原话里出现两次，
+ * "他这么说过"就还是确定的，但"他说的是哪一次"就不确定了 ——
+ * 而这两件事在我这边一直被混成一件。
+ *
+ * ── 为什么只做"行内"，不做"整段跨度" ──
+ *
+ * 它的引用能指回 `message_id + offset`，因为它把用户消息按 800 字切块存了。
+ * 我的 `纸条.md` 是**一行一句原话**：每行本身就是原话的最小单位，
+ * 没有"一句话里再切一段"的余地。所以这里只在本行内定位 ——
+ * 能给出 `start/end`，就不能说谎；给不出 message_id，就不假装给得出。
+ *
+ * @param {string} line 一行原话
+ * @param {string} quote 要找的那几个字
+ * @returns {{start:number, end:number, text:string, ambiguous:boolean} | null}
+ */
+export function locateQuote(line, quote) {
+  const q = cleanQuote(quote);
+  const text = String(line ?? '');
+  if (q === '' || text === '' || [...q].length < QUOTE_MIN_CHARS) return null;
+  const start = text.indexOf(q);
+  if (start < 0) return null;
+  // 同一行里第二次出现 —— 引用的位置不确定，但"有"是确定的。
+  const ambiguous = text.indexOf(q, start + 1) >= 0;
+  return { start, end: start + [...q].length, text, ambiguous };
+}
+
+/**
+ * 在一堆原文行里找，并且**每条命中都带上它的位置**。
+ *
+ * `findVerbatim` 回答的是"在不在"；这个回答的是"在哪、唯一不唯一"。
+ * 判据比它严一档：命中的行里只要有一处是 `ambiguous`，那一条就不能
+ * 当作可靠引用 —— 它可能引的是同一句话的另一处。
+ *
+ * @param {string[]} lines
+ * @param {string} quote
+ */
+export function findSpans(lines, quote) {
+  const q = cleanQuote(quote);
+  const list = Array.isArray(lines) ? lines : [];
+  if (q === '' || [...q].length < QUOTE_MIN_CHARS) {
+    return { exact: true, quote: q, hits: [], ambiguous: 0, tooShort: q !== '' };
+  }
+  const hits = [];
+  for (let i = 0; i < list.length; i++) {
+    const line = String(list[i] ?? '');
+    const start = line.indexOf(q);
+    if (start < 0) continue;
+    const ambiguous = line.indexOf(q, start + 1) >= 0;
+    hits.push({ line, index: i, start, end: start + [...q].length, ambiguous });
+  }
+  return {
+    exact: true,
+    quote: q,
+    hits,
+    // 有几条落点是"这一行里出现过不止一次"的位置。
+    ambiguous: hits.filter((h) => h.ambiguous).length,
+    tooShort: false,
+  };
+}
+
+/** 位置话。有歧义的时候必须说出来，不能只报"有"。 */
+export function renderSpans(result, { label = '原话' } = {}) {
+  const spans = Array.isArray(result?.hits) ? result.hits : [];
+  if (result?.tooShort === true) return `「${String(result.quote ?? '')}」太短，短到谁都能撞上。`;
+  if (spans.length === 0) {
+    return `${label}里没有这几个字连在一起出现。\n（"没有"只是逐字没有 —— 他说过意思相近的话，这条查不出来；换几个字再找。）`;
+  }
+  const ambiguous = Number(result?.ambiguous ?? 0);
+  const tail = ambiguous > 0
+    ? `\n（其中 ${ambiguous} 条在原话里出现了不止一次 —— 能说"他说过"，说不准引的是哪一处，要引用就多带几个字。）`
+    : '';
+  return `${label}里有 ${spans.length} 处：` + tail;
+}
+
+/**
  * 把结果说成一句人话。
  *
  * **两种结果只有两种说法**：有，或者没有。没有的时候不许补一句

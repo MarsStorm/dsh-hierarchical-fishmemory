@@ -399,7 +399,21 @@ export const DEFAULT_RECALL_OPTIONS = Object.freeze({
   minSalience: 0.5,
   saturation: 2,
   a: 1,
-  b: 0.45,
+  // ── salience 是小偏置，不是主判据（2026-11-18 改，1.36.0）──
+  //
+  // 原来是 0.45：跟相似度几乎等权（相似度最高才 1）。于是两条条目就像
+  // 「谁更"重要"」在争，而不是「谁更对得上这句话」。
+  //
+  // 这个数抄自 memory-brain 的 `policy.py:61`：
+  //     return 1. + .10 * (importance - .5) + (.03 if pinned else 0.)
+  // importance 从 0 到 1，排序分只浮动 ±5%。它那句话说得对：
+  // **importance 该是一个偏置，不该是准入闸。** 我这边准入归 `minSalience`，
+  // 排序就该主要由相似度说话。
+  //
+  // 为什么不是照抄成 0.1：我这边 salience 不是人手动标的"重要度"，
+  // 是固化时模型给的判断（真实档案 127 条均值 0.567、>=0.5 占 77%），
+  // 分布更集中，压到 0.1 等于让它彻底没用。0.15 是"能掰动小数点，掰不动方向"。
+  b: 0.15,
   c: 0.2,
   d: 0.8,
   temperature: 0.15,
