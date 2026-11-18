@@ -43,6 +43,7 @@ import { SUPPRESS_RE } from '../core/judge.mjs';
 import { buildIndex, selectMemories, searchScores, searchChars, queryHasSubstance, looksLikeWork, parseTimeHint, DEFAULT_RECALL_OPTIONS } from '../core/recall.mjs';
 import { scrub } from '../core/privacy.mjs';
 import { pickRecent, renderMemoryBlock } from '../core/persona.mjs';
+import { checkPersonaInjection, findProfilePatch, formatPersonaLine, isSingleLine, personaTag } from '../core/persona-line.mjs';
 import {
   PENDING_FILE as PENDING_QUEUE_FILE,
   pushPending,
@@ -272,6 +273,27 @@ function dshHome() {
   const env = process.env.DSH_HOME;
   if (typeof env === 'string' && env.trim() !== '') return env.trim();
   return path.join(homedir(), '.dsh');
+}
+
+/**
+ * 人设注入线的当日结论，给健康行用：`ok` / `断(第一句原因)` / `skip`。
+ *
+ * 为什么要有这个字段：健康行是我唯一每天固定写、也唯一有人（我）会回头看的
+ * 回声。它以前只报「记忆没丢」，不报「人设还在不在」—— 而后者正好是
+ * 2026-11-17 他问"人设卡是不是没作用"时，我答不上来的那一半。
+ *
+ * 代价：换天那天多读一个小文件。**不缓存** —— 缓存了它就再也追不上
+ * 中途被改掉的卡（那正是它要看的）。
+ */
+function personaHealthField(sessionId = '') {
+  try {
+    const patch = findProfilePatch(dshHome());
+    if (patch === null) return 'skip';
+    const check = checkPersonaInjection(patch.text, { sessionId });
+    return check.ok ? 'ok' : `断(${check.problems[0] ?? '读不出原因'})`;
+  } catch {
+    return 'skip';
+  }
 }
 
 /**
@@ -1584,7 +1606,8 @@ export function apply(ctx, rawConfig) {
           }
           const line =
             `[memory] ${today} total=${entries.length} ${report.line} pending=${pending}` +
-            ` missing=${report.missing.length} rewritten=${report.rewritten.length}`;
+            ` missing=${report.missing.length} rewritten=${report.rewritten.length}` +
+            ` persona=${personaHealthField()}`;
           appendFileSync(healthFile, `${line}\n`, 'utf8');
           log(line);
         }
@@ -1676,6 +1699,22 @@ export function apply(ctx, rawConfig) {
     }
     promptFibers.set(agent, fiber);
     log(`已为会话 ${String(agent.id)} 注册记忆段`);
+    // 人设那段（`soul:persona`）不归我注册，它断了也不会出声：卡被删、active 指空、
+    // 会话映射指到不存在的卡 —— 三种都让 renderPersona 回空串，系统提示里少一段字，
+    // 而**没有任何一处报错**。这里借注册这一轮顺手验配置链，把结论写进我的日志。
+    // 它证明的是链完整，不是这一轮真的注入了 —— 措辞里不许写成"已生效"。
+    try {
+      const patch = findProfilePatch(dshHome());
+      if (patch === null) {
+        log('人设线：没找到 profile patch，跳过自检（不是通过）');
+      } else {
+        const sessionId = String(agent.id);
+        const check = checkPersonaInjection(patch.text, { sessionId });
+        log(formatPersonaLine(check, { sessionId, singleLine: isSingleLine(patch.text) }));
+      }
+    } catch (err) {
+      warn(`人设线自检失败：${errorText(err)}`);
+    }
     // 官方 practices：agent.ctx 上的注册有两个 owner，插件自己也要留一份 disposer
     ctx.effect(() => () => {
       const f = promptFibers.get(agent);
