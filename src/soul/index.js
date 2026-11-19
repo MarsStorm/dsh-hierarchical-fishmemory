@@ -40,6 +40,7 @@ import { createMemoryLayout, normalizeMemoryTopic, retainMemoryEnds } from "./me
 import { diffLines } from "./card-diff.mjs";
 import { countRetired, countScoped, retireMatch, splitRetired } from "../core/retire.mjs";
 import { countMerged, mergeSection, renderSuggestion, stripMerged } from "../core/abstract.mjs";
+import { annotateStale } from "../core/staleness.mjs";
 import { planCardSnapshots } from "./card-watch.mjs";
 import { applyRestore, backupFileName, collectBackup, parseBackup, planRestore, registerBackupBuilder, registerRestoreHandler, summarizeBackup, writeBackupFile } from "../core/backup.mjs";
 import { readDiaryEntries } from "../core/stats.mjs";
@@ -306,7 +307,15 @@ function apply(ctx, config) {
     //
     // 作废是「这句不算数了」，归并是「这十几句已经压成上面那一句规律」。
     // 两者都不删原文 —— 注入里只该剩规律，原文留在文件里等我回去看。
-    const text = rawText ? stripMerged(splitRetired(rawText).live) : rawText;
+    //
+    // 1.38.0：**会过时的状态事实，加一句年龄提醒。**
+    //
+    // 「磁盘剩 3.7 G」「插件 1.36.0」这种话写下去是真的，三十天后还摆在那儿，
+    // 一样粗一样黑 —— 我读到会拿旧数跟他讲道理，而且不知道它是旧的。
+    // 这里**不删、不隐藏**，只在我标过 `⟪时效⟫` 的那些行末尾加一句
+    // 「记于 X，已经 N 天」。判断哪行会过期仍然是我自己的事：不标就永远是普通一行。
+    const annotated = rawText ? annotateStale(splitRetired(rawText).live, { now: Date.now() }) : { text: "" };
+    const text = rawText ? stripMerged(annotated.text) : rawText;
     const index = c.memory.layered && c.memory.recall === "keyword" && c.memory.indexMode === "recall"
       ? "Use memory_search(query) to find topic keys and summaries; memory_read(topic) retrieves full text."
       : fullIndex;

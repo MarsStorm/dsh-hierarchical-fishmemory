@@ -187,3 +187,32 @@ export function renderWeekly({ key, lines = [], summary = '' }) {
 export function weeklyPath(dir, key) {
   return `${String(dir).replace(/\/+$/, '')}/${WEEK_DIR}/${key}.md`;
 }
+
+/**
+ * 「上一周还没压成周结」那一行提醒（2026-11-19 加，1.38.0）。
+ *
+ * ── 为什么 ──────────────────────────────────────────────
+ *
+ * `fish_weekly` 是纯工具：我不主动想，就没有人写。落地的第一份是
+ * `2026-W45`，之后整整两周一份都没有 —— 工具没坏，是**没人提醒我**。
+ * 情感日记当年一模一样，是「今天还没写」那行把它救回来的。
+ *
+ * 所以这里照同一个办法：**只在没写的时候出现一行，写完当天就没了。**
+ *
+ * ── 分寸 ────────────────────────────────────────────────
+ *
+ * 1. 只看**上一周**。再往前的不管 —— 补三周前的周结没有意义，
+ *    而且那会让这行变成长期的负债，一直挂着。
+ * 2. 上一周至少要有 `minEntries` 条经过才提。空着的一周不该催我编。
+ * 3. 提醒里说清"怎么写"：先调 `fish_weekly` 拿料，再一天一行传回去。
+ *    （只喊"该写周结了"会让我去写周报，那正是这个模块开头反对的东西。）
+ *
+ * @param {{key:string, written:boolean, entryCount:number, minEntries?:number}} input
+ * @returns {string} 一行话，或者 ''
+ */
+export function renderWeeklyNudge({ key, written, entryCount, minEntries = 2 } = {}) {
+  if (!key || written) return '';
+  const n = Number(entryCount) || 0;
+  if (n < (Number.isFinite(minEntries) ? minEntries : 2)) return '';
+  return `🗓 上一周（${key}）有 ${n} 条经过，还没压成周结 —— 先 \`fish_weekly({week:"${key}"})\` 拿料，再一天一行传回去。`;
+}

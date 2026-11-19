@@ -65,7 +65,7 @@ import { readJsonOrNull, readTextOrNull } from '../core/fsx.mjs';
 import { silentStreak, renderSilenceNudge } from '../core/nudge.mjs';
 import { renderDiaryFile } from '../core/render-diary.mjs';
 import { DIARY_MD, FEELINGS_MD, HEALTH_LOG } from '../core/files.mjs';
-import { buildMaterial, feelingsOfWeek, groupByDay, previousWeekKey, renderWeekly, weekRange, weeklyPath } from '../core/weekly.mjs';
+import { buildMaterial, feelingsOfWeek, groupByDay, previousWeekKey, renderWeekly, renderWeeklyNudge, weekKey, weekRange, weekSpan, weeklyPath, WEEK_DIR } from '../core/weekly.mjs';
 import { buildJudgeInput, parseVerdict, JUDGE_MAX_TOKENS } from '../core/judge.mjs';
 import { collectLayerReport } from '../core/stats.mjs';
 import { selectHandNotes, HANDNOTE_FILE, HANDNOTE_TEMPLATE } from '../core/handnote.mjs';
@@ -1586,15 +1586,44 @@ export function apply(ctx, rawConfig) {
       //
       // 为什么值得每天多一次小 IO：体检页得有人点开才知道，也就等于没人知道；
       // 账本更麻烦 —— 它证明的是「没丢」，而没丢这件事本身**不发声**。
+      //
+      // 2026-11-19 修：这一行原来连续三天都是 `账本=注意`，原因却只是 `fresh`
+      // （新写的日记还没入账）—— 而新日记天天都有，除非有人手动 sync。
+      // 一个天天喊的检查等于没有检查，所以：`fresh` / `grown` 不再算注意，
+      // 并且把它们各自的数字打进行里，让它有话直说。
+      //
+      // 换天之后首次开口时顺手做两件小清扫（都在这里，因为这里已经有 IO 了）：
+      // ① 把还没入账的补进账本 —— 这本账的作用是"证明没丢"，不该等人手动 sync；
+      // ② 清掉上次进程被硬杀留下的孤儿 `.tmp-<pid>` 半截文件。
       try {
         const today = dayKey();
         const healthFile = path.join(archiveDirectory, HEALTH_LOG);
         const tail = readTextOrNull(healthFile) ?? '';
         const lastLine = tail.trim().split('\n').filter(Boolean).at(-1) ?? '';
         if (!lastLine.startsWith(`[memory] ${today}`)) {
+          const ledgerFile = path.join(archiveDirectory, LEDGER_FILE);
           const entries = archive.diary;
+          // 先补账再对账：否则每天这一行都得先报一次"新长出 N 条"。
+          //
+          // **注意顺序**：补完账再对账，`report.fresh` / `report.grown` 必然是 0 ——
+          // 照字面报进去就是两个永远为 0 的字段，等于没报（这插件吃过"永远走不到的
+          // 分支"的亏，一次在 `hasSummary`，两次在守卫）。
+          //
+          // 所以这里报的是**今天新长出来几条**：同步成功时就是刚补进去的那些
+          // （`added`），同步失败时就是还留在原地的那些（`report.fresh`）——
+          // 两种情况下这个数字都还是那句话，不会变成一个假 0。
+          let added = 0;
+          let refreshed = 0;
+          try {
+            const synced = syncLedger(ledgerFile, entries, { at: Date.now() });
+            added = synced.added;
+            refreshed = synced.refreshed;
+            if (added > 0 || refreshed > 0) log(`账本自动同步：新入账 ${added} 条，刷新 ${refreshed} 条`);
+          } catch {
+            // 补不进去也不能挡住下面的对账 —— 对账正是要发现这种情况的
+          }
           const report = ledgerReport({
-            file: path.join(archiveDirectory, LEDGER_FILE),
+            file: ledgerFile,
             entries,
             memoryCount: entries.length,
           });
@@ -1606,10 +1635,26 @@ export function apply(ctx, rawConfig) {
           }
           const line =
             `[memory] ${today} total=${entries.length} ${report.line} pending=${pending}` +
+            ` new=${added + report.fresh} grown=${refreshed + report.grown}` +
             ` missing=${report.missing.length} rewritten=${report.rewritten.length}` +
             ` persona=${personaHealthField()}`;
           appendFileSync(healthFile, `${line}\n`, 'utf8');
           log(line);
+
+          // 顺手清孤儿半截文件 —— 只有这里顺手，因为这里已经有 IO 了，
+          // 而且一天只跑一次。`日记.md.tmp-31810` 从 11-12 躺到 11-19 才被发现。
+          try {
+            const swept = sweepStrayTmpFiles(archiveDirectory, { now: Date.now() });
+            const note = describeSweep(swept);
+            if (note) log(note);
+            for (const sub of ['diary', WEEK_DIR]) {
+              const inner = sweepStrayTmpFiles(path.join(archiveDirectory, sub), { now: Date.now() });
+              const innerNote = describeSweep(inner);
+              if (innerNote) log(innerNote);
+            }
+          } catch {
+            // 清不掉就算了，绝不能挡住健康记录
+          }
         }
       } catch {
         // 健康记录写不出来，不该挡住这一轮的记忆
@@ -1632,6 +1677,32 @@ export function apply(ctx, rawConfig) {
         }
       } catch {
         // 读不到日记不能挡住记忆
+      }
+
+      // 上一周还没压成周结：同样只在没写的时候出现一行。
+      //
+      // 2026-11-19 加（1.38.0）。`fish_weekly` 落地后只有 `2026-W45` 一份，
+      // 之后两周一份都没有 —— 工具没问题，是**没人提醒我**。跟情感日记
+      // 一模一样的病，就用一模一样的药：只在缺的时候挂一行，写完了它自己就没了。
+      //
+      // 只看上一周：再往前的补写没有意义，那会让这行变成永远还不完的债。
+      try {
+        const weekKeyNow = weekKey(Date.now());
+        const prev = previousWeekKey(Date.now());
+        const written = existsSync(weeklyPath(archiveDirectory, prev));
+        if (!written && prev !== weekKeyNow) {
+          const span = weekSpan(prev);
+          const count = span === null
+            ? 0
+            : (archive?.diary ?? []).filter((e) => {
+                const ts = Number(e?.created_at ?? e?.at ?? 0);
+                return ts >= span.from && ts <= span.to;
+              }).length;
+          const nudge = renderWeeklyNudge({ key: prev, written, entryCount: count });
+          if (nudge) text = text ? `${text}\n\n${nudge}` : nudge;
+        }
+      } catch {
+        // 周结目录读不到不能挡住记忆
       }
 
       // 闷太久：连着几轮只有工具调用、一句正文都没有，就提我一句。

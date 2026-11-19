@@ -148,3 +148,27 @@ test('账本：文件不存在时是空账，不抛', () => {
   assert.deepEqual(scan.fresh, ['a']);
   assert.equal(scan.missing.length, 0);
 });
+
+test('账本：只有"新长出"不算注意 —— 否则这行永远是注意', () => {
+  // 2026-11-19 修的那条。新日记天天有，而 sync 只在我手动调的时候才跑，
+  // 所以只要 fresh 进 ok 判据，健康那行就**永远**是「账本=注意」。
+  // 实测连续三天全是注意，一行有用的话都没有 —— 那就是"报太多教人无视它"。
+  const file = tmpFile();
+  syncLedger(file, [ENTRY('a', '正文甲')], { at: 1 });
+  const entries = [ENTRY('a', '正文甲'), ENTRY('b', '今天新写的')];
+  const report = ledgerReport({ file, entries, memoryCount: 2 });
+  assert.equal(report.fresh, 1);
+  assert.equal(report.ok, true, '新长出不是事故，是这本账还没跟上');
+  assert.match(report.text, /新长出 1 条还没入账/, '但话还是要说');
+});
+
+test('账本：新长出之外真有事故，照样是注意', () => {
+  // 负例：放宽以后不能把真事故也放过去。丢了 + 新长出 同时发生 → 仍是注意。
+  const file = tmpFile();
+  syncLedger(file, [ENTRY('a', '正文甲'), ENTRY('b', '正文乙')], { at: 1 });
+  const entries = [ENTRY('a', '正文甲'), ENTRY('c', '今天新写的')];
+  const report = ledgerReport({ file, entries, memoryCount: 2 });
+  assert.equal(report.ok, false, '少了的那条必须还报');
+  assert.equal(report.missing.length, 1);
+  assert.equal(report.fresh, 1);
+});

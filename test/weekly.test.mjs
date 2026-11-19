@@ -13,6 +13,7 @@ import {
   groupByDay,
   previousWeekKey,
   renderWeekly,
+  renderWeeklyNudge,
   weekKey,
   weekRange,
   weekSpan,
@@ -146,4 +147,26 @@ test('renderWeekly：周写错直接报错，不生成空文件', () => {
 
 test('weeklyPath：一周一个文件', () => {
   assert.equal(weeklyPath('/root/projects/.dsh/feiyu-diary/', '2026-W46'), '/root/projects/.dsh/feiyu-diary/周结/2026-W46.md');
+});
+
+test('周结提醒：没写、有料，才提一句', () => {
+  const line = renderWeeklyNudge({ key: '2026-W46', written: false, entryCount: 5 });
+  assert.match(line, /2026-W46/);
+  assert.match(line, /5 条经过/);
+  assert.match(line, /fish_weekly/, '要告诉他怎么写，不是只喊"该写周结了"');
+});
+
+test('周结提醒：写过了就不再提', () => {
+  assert.equal(renderWeeklyNudge({ key: '2026-W46', written: true, entryCount: 5 }), '');
+});
+
+test('周结提醒：那一周空着就不提 —— 空的一周不该催我编', () => {
+  assert.equal(renderWeeklyNudge({ key: '2026-W46', written: false, entryCount: 0 }), '');
+  assert.equal(renderWeeklyNudge({ key: '2026-W46', written: false, entryCount: 1 }), '');
+  assert.notEqual(renderWeeklyNudge({ key: '2026-W46', written: false, entryCount: 2 }), '', '两条就算有料了');
+});
+
+test('周结提醒：参数缺了也不炸', () => {
+  assert.equal(renderWeeklyNudge(), '');
+  assert.equal(renderWeeklyNudge({}), '');
 });

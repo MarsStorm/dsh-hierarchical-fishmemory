@@ -209,7 +209,16 @@ export function ledgerReport({ file, entries, memoryCount = null, at = Date.now(
   const scan = scanLedger(ledger, entries);
   const diskCount = (entries ?? []).length;
   const agree = memoryCount === null ? null : Number(memoryCount) === diskCount;
-  const ok = scan.missing.length === 0 && scan.rewritten.length === 0 && scan.fresh.length === 0
+  // 2026-11-19 修：**`fresh` 不再算「注意」。**
+  //
+  // 原来这四个条件里包含 `scan.fresh.length === 0`，于是每天新写的日记
+  // 都会让这一行变成 `账本=注意` —— 而新日记天天都有，除非有人手动跑
+  // `fish_ledger sync`。实测连续三天全是「注意」，一行有用的信息都没有。
+  //
+  // 那正是我自己记过的那个坑：**一个报得太多的检查，会教人学会无视它。**
+  // fresh 不是事故，是「这本账还没跟上」；它自己有话说，不必借「注意」两个字。
+  // 真事故只有两种：少了，或者被改成别的样子了。
+  const ok = scan.missing.length === 0 && scan.rewritten.length === 0
     && (agree === null || agree === true);
 
   // 划掉的（忘掉）不算在账里，否则「账本 2 条 / 档案 1 条」看起来像丢了。
