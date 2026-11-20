@@ -9,6 +9,7 @@ import {
   searchChars,
   searchScores,
   searchWithChars,
+  exposurePenalty,
   selectMemories,
   softmaxPick,
 } from '../src/core/recall.mjs';
@@ -247,4 +248,63 @@ test('searchWithChars：bigram 撞上的不算 weak', () => {
   const got = searchWithChars(idx, '端口');
   assert.equal(got.get('a').weak, false);
   assert.ok(got.get('a').sim > 0.15);
+});
+
+// —— maxShowPerTurn 不再是假开关（1.39.0）——
+//
+// 以前宿主写死 `Math.min(2, config.maxShowPerTurn)`，配置允许 0~12、
+// 界面也画了滑杆，实际永远只有 2。这里三条测试就是为了让"改了有反应"
+// 这件事本身被钉住：给 3 就出 3、给 0 就一条都不出。
+const crowd = [
+  entry('m1', '赛博朋克那晚我们聊到三点'),
+  entry('m2', '赛博朋克里的银色手臂我记得'),
+  entry('m3', '赛博朋克结局我到现在没看'),
+  entry('m4', '赛博朋克配乐那首我还在听'),
+];
+
+test('selectMemories：maxShow 给 3 就真出 3 条', () => {
+  const idx = buildIndex(crowd);
+  const { chosen } = selectMemories(crowd, idx, '赛博朋克', { lastShownTurn: new Map() }, 1, {
+    now,
+    rng: () => 0.99,
+    wanderChance: 0,
+    minSalience: 0,
+    maxShow: 3,
+    highSim: 0.5,
+  });
+  assert.equal(chosen.length, 3);
+});
+
+test('selectMemories：maxShow 给 0 就一条都不出 —— 走神也不行', () => {
+  const idx = buildIndex(crowd);
+  // rng 恒为 0，wanderChance 给满 1 —— 走神分支"想触发就能触发"。
+  // 设成 0 的人意思是"这一轮不许想起来"，那就该连走神一起停。
+  const { chosen } = selectMemories(crowd, idx, '赛博朋克', { lastShownTurn: new Map() }, 1, {
+    now,
+    rng: () => 0,
+    wanderChance: 1,
+    minSalience: 0,
+    maxShow: 0,
+    highSim: 0.5,
+  });
+  assert.equal(chosen.length, 0);
+});
+
+// —— 冷却惩罚不再是"一次性永久处分"（1.39.0）——
+//
+// 以前只要露过一次面，那 0.8 就扣到进程死。过了冷却窗口也照扣，
+// 等于一次 0 分相似度。这里钉住三件事：没露过不扣、刚出窗扣满、久了归零。
+test('exposurePenalty：没露过面不扣分', () => {
+  assert.equal(exposurePenalty(undefined, 100, { d: 0.8, cooldownTurns: 20 }), 0);
+});
+
+test('exposurePenalty：刚出冷却窗口时扣满', () => {
+  const p = exposurePenalty(80, 100, { d: 0.8, cooldownTurns: 20 });
+  assert.ok(Math.abs(p - 0.8) < 1e-9, `应为 0.8，实际 ${p}`);
+});
+
+test('exposurePenalty：过了很久就完全不扣', () => {
+  // 200 轮之后（cooldownTurns * 10）应该归零 —— 上个月说过的话不该还在受罚。
+  assert.equal(exposurePenalty(1, 400, { d: 0.8, cooldownTurns: 20 }), 0);
+  assert.ok(exposurePenalty(100, 200, { d: 0.8, cooldownTurns: 20 }) > 0);
 });

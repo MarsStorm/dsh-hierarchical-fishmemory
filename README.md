@@ -178,6 +178,7 @@
 - `salience < minSalience`（默认 0.15）的不进档。
 - 固化的提示词**只写经过**：谁说了什么、我做了什么、结果落在哪。心情不归它写。
 - 固化可以单独指定模型与速度档，不跟聊天抢同一套配置。
+- `kind` 目前有 `chat` / `win` / `failure` / `note` / `digest`。`note` 不进注入（也不是召回候选）；`digest` 是 `fish_compact` 折出来的月度摘要，**它进注入**——1.39.0 之前摘要的 kind 写的是 `note`，于是"压缩"实际上等于"把那一个月从日常记忆里删掉"。
 
 ### 记忆会衰减，但不会被删
 
@@ -302,7 +303,11 @@ dsh plugin --profile web add link:/abs/path/to/dsh-hierarchical-fishmemory
 | `fish_mirror` | 今天这一天的横切面（原话 / 经过 / 陈了的账 / 心里写没写），只读 |
 | `memory_read(topic)` · `memory_append` · `memory_rewrite` · `memory_search` | 深层事实与坑，按主题取、按主题写 |
 | `memory_abstract` · `memory_retire` | 把一节压成一句规律 / 把不算数的一行作废（可带 `cue` 只作废一个话题）——都不删原文，只是不再进注入 |
+| `fish_quote` | 只翻**他的原话**（一字不改）；`exact: true` 只认逐字命中，找不到就是找不到 |
 | `fish_feedback` | 记一条有依据的反馈（引用 / 帮助 / 重申 / 纠正 / 失效）；**曝光不算强化** |
+| `sticky_note` · `sticky_list` · `sticky_pin` | 小纸条：把他说的一句原话记下来 / 看全部 / 钉住一条永不过期 |
+| `lesson_note` · `lesson_list` | 踩过的坑；同一个坑再记一次会加次数，**两次以上**才进注入 |
+| `fish_ledger` | 账本对账（`status` / `sync` / `verify` / `ack`）：证明一条都没丢、也没被悄悄改写 |
 | `fish_weekly` | 拿一周的素材 / 把一天一行落成周结（`周结/YYYY-Www.md`） |
 | `soul_read` · `soul_update` | 读 / 改当前人设卡 |
 | `shallow_note` · `shallow_touch` · `shallow_list` · `shallow_forget` · `shallow_sweep` | 浅层记忆；再提到就自动续期 |
@@ -378,11 +383,13 @@ fish_cloud_backup({ note: "出差前" })
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `dataDir` | `~/.dsh/feiyu-diary` | 档案目录；想放同步盘就写绝对路径 |
-| `budgetTokens` | `2000` | 每轮注入预算，成本封顶，与聊多久无关 |
+| `budgetTokens` | `3000` | 每轮注入预算，成本封顶，与聊多久无关。量过：常驻段本身要 2680，再少就开始裁「最近的事」 |
 | `reasoningEffort` | `off` | **别改**。跟随聊天档位会让固化把 token 全烧在思考上、正文一个字不产出（症状：600 个 chunk / 0 字符） |
 | `model` | `''` | 固化用模型，留空跟随默认。建议用便宜档 |
 | `includePersona` | `false` | 本包已有人设卡入口，再开就是两份人格同时进 prompt |
-| `minSalience` | `0.15` | 日记重要度门槛；调高会连带扔掉寒暄和试错，那些恰恰是「熟悉感」的原料 |
+| `minSalience` | `0.15` | 日记重要度门槛；调高会连带扔掉寒暄和试错，那些恰恰是「熟悉感」的原料。**下限是 0**，设 0 就是不设门槛 |
+| `maxShowPerTurn` | `2` | 每轮最多主动想起几条（0–12）；0 = 这一轮完全不翻旧事 |
+| `recentEntries` | `8` | 「最近的事」每轮留几条（0–30）；这一段**免预算**，每轮都在 |
 | `webdavUrl` | `''` | WebDAV 服务器地址（如 `https://dav.jianguoyun.com/dav/`）；留空＝不开云端备份 |
 | `webdavUser` / `webdavPassword` | `''` | 账号与密码（或应用专用密码）；**明文存在本机配置里** |
 | `webdavDir` | `属于我们的回忆` | 云端目录名，不存在会逐级 `MKCOL` 建 |

@@ -749,6 +749,10 @@ function apply(ctx, config) {
       }
       const { exists, text, index, source, topic: resolvedTopic = "" } = memoryReadChain(agentOf(exec), topic);
       const full = [text, index].filter(Boolean).join("\n\n");
+      // topic 里的 `⟪时效⟫` 以前只是一串没人处理的符号 —— 注入那条路
+      // 只给 core 做标注（`renderMemory`），`memory_read(topic)` 是另一条路。
+      // 标了却没有年龄，等于白标：我会以为那串字是某种强调。
+      const shown = text ? annotateStale(text, { now: Date.now() }).text : text;
       const retired = countRetired(text ?? "");
       const scoped = countScoped(text ?? "");
       const merged = countMerged(text ?? "");
@@ -757,9 +761,10 @@ function apply(ctx, config) {
       rememberTopic(agentOf(exec), source, resolvedTopic);
       const MAX = 20000;
       const truncated = full.length > MAX;
+      const shownFull = [shown, index].filter(Boolean).join("\n\n");
       const excerpt = index && index.length < MAX
-        ? [retainMemoryEnds(text, MAX - index.length - (text ? 2 : 0)), index].filter(Boolean).join("\n\n")
-        : retainMemoryEnds(full, MAX);
+        ? [retainMemoryEnds(shown, MAX - index.length - (shown ? 2 : 0)), index].filter(Boolean).join("\n\n")
+        : retainMemoryEnds(shownFull, MAX);
       return {
         exists: true,
         bytes: byteLen(full),
@@ -770,7 +775,7 @@ function apply(ctx, config) {
         scoped,
         merged,
         suggest,
-        content: truncated ? `${excerpt}\n…(truncated; beginning and end of core retained when layered; use a topic or file read for complete memory)…` : full,
+        content: truncated ? `${excerpt}\n…(truncated; beginning and end of core retained when layered; use a topic or file read for complete memory)…` : shownFull,
       };
     },
   }));

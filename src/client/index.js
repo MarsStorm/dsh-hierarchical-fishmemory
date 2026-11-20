@@ -493,10 +493,27 @@ window.__ModuleLoader__.load({
 
     /* ───────────────────────── 一条日记 ───────────────────────── */
 
+    /**
+     * 他的钟点。**日期只有一个时区：UTC+8。**
+     *
+     * 核心那份在 `src/core/timeline.mjs` 的 `TZ_OFFSET_MS`；这里是面板侧的副本。
+     * 为什么不能用 `getHours()`：那是**浏览器本地时区**。本机是 UTC 的时候，
+     * 他那边 00:00–08:00 会整段掉进前一天，日期分组和"今天/昨天"一起错。
+     * 他自己在 +8 看不出问题，换个时区看这份面板就全乱了 —— 所以必须钉死。
+     */
+    const HIS_TZ_MS = 8 * 60 * 60 * 1000;
+    const DAY_MS = 86400000;
+    function hisStartOfDay(t) {
+      return Math.floor((t + HIS_TZ_MS) / DAY_MS) * DAY_MS - HIS_TZ_MS;
+    }
+    function hisMonthDay(ts) {
+      const d = new Date(ts + HIS_TZ_MS);
+      return `${d.getUTCMonth() + 1}-${String(d.getUTCDate()).padStart(2, '0')}`;
+    }
     function clockOf(ts) {
       if (!Number.isFinite(ts)) return '';
-      const d = new Date(ts);
-      return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      const d = new Date(ts + HIS_TZ_MS);
+      return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
     }
 
     function Entry(props) {
@@ -536,8 +553,10 @@ window.__ModuleLoader__.load({
                 {
                   type: 'button',
                   className: 'fs-link',
-                  title: '从档案里删掉这一条',
-                  disabled: Boolean(props.busy),
+                  // 档案只读（连续三次写盘失败）时别让它点 —— 点了也是白点，
+                  // 而「白点一下」正是以前那个"点了没反应"的坑。
+                  title: props.degraded ? '档案现在是只读的（写盘一直失败），删不了' : '从档案里删掉这一条',
+                  disabled: Boolean(props.busy) || Boolean(props.degraded),
                   onClick: () => setConfirming(true),
                 },
                 props.busy ? '正在忘…' : '忘掉',
@@ -561,20 +580,14 @@ window.__ModuleLoader__.load({
       };
     }
 
-    /** 时间说人话：今天 / 昨天 / 3 天前 / 10-05 */
+    /** 时间说人话：今天 / 昨天 / 3 天前 / 10-05（一律按他的 UTC+8 算） */
     function dayLabel(ts) {
       if (!Number.isFinite(ts)) return '';
-      const startOfDay = (t) => {
-        const d = new Date(t);
-        d.setHours(0, 0, 0, 0);
-        return d.getTime();
-      };
-      const days = Math.round((startOfDay(Date.now()) - startOfDay(ts)) / 86400000);
+      const days = Math.round((hisStartOfDay(Date.now()) - hisStartOfDay(ts)) / DAY_MS);
       if (days <= 0) return '今天';
       if (days === 1) return '昨天';
       if (days < 7) return `${days} 天前`;
-      const d = new Date(ts);
-      return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')}`;
+      return hisMonthDay(ts);
     }
 
     /* ───────────────────────── 本子 ───────────────────────── */
@@ -775,7 +788,8 @@ window.__ModuleLoader__.load({
 
     /** 他那边今天的 `YYYY-MM-DD`（本机是 UTC，直接切会差一天）。 */
     function localToday() {
-      return new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      // 名字里的 local 是历史遗留 —— 这其实是**他那边的今天**，不是浏览器本地。
+      return new Date(Date.now() + HIS_TZ_MS).toISOString().slice(0, 10);
     }
 
     /** 最近 weeks 周、按周排列的格子；每格是那天，没写的是空。 */
@@ -1015,7 +1029,10 @@ window.__ModuleLoader__.load({
               type: 'button',
               className: 'fs-btn fs-btn--sm',
               onClick: load,
-              disabled: busy,
+              // 有没保存的改动时不许点 —— 以前这里只禁 busy，点一下就把他
+              // 刚写的东西整篇换掉了，连一句「会丢」都没有。
+              disabled: busy || dirty,
+              title: dirty ? '有没保存的改动，先保存再来' : '重新从磁盘读一遍',
             },
             '重新读',
           ),
@@ -1354,7 +1371,9 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { key, className: 'fs-entryText', style: { fontSize: 12, padding: '3px 0' } },
-          h('span', { className: 'fs-clock', style: { marginRight: 7, color: C.text2 } }, String(entry.at || '').slice(11, 16)),
+          // 这里以前读 `entry.at` —— 日记条目**没有这个字段**（真实字段是 created_at），
+          // 于是"最近七天"每行前面永远是空的。同一份数据在 :509 用对了，这里没有。
+          h('span', { className: 'fs-clock', style: { marginRight: 7, color: C.text2 } }, clockOf(entry.created_at)),
           String(entry.text || '').slice(0, 160),
         );
 
@@ -1504,6 +1523,9 @@ window.__ModuleLoader__.load({
             type: 'button',
             className: 'fs-btn',
             onClick: () => picker.current && picker.current.click(),
+            // 写入进行中还能再选一个文件 —— 第二个会被当成新的导入开始，
+            // 而第一个已经写了一半。等它写完再让选。
+            disabled: phase === 'writing',
           },
           h(Glyph, { name: 'box' }),
           '导入备份（.json）',
@@ -1627,7 +1649,10 @@ window.__ModuleLoader__.load({
         }
       };
 
-      const when = state && state.lastAt ? new Date(state.lastAt).toLocaleString() : '';
+      // 以前用 `toLocaleString()` —— 那是浏览器时区；面板是给他看的，就用他的钟点。
+      const when = state && state.lastAt
+        ? `${hisMonthDay(state.lastAt)} ${clockOf(state.lastAt)}`
+        : '';
 
       return h(
         'div',
@@ -1876,7 +1901,13 @@ window.__ModuleLoader__.load({
                     'div',
                     { className: 'fs-rail' },
                     group.items.map((e) =>
-                      h(Entry, { key: e.id, entry: e, onForget: forget, busy: busy === e.id }),
+                      h(Entry, {
+                        key: e.id,
+                        entry: e,
+                        onForget: forget,
+                        busy: busy === e.id,
+                        degraded: Boolean(d.degraded),
+                      }),
                     ),
                   ),
                 ),

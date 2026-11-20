@@ -456,6 +456,8 @@ window.__ModuleLoader__.load({
       cloudMemSame: "和现在一样，没东西要改。",
       cloudMemRestored: "已从云端恢复：写 {n} 个文件。日记和手记要重启后才重新加载。",
       cloudMemFail: "云端恢复失败：{detail}",
+      cloudNotConfigured: "还没配 WebDAV 地址和账号 —— 先在下面的「配置备份」里填好再来。",
+      cloudDisabled: "云端备份的开关是关着的，打开它才能列云上的备份。",
       cloudLoadFail: "读不到云端设置：{detail}",
       cloudSaveFail: "保存失败：{detail}",
       cloudPasswordSet: "已保存密码",
@@ -472,6 +474,20 @@ window.__ModuleLoader__.load({
       fragmentsEnabledHint: "三段小东西合成一段注入：他说的原话、我重复踩的坑、当时没接住的半句话。关掉就是三段一起不注入，记录照旧。",
       fieldFragmentsMaxChars: "「零碎记忆」整段最多多少字",
       fragmentsMaxCharsHint: "三段共用这一个数。教训和「没说完」先占位，小纸条拿剩下的 —— 它们要是被挤掉就白搭。",
+      groupRecall: "想起什么",
+      groupRecallHint: "这两个是「这一轮能想起来几条」的闸门，改大改小立刻有感觉",
+      fieldRecentEntries: "「最近的事」每轮留几条",
+      recentEntriesHint: "0–30。这几条是**免预算**的固定段，每轮都在 —— 它决定我此刻记不记得刚才。",
+      fieldMaxShowPerTurn: "每轮最多主动想起几条",
+      maxShowPerTurnHint: "0–12。0 = 这一轮完全不主动翻旧事。",
+      fieldWanderChance: "没有够格的时，随手翻一条的概率",
+      wanderChanceHint: "0–0.5。0 = 宁可不提，也不硬找一条。",
+      fieldMinSalience: "沾边的门槛：多重要才提",
+      minSalienceHint: "0–1。相似度不够时看这条，低于它的不提。0 = 不设门槛。",
+      fieldHighSim: "多像才算「就是它」",
+      highSimHint: "0–1。到这档直接选它、不再抽签；低一档只算沾边。",
+      fieldBudgetTokens: "每轮注入预算（token）",
+      budgetTokensHint: "3000 是量过的：常驻段要 2680，再少就开始裁「最近的事」。",
       groupEachTurn: "每轮都会注入的",
       groupEachTurnHint: "这几项决定每轮开头你眼前有没有东西",
       groupPace: "什么时候开口",
@@ -602,6 +618,8 @@ window.__ModuleLoader__.load({
       cloudMemSame: "Identical to what you have — nothing to change.",
       cloudMemRestored: "Restored {n} files from the cloud. Diaries reload after a restart.",
       cloudMemFail: "Cloud restore failed: {detail}",
+      cloudNotConfigured: "WebDAV address and account are not set yet - fill them in under config backup below first.",
+      cloudDisabled: "Cloud backup is switched off. Turn it on to list backups in the cloud.",
       cloudLoadFail: "Could not read cloud settings: {detail}",
       cloudSaveFail: "Save failed: {detail}",
       cloudPasswordSet: "password saved",
@@ -618,6 +636,20 @@ window.__ModuleLoader__.load({
       fragmentsEnabledHint: "Three small things injected as one block: his own words, the mistakes I keep repeating, and half-sentences I never caught. Turning it off stops the injection; the records stay.",
       fieldFragmentsMaxChars: "Fragment block size limit (characters)",
       fragmentsMaxCharsHint: "One budget for all three. Lessons and unfinished lines take their room first; sticky notes get what's left.",
+      groupRecall: "What comes back",
+      groupRecallHint: "These two decide how many old things this turn can surface",
+      fieldRecentEntries: "Recent events kept each turn",
+      recentEntriesHint: "0-30. These are pinned and exempt from the budget - they decide whether I remember what just happened.",
+      fieldMaxShowPerTurn: "Max recalled entries per turn",
+      maxShowPerTurnHint: "0-12. 0 = never volunteer anything from the past this turn.",
+      fieldWanderChance: "Chance to surface something unrelated",
+      wanderChanceHint: "0-0.5. 0 = rather say nothing than force one.",
+      fieldMinSalience: "Salience floor for a weak match",
+      minSalienceHint: "0-1. Used when similarity is low; anything below is skipped. 0 = no floor.",
+      fieldHighSim: "Similarity that counts as a solid match",
+      highSimHint: "0-1. At this level it is picked outright; just below only counts as a faint match.",
+      fieldBudgetTokens: "Per-turn injection budget (tokens)",
+      budgetTokensHint: "3000 was measured: the standing sections need 2680, below that recent events start getting trimmed.",
       groupEachTurn: "Injected every turn",
       groupEachTurnHint: "Whether anything reaches me at the start of each turn",
       groupPace: "When to speak up",
@@ -708,7 +740,15 @@ window.__ModuleLoader__.load({
       { key: "voiceEnabled", type: "checkbox", def: 1, label: "fieldVoiceEnabled", hint: "voiceEnabledHint" },
       { key: "silenceNudge", type: "number", min: 0, max: 20, def: 3, label: "fieldSilenceNudge", hint: "silenceNudgeHint" },
       { key: "staleLoopDays", type: "number", min: 0, max: 30, def: 3, label: "fieldStaleLoopDays", hint: "staleLoopDaysHint" },
-      { key: "fragmentsMaxChars", type: "number", min: 200, max: 4000, def: 1400, label: "fieldFragmentsMaxChars", hint: "fragmentsMaxCharsHint" }
+      { key: "fragmentsMaxChars", type: "number", min: 200, max: 4000, def: 1400, label: "fieldFragmentsMaxChars", hint: "fragmentsMaxCharsHint" },
+      // 下面这几个以前只能改 profile 里的 yml —— 全插件 37 项配置里有 23 项是这样，
+      // 等于"有这个功能，但界面上没有入口"。挑的是最常想动的那几个。
+      { key: "recentEntries", type: "number", min: 0, max: 30, def: 8, label: "fieldRecentEntries", hint: "recentEntriesHint" },
+      { key: "maxShowPerTurn", type: "number", min: 0, max: 12, def: 2, label: "fieldMaxShowPerTurn", hint: "maxShowPerTurnHint" },
+      { key: "wanderChance", type: "number", min: 0, max: 0.5, step: 0.01, def: 0.08, label: "fieldWanderChance", hint: "wanderChanceHint" },
+      { key: "minSalience", type: "number", min: 0, max: 1, step: 0.05, def: 0.15, label: "fieldMinSalience", hint: "minSalienceHint" },
+      { key: "highSim", type: "number", min: 0, max: 1, step: 0.05, def: 0.5, label: "fieldHighSim", hint: "highSimHint" },
+      { key: "budgetTokens", type: "number", min: 800, max: 8000, step: 100, def: 3000, label: "fieldBudgetTokens", hint: "budgetTokensHint" }
     ];
 
     // 分三组：常用的默认展开，另外两组折起来。字段本身一个没少，
@@ -716,7 +756,8 @@ window.__ModuleLoader__.load({
     var RECALL_GROUPS = [
       { key: "each", label: "groupEachTurn", hint: "groupEachTurnHint", open: true, keys: ["fragmentsEnabled", "onThisDay", "flashback", "voiceEnabled"] },
       { key: "pace", label: "groupPace", hint: "groupPaceHint", open: false, keys: ["silenceNudge", "staleLoopDays"] },
-      { key: "budget", label: "groupBudget", hint: "groupBudgetHint", open: false, keys: ["fragmentsMaxChars"] }
+      { key: "recall", label: "groupRecall", hint: "groupRecallHint", open: false, keys: ["recentEntries", "maxShowPerTurn", "wanderChance", "minSalience", "highSim"] },
+      { key: "budget", label: "groupBudget", hint: "groupBudgetHint", open: false, keys: ["fragmentsMaxChars", "budgetTokens"] }
     ];
 
     function RecallConfig(props) {
@@ -855,7 +896,7 @@ window.__ModuleLoader__.load({
                     return h("label", { key: f.key, className: "__sm_field" },
                       h("span", { className: "__sm_label" }, t(f.label)),
                       h("input", {
-                        className: "__sm_input", type: "number", min: f.min, max: f.max, step: 1,
+                        className: "__sm_input", type: "number", min: f.min, max: f.max, step: f.step || 1,
                         value: fieldValue(f), onChange: function (e) { setField(f, e.target.value); }
                       }),
                       f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
@@ -1069,8 +1110,15 @@ window.__ModuleLoader__.load({
               setMemError(t("cloudMemFail", { detail: (body && body.error) || "unexpected response" }));
               return;
             }
+            // 以前这里说「配置很小：地址、账号……别混」—— 那是"两种备份别搞混"
+            // 的提示，跟"还没配 WebDAV"根本不是一回事。他看到的是一段讲道理的
+            // 话，而真正要做的只是去下面填地址。
+            if (body.enabled === false) {
+              setMemError(t("cloudMemFail", { detail: t("cloudDisabled") }));
+              return;
+            }
             if (body.configured === false) {
-              setMemError(t("cloudMemFail", { detail: t("cloudCfgHint") }));
+              setMemError(t("cloudMemFail", { detail: t("cloudNotConfigured") }));
               return;
             }
             setMemFiles(Array.isArray(body.files) ? body.files : []);
@@ -1124,7 +1172,9 @@ window.__ModuleLoader__.load({
           webdavUrl: d.url,
           webdavUser: d.user,
           webdavDir: d.dir,
-          webdavKeep: Number(d.keep),
+          // 空着就不传。以前这里 `Number("")` = 0，后端再夹到 1 ——
+          // 他把「保留 10 份」清空一下、点保存，就变成只留 1 份了。
+          ...(String(d.keep || "").trim() === "" ? {} : { webdavKeep: Number(d.keep) }),
           webdavEnabled: Boolean(d.enabled),
           webdavAuto: Boolean(d.auto)
         };
@@ -2345,10 +2395,27 @@ window.__ModuleLoader__.load({
 
     /* ───────────────────────── 一条日记 ───────────────────────── */
 
+    /**
+     * 他的钟点。**日期只有一个时区：UTC+8。**
+     *
+     * 核心那份在 `src/core/timeline.mjs` 的 `TZ_OFFSET_MS`；这里是面板侧的副本。
+     * 为什么不能用 `getHours()`：那是**浏览器本地时区**。本机是 UTC 的时候，
+     * 他那边 00:00–08:00 会整段掉进前一天，日期分组和"今天/昨天"一起错。
+     * 他自己在 +8 看不出问题，换个时区看这份面板就全乱了 —— 所以必须钉死。
+     */
+    const HIS_TZ_MS = 8 * 60 * 60 * 1000;
+    const DAY_MS = 86400000;
+    function hisStartOfDay(t) {
+      return Math.floor((t + HIS_TZ_MS) / DAY_MS) * DAY_MS - HIS_TZ_MS;
+    }
+    function hisMonthDay(ts) {
+      const d = new Date(ts + HIS_TZ_MS);
+      return `${d.getUTCMonth() + 1}-${String(d.getUTCDate()).padStart(2, '0')}`;
+    }
     function clockOf(ts) {
       if (!Number.isFinite(ts)) return '';
-      const d = new Date(ts);
-      return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      const d = new Date(ts + HIS_TZ_MS);
+      return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
     }
 
     function Entry(props) {
@@ -2388,8 +2455,10 @@ window.__ModuleLoader__.load({
                 {
                   type: 'button',
                   className: 'fs-link',
-                  title: '从档案里删掉这一条',
-                  disabled: Boolean(props.busy),
+                  // 档案只读（连续三次写盘失败）时别让它点 —— 点了也是白点，
+                  // 而「白点一下」正是以前那个"点了没反应"的坑。
+                  title: props.degraded ? '档案现在是只读的（写盘一直失败），删不了' : '从档案里删掉这一条',
+                  disabled: Boolean(props.busy) || Boolean(props.degraded),
                   onClick: () => setConfirming(true),
                 },
                 props.busy ? '正在忘…' : '忘掉',
@@ -2413,20 +2482,14 @@ window.__ModuleLoader__.load({
       };
     }
 
-    /** 时间说人话：今天 / 昨天 / 3 天前 / 10-05 */
+    /** 时间说人话：今天 / 昨天 / 3 天前 / 10-05（一律按他的 UTC+8 算） */
     function dayLabel(ts) {
       if (!Number.isFinite(ts)) return '';
-      const startOfDay = (t) => {
-        const d = new Date(t);
-        d.setHours(0, 0, 0, 0);
-        return d.getTime();
-      };
-      const days = Math.round((startOfDay(Date.now()) - startOfDay(ts)) / 86400000);
+      const days = Math.round((hisStartOfDay(Date.now()) - hisStartOfDay(ts)) / DAY_MS);
       if (days <= 0) return '今天';
       if (days === 1) return '昨天';
       if (days < 7) return `${days} 天前`;
-      const d = new Date(ts);
-      return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')}`;
+      return hisMonthDay(ts);
     }
 
     /* ───────────────────────── 本子 ───────────────────────── */
@@ -2627,7 +2690,8 @@ window.__ModuleLoader__.load({
 
     /** 他那边今天的 `YYYY-MM-DD`（本机是 UTC，直接切会差一天）。 */
     function localToday() {
-      return new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      // 名字里的 local 是历史遗留 —— 这其实是**他那边的今天**，不是浏览器本地。
+      return new Date(Date.now() + HIS_TZ_MS).toISOString().slice(0, 10);
     }
 
     /** 最近 weeks 周、按周排列的格子；每格是那天，没写的是空。 */
@@ -2867,7 +2931,10 @@ window.__ModuleLoader__.load({
               type: 'button',
               className: 'fs-btn fs-btn--sm',
               onClick: load,
-              disabled: busy,
+              // 有没保存的改动时不许点 —— 以前这里只禁 busy，点一下就把他
+              // 刚写的东西整篇换掉了，连一句「会丢」都没有。
+              disabled: busy || dirty,
+              title: dirty ? '有没保存的改动，先保存再来' : '重新从磁盘读一遍',
             },
             '重新读',
           ),
@@ -3206,7 +3273,9 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { key, className: 'fs-entryText', style: { fontSize: 12, padding: '3px 0' } },
-          h('span', { className: 'fs-clock', style: { marginRight: 7, color: C.text2 } }, String(entry.at || '').slice(11, 16)),
+          // 这里以前读 `entry.at` —— 日记条目**没有这个字段**（真实字段是 created_at），
+          // 于是"最近七天"每行前面永远是空的。同一份数据在 :509 用对了，这里没有。
+          h('span', { className: 'fs-clock', style: { marginRight: 7, color: C.text2 } }, clockOf(entry.created_at)),
           String(entry.text || '').slice(0, 160),
         );
 
@@ -3356,6 +3425,9 @@ window.__ModuleLoader__.load({
             type: 'button',
             className: 'fs-btn',
             onClick: () => picker.current && picker.current.click(),
+            // 写入进行中还能再选一个文件 —— 第二个会被当成新的导入开始，
+            // 而第一个已经写了一半。等它写完再让选。
+            disabled: phase === 'writing',
           },
           h(Glyph, { name: 'box' }),
           '导入备份（.json）',
@@ -3479,7 +3551,10 @@ window.__ModuleLoader__.load({
         }
       };
 
-      const when = state && state.lastAt ? new Date(state.lastAt).toLocaleString() : '';
+      // 以前用 `toLocaleString()` —— 那是浏览器时区；面板是给他看的，就用他的钟点。
+      const when = state && state.lastAt
+        ? `${hisMonthDay(state.lastAt)} ${clockOf(state.lastAt)}`
+        : '';
 
       return h(
         'div',
@@ -3728,7 +3803,13 @@ window.__ModuleLoader__.load({
                     'div',
                     { className: 'fs-rail' },
                     group.items.map((e) =>
-                      h(Entry, { key: e.id, entry: e, onForget: forget, busy: busy === e.id }),
+                      h(Entry, {
+                        key: e.id,
+                        entry: e,
+                        onForget: forget,
+                        busy: busy === e.id,
+                        degraded: Boolean(d.degraded),
+                      }),
                     ),
                   ),
                 ),

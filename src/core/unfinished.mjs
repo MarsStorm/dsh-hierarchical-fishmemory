@@ -271,9 +271,18 @@ export function unfinishedSectionText(file, options = {}) {
       limit: Number.isFinite(options?.limit) ? options.limit : MAX_PER_TURN,
     });
     if (item === null) return '';
+    const text = renderSection(item, { at });
+    // 一段装不下就整段不出现，不硬截 —— 截了就成了真正没说完的那半句，
+    // 而这个段本来就是在提醒"有半句没说完"。而且**要先判再 markAsked**：
+    // 没真的注入、却记成"问过了"，那半句话就再也浮不上来了。
+    const maxChars = Number.isFinite(options?.maxChars) ? options.maxChars : 0;
+    if (maxChars > 0 && text.length > maxChars) {
+      log(`半句话太长（${text.length} > ${maxChars} 字），这次不问了`);
+      return '';
+    }
     markAsked(file, item, { at });
     log(`半句话浮上来了：「${item.said.slice(0, 16)}」（${item.days} 天前）`);
-    return renderSection(item, { at });
+    return text;
   } catch {
     return '';
   }

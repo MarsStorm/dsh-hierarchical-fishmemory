@@ -1,3 +1,97 @@
+## 1.39.0 — 2026-11-20
+
+**一次全量体检：39 条里做掉 34 条。** 起因是他问「插件更新的功能有点太多了，我都快忘了都有啥」，
+于是把 `src/` 全扫了一遍（24333 行），先出清单、再一口气改完。
+
+### 会改变行为的四件事（其余都是修和删）
+
+1. **「压缩」以前等于「删除」。** `compact.mjs` 折出来的月度摘要 `kind: 'note'`，
+   而注入第一步就把 `note` 全滤掉 —— 被压缩的那个月从召回和「最近的事」里彻底消失，
+   摘要只躺在档案里没人看得见。新增 `digest` 类型（`kinds.mjs`），摘要进注入、
+   且不参与衰减（`decayArchive` 对它直接放行）。**旧摘要仍是 `note`，需要时手动改一行。**
+2. **判断（judge）没有超时。** 硬超时 `JOB_TIMEOUT_MS` 只包住固化队列，判断不在里面。
+   `llm.stream` 一旦卡住，`await` 永不返回 → `s.judging` 永远为 true（之后每轮判定全跳过）、
+   `holdProcessOpen()` 的 ref 永不释放（进程退不出去）。现在 `JUDGE_TIMEOUT_MS = 30000`
+   + `Promise.race`，超时按「默认记」继续、并 abort 那个请求。
+   **原报告说"没有 finally 所以闩锁不释放"是错的** —— `s.judging = false` 本来就在 finally 里，
+   真问题是那个 `await` 一次都没结束。
+3. **冷却惩罚以前是永久的。** `- (Number.isFinite(last) ? 0.8 : 0)`：露过一次面的条目，
+   那 0.8 扣到进程死，过了冷却窗口也照扣，等于把一次满分相似度抹平。
+   新增 `exposurePenalty()`：出窗时扣满，`cooldownTurns * 10` 轮（默认 200）内线性衰减到 0。
+4. **`maxShowPerTurn` 的 3~12 档以前是死的。** 代码里 `Math.min(2, config.maxShowPerTurn)` 硬封顶 2，
+   而配置允许 0~12、默认 4。现在不再封顶，**并把默认值从 4 改成 2** —— 默认值对齐当前实际行为，
+   否则这一改会把每轮注入悄悄翻倍。
+
+### 修（12 条）
+
+- **面板时区**：`src/client/index.js` 的 `dayLabel` 还在用浏览器本地 `setHours(0,0,0,0)`，
+  违反「日期只有一个时区（UTC+8）」——`src/core/timeline.mjs` 修过，这份是残留副本。
+  新增 `HIS_TZ_MS` / `hisStartOfDay` / `hisMonthDay` / `clockOf`（一律 `getUTC*`）。
+- **最近七天每行的时间永远是空的**：读 `entry.at`，而日记条目没这个字段（真名 `created_at`）。
+- **`minSalience` 设 0 无效**：`Math.max(0.15, config.minSalience)` 把它垫着。
+- **`maxShowPerTurn: 0` 仍会走神出一条**：走神分支只判 `chosen.length === 0`。
+- **云端备份关掉了仍能列/还原**：`/cloud/backups` 与 `/cloud/restore` 只查 `configured` 不查 `enabled`。
+- **保留份数清空 → 变 1**：`Number("")` 是 0，后端夹到 1。前端空着就不传，后端见空串当没填。
+- **`readPanelTextBody` 没查 Content-Type、没查同源** —— 它是专门给备份/还原用的，也就是
+  **能整份覆盖记忆的那个入口**。另外超限文案写死「24 MB」，而调用方有 64 KB / 1 MB / 256 KB 几档。
+- **按钮方向反了**：「重新读」在有未保存改动时仍可点（一键丢编辑）；「忘掉」在 `degraded`
+  （连续三次写盘失败）时仍可点（点了必然白点）。
+- **一句假话**：`/layer/value` 的 400 文案写「浅层请在面板里改」，而面板根本没有浅层编辑入口。
+- **云端「还没配置」的说明**塞的是「配置很小……别混」，跟"没配置"毫无关系。
+  新增 `cloudNotConfigured` / `cloudDisabled` 两条文案。
+- **compact 三个坑**：①按 45 天切而按月分组，cutoff 落在月中会把一个月切成两半
+  ②无 id 的条目同时进摘要和保留集 ③同一个月折两次会出两条同 id 摘要互相覆盖。
+  现在整月对齐、该月折过就不再折、`keep` 按对象引用判。
+- **`session_count` 永远是 0**：`= next.manifest.session_count ?? 0` 初始化之后再没加过。
+  改成跟 `diary_count` 一样每次重算（数档案里出现过几个不同 session）。
+- **零碎记忆出口**：「纸条整段被挤掉」那句占位不以 `## 小纸条` 开头，出口第一刀永远删不掉它；
+  「没说完」段没传 `maxChars`；裁完还超只打日志。现在加第三刀（让「没说完」让位）、
+  占位串收成常量并让出口认它、`unfinishedSectionText` 支持 `maxChars`（超了就整段不注入，
+  **先判再 markAsked** —— 没注入却记成"问过"，那半句话就再也浮不上来了）。
+
+### 删（5 条）
+
+- `src/core/consolidate.mjs`：`requireTags` / `fallbackTag` / `recallReliefFullCount`（早标 @deprecated）/
+  `maxTraitConfidence` 四个死参数，以及它们对应的三行 `tags` 解析。
+- `src/core/fragments.mjs`：算出但没用的 `lessonIdx`。
+- `src/host/panel-routes.mjs`：`/cloud?list=1` 死分支（两个前端都不传）、
+  `remote: Array.isArray(x) ? x : x` 假三目、`dirWritable: true`（前端不读）。
+- **`personaTag` 是"有测试、生产不走"**：`persona-line.mjs:230` 导出、4 条用例，
+  但 `personaHealthField()` 自己拼了一遍判断。改成调 `personaTag` —— **测试测的那份
+  终于是生产走的那份**。
+- 三处过时注释（`recall.mjs` 的 b=0.45、`tokenize.mjs` 的"拉丁 4/标点 3"、`persona.mjs` 的"只有词汇有 min"）。
+
+### 优化（4 条）
+
+- **`unfinishedEnabled` 默认改成 `false`。** 拿 118 条真纸条跑 `lookUnfinished()`，判出 **0 条**。
+  判据（省略号/破折号/连问号）在"每行都是完整句"的语料上几乎不存在；想让它出东西就得算
+  "句尾没标点"，那会造一堆假半句。代码和数据都留着，判据改好了开开关就行。
+- **`⟪时效⟫` 真的用起来了**：给 `topics/env-ops.md` 里两条"数字会变"的事实标上（磁盘那次清理的体积、
+  `df` 的 225G）。顺手修了 `memory_read(topic)` 那条路 —— 它以前不标注，标了只是一串没人处理的符号。
+- **设置页多 6 个入口**：`recentEntries` / `maxShowPerTurn` / `wanderChance` / `minSalience` / `highSim`
+  （新「想起什么」组）+ `budgetTokens`（进「占多少地方」组）。37 项配置里仍有 17 项只能改 yml，
+  但最常想动的那几个现在能点了。数字框支持小数步长（`wanderChance` 0.01）。
+- **README 工具表补 5 行**（`fish_quote` / `sticky_*` / `lesson_*` / `fish_ledger`），
+  配置表把 `budgetTokens` 从 2000 更到 3000、补 `maxShowPerTurn` 与 `recentEntries`，
+  并写明 `kind` 里有 `digest`、`note` 不进注入。
+
+### 三条"报告说错了"（没照做）
+
+1. **`lexicon` / `traits` 不是死代码** —— `render-diary.mjs:76/92` 渲染进 `日记.md`，
+   `host/index.mjs:3070/3083` 导到面板，`archive.mjs` 还在规范化。删了会丢东西。
+2. **judge 不是"没有 finally"** —— 见上面第 2 条。
+3. **工作区指向已删卡时不清 settings 旧值** —— 判为设计歧义不是 bug（同名新建卡即同卡，
+   可能是期望行为）。保留现状，写在这里留个记号。
+
+### 测试
+
+625 项（+9）。新增：`exposurePenalty` 三条、设置页「想起什么」不测（纯 UI）、
+compact 两条（整月对齐 / 该月折过不再折）、零碎记忆出口一条（占位括号不套娃、不超总预算）。
+
+改的过程中 `client-render.test.mjs` 抓到两处我自己写的 `ReferenceError`
+（`data` 该是 `d`、`busy` 该是 `phase === 'writing'`）—— 说明这个"把整个面板渲染一遍"的
+测试不是摆设。
+
 ## 1.38.1 — 2026-11-20
 
 **一条静态自检，第一天就抓到一个"没发生，也没报"的 bug。**

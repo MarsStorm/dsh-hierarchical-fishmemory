@@ -291,7 +291,11 @@ function personaHealthField(sessionId = '') {
     const patch = findProfilePatch(dshHome());
     if (patch === null) return 'skip';
     const check = checkPersonaInjection(patch.text, { sessionId });
-    return check.ok ? 'ok' : `断(${check.problems[0] ?? '读不出原因'})`;
+    // 用 `personaTag` 而不是再写一遍判断：两份实现里总会有一份先改、另一份忘。
+    // 之前这里就是自己拼的，而 `personaTag` 只被测试调用 —— 测试测的那份
+    // 并不是生产走的那份，等于白测。
+    const tag = personaTag(check);
+    return tag === '断' ? `断(${check.problems?.[0] ?? '读不出原因'})` : tag;
   } catch {
     return 'skip';
   }
@@ -1391,13 +1395,15 @@ export function apply(ctx, rawConfig) {
       const { chosen } = chatty
         ? selectMemories(recallPool, index, query, s, s.turn, {
             highSim: config.highSim,
-            // 闲聊时最多给两条候选 —— **给两条，它用哪条自己定，或者一条都不用。**
-            // 只给一条等于系统替它说了「你就该想起这个」。
-            maxShow: Math.min(2, config.maxShowPerTurn),
+            // 给几条按配置来。这里曾经写死 `Math.min(2, …)`，于是配置里 3~12
+            // 全是假的 —— 改了没效果比没有这个开关更气人。
+            // 现在的折中是：**代码不封顶，默认值退回 2**，行为跟以前一样，
+            // 但想给三条就给三条。
+            maxShow: config.maxShowPerTurn,
             wanderChance: config.wanderChance,
-            // 旧事的随机池门槛。注意下限降到 0.15 是为了跟"降门槛"一致 ——
-            // 门槛降到 0.15 却在这里卡 0.25，等于白降。
-            minSalience: Math.max(0.15, config.minSalience),
+            // 旧事的随机池门槛。以前这里写的是 `Math.max(0.15, config.minSalience)`，
+            // 而配置下限是 0 —— 填 0~0.15 一律被抬回 0.15，界面看着改了、实际没动。
+            minSalience: config.minSalience,
             now: Date.now(),
           })
         : { chosen: [] };
@@ -1918,6 +1924,11 @@ export function apply(ctx, rawConfig) {
    * 再加一个硬超时兜底：绝不因为一次卡住的调用把进程永久挂死。
    */
   const JOB_TIMEOUT_MS = 60000;
+  /**
+   * 判断的超时。比固化短：判断只读一句话，300 token 的输出，
+   * 30 秒还不回来说明链路已经坏了，没必要再等。
+   */
+  const JUDGE_TIMEOUT_MS = 30000;
   let keepAlive = null;
 
   function holdProcessOpen() {
@@ -1996,7 +2007,7 @@ export function apply(ctx, rawConfig) {
    * 判断"这一轮值不值得记"。**失败默认记** —— 用户定的：
    * 漏了永远不知道，多记顶多占几行。
    */
-  async function judgeWorthKeeping(sessionId) {
+  async function judgeWorthKeeping(sessionId, judgeSignal) {
     const s = stateOf(sessionId);
     const said = String(s.lastUserText ?? '').trim();
     if (said === '') return { keep: false, why: '这一轮他没说话' };
@@ -2055,7 +2066,9 @@ export function apply(ctx, rawConfig) {
       // DSH 把 'off' 翻成「这个字段不发」，provider 反而按默认继续思考；
       // 而且本机的 modlens-uuapi 包装层可能根本不提供 off 档 ——
       // 实测两次调用都是 2ms 空回，连网络都没出去，正是本地校验失败的样子。
-      signal: abort.signal,
+      // 自己的信号 + 全局信号，两个都要：
+      // 全局那个是"插件被卸载"，这个是"这一轮判断超时了"。
+      signal: judgeSignal ?? abort.signal,
     };
 
     try {
@@ -2101,13 +2114,38 @@ export function apply(ctx, rawConfig) {
       .then(() => new Promise((resolve) => setImmediate(resolve)))
       .then(async () => {
         let kept = false;
+        // 判断也得有自己的超时。
+        //
+        // 这里以前只挂了全局 abort —— 而那个 `JOB_TIMEOUT_MS` 的硬超时只包住
+        // 固化队列，判断根本不在里面。一旦 `llm.stream` 卡住不返回：
+        //   · `await` 永远挂着，下面那个 `finally` 一次都跑不到；
+        //   · `s.judging` 就是**永久 true**，之后每轮判定全被跳过；
+        //   · `holdProcessOpen()` 那个 ref 着的 setInterval 也永远不释放，
+        //     node 进程再也退不出去 —— 正是这段代码自己注释里说要防的事故。
+        const judgeAbort = new AbortController();
+        let judgeTimer = null;
+        // `race` 而不是只 abort：abort 能不能真的让 `llm.stream` 停下，取决于
+        // 那一层支不支持 signal。这里要的是"这个 await 无论如何都会结束"——
+        // 超时之后按默认记（宁可多记一条，不可挂住进程），并且顺手 abort，
+        // 免得请求在后台一直挂着。
+        const judgeTimeout = new Promise((resolve) => {
+          judgeTimer = setTimeout(() => {
+            warn('判断超时（30 秒），这次按默认记，不挂住进程');
+            judgeAbort.abort();
+            resolve({ keep: true, why: '判断超时，按默认记' });
+          }, JUDGE_TIMEOUT_MS);
+        });
         try {
-          const v = await judgeWorthKeeping(sessionId);
+          const v = await Promise.race([
+            judgeWorthKeeping(sessionId, judgeAbort.signal),
+            judgeTimeout,
+          ]);
           if (v.keep) {
             kept = true;
             enqueue(sessionId, agent); // 它自己会 hold，也会在跑完后 release
           }
         } finally {
+          if (judgeTimer !== null) clearTimeout(judgeTimer);
           s.judging = false;
           // ⚠️ 配对！judging 自己 hold 了 —— 如果不转交给固化，就必须自己放掉。
           // 漏了这句，那个 ref 着的 setInterval 会让进程永远退不出去，
@@ -2514,7 +2552,6 @@ export function apply(ctx, rawConfig) {
       },
       {
         minSalience: config.minSalience,
-        maxTraitConfidence: DEFAULT_CONSOLIDATION.maxTraitConfidence,
       },
     );
 
@@ -2664,7 +2701,6 @@ export function apply(ctx, rawConfig) {
       },
       {
         minSalience: config.minSalience,
-        maxTraitConfidence: DEFAULT_CONSOLIDATION.maxTraitConfidence,
       },
     );
     archive = applied.archive;

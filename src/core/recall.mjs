@@ -381,7 +381,7 @@ function recencyFactor(createdAt, now, halfLifeDays) {
  * @property {number} [minSalience]    进入随机池的最低 salience（默认 0.5）
  * @property {number} [saturation]     相似度饱和尺度（默认 2）
  * @property {number} [a]              相似度权重（默认 1）
- * @property {number} [b]              salience 权重（默认 0.45）
+ * @property {number} [b]              salience 权重（默认 0.15）
  * @property {number} [c]              新鲜度权重（默认 0.2）
  * @property {number} [d]              最近刚提过的惩罚（默认 0.8）
  * @property {number} [temperature]    softmax 温度（默认 0.15）
@@ -392,6 +392,30 @@ function recencyFactor(createdAt, now, halfLifeDays) {
  * @property {number} [now]            当前时间戳
  * @property {() => number} [rng]      注入随机源（测试用）
  */
+
+/**
+ * 露过面的条目要扣多少分。
+ *
+ * **这条以前是永久的**：`- (Number.isFinite(last) ? opts.d : 0)`。
+ * 于是只要被想起过一次，那 0.8 就扣一辈子 —— 过了 20 轮"解冻"也照扣，
+ * 等于把一次满分相似度（权重 1.0）直接抹掉。而 `lastShownTurn` 只活在
+ * 内存里（进程重启就没），一条记忆的运气完全取决于进程活了多久。
+ *
+ * 现在按"从上一次露出到现在过了多少轮"线性衰减：冷却窗口内本来就不参评，
+ * 出窗那一刻扣满 `d`，之后每过一轮少一点，`cooldownTurns * 10` 轮（默认
+ * 200 轮）之后归零。这样"刚说过"确实让位，"上个月说的"不该再受罚。
+ */
+export function exposurePenalty(lastShown, turn, opts = {}) {
+  if (!Number.isFinite(lastShown)) return 0;
+  const d = Number.isFinite(opts.d) ? opts.d : DEFAULT_RECALL_OPTIONS.d;
+  const cooldown = Number.isFinite(opts.cooldownTurns)
+    ? opts.cooldownTurns
+    : DEFAULT_RECALL_OPTIONS.cooldownTurns;
+  const span = Math.max(1, cooldown * 10);
+  const since = Math.max(0, turn - lastShown);
+  const left = 1 - Math.max(0, since - cooldown) / span;
+  return d * Math.max(0, Math.min(1, left));
+}
 
 export const DEFAULT_RECALL_OPTIONS = Object.freeze({
   highSim: 0.5,
@@ -459,7 +483,7 @@ export function selectMemories(entries, index, query, state, turn, options = {})
 
     const fresh = recencyFactor(entry.created_at, now, opts.halfLifeDays);
     const score =
-      opts.a * sim + opts.b * salience + opts.c * fresh - (Number.isFinite(last) ? opts.d : 0);
+      opts.a * sim + opts.b * salience + opts.c * fresh - exposurePenalty(last, turn, opts);
 
     if (sim < opts.midSim && salience < opts.minSalience) continue;
     scored.push({ entry, score, sim, why: '' });
@@ -502,7 +526,9 @@ export function selectMemories(entries, index, query, state, turn, options = {})
   }
 
   // 3) 走神：完全没匹配上时，小概率随机想起一条旧事。这条纯粹为了像人。
-  if (chosen.length === 0 && rng() < opts.wanderChance) {
+  // 先看一眼 maxShow —— 把它设成 0 的人意思是"这一轮不许想起来"，
+  // 而这里以前只判"一条都没选中"，于是设 0 仍有 8% 概率塞一条进来。
+  if (chosen.length === 0 && opts.maxShow > 0 && rng() < opts.wanderChance) {
     const pool = scored.filter((c) => (c.entry.salience ?? 0) >= opts.minSalience);
     if (pool.length > 0) {
       const picked = pool[Math.floor(rng() * pool.length)];

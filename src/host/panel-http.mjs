@@ -121,11 +121,28 @@ export async function readPanelBody(req) {
  * 上限 24 MB：正常人一生也写不到这么多记忆，超了大概是选错文件了。
  */
 export async function readPanelTextBody(req, { limit = 24 * 1024 * 1024 } = {}) {
+  // 这两道以前只有 `readPanelBody` 有，这份"宽松版"一条都没有 ——
+  // 它是专门给备份/还原用的，也就是**能整份覆盖记忆的那个入口**。
+  const type = String(req.headers?.['content-type'] ?? '');
+  if (type !== '' && !/^(application\/json|text\/plain)\b/i.test(type)) {
+    throw new Error('只接受 application/json 或 text/plain');
+  }
+  if (!isSameOrigin(req)) {
+    logPanelReject('备份上传', req, '来源判定为跨站');
+    throw new Error('跨站请求不予处理');
+  }
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > limit) throw new Error('备份文件过大（上限 24 MB）');
+    if (size > limit) {
+      // 文案以前写死「24 MB」，可调用方有 64 KB / 1 MB / 256 KB 几档，
+      // 报出来的数跟实际拦他的数对不上。
+      const human = limit >= 1024 * 1024
+        ? `${Math.round(limit / 1024 / 1024)} MB`
+        : `${Math.round(limit / 1024)} KB`;
+      throw new Error(`请求体过大（上限 ${human}）`);
+    }
     chunks.push(chunk);
   }
   return Buffer.concat(chunks).toString('utf8');

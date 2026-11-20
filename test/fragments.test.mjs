@@ -280,3 +280,23 @@ test('超预算时先让纸条让位，教训那栏留着', () => {
     box.done();
   }
 });
+
+test('纸条被挤掉时那句占位，出口认得它 —— 超预算就一起删', () => {
+  // 占位那句话不以 `## 小纸条` 开头，所以出口那一刀以前永远删不掉它：
+  // 预算紧的时候它就一直挂在那里，当噪音。这里钉住：格式是一层括号，
+  // 而且超预算时会跟着纸条一起让位。
+  const box = sandbox();
+  try {
+    writeNotes(box.files.stickyFile, 40);
+    const lessons = [];
+    for (let i = 0; i < 6; i += 1) lessons.push(`- [9] 2026-11-11 ｜第 ${i} 个很占地方的坑，` + '啪'.repeat(60));
+    writeFileSync(box.files.lessonFile, lessons.join('\n') + '\n', 'utf8');
+
+    const text = renderFragments({ ...box.files, config: { fragmentsMaxChars: 200 }, at: AT });
+    // 不许出现两个连着的中文左括号（以前是「（……（只剩 0 字）」）。
+    assert.ok(!/（[^）]*（/.test(text.replace(/（[^）]*）/g, '')), '括号不该套娃');
+    assert.ok(text.length <= 200, `不许超总预算（现在 ${text.length}）`);
+  } finally {
+    box.done();
+  }
+});

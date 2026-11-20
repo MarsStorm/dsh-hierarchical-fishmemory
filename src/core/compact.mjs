@@ -8,7 +8,7 @@
  * 为什么不用模型来写摘要：要花钱、要等、还可能编。规则摘要难看但不会说谎，
  * 真要细看，原文还在 archive 里。
  */
-import { KIND_LABEL } from './kinds.mjs';
+import { DIGEST_KIND, KIND_LABEL } from './kinds.mjs';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_OLDER_THAN_DAYS = 45;
@@ -35,15 +35,40 @@ export function monthKeyOf(entry) {
   return new Date(t).toISOString().slice(0, 7);
 }
 
-/** 选出该折的条目：早于 cutoff、且自己不是摘要。 */
+/**
+ * 选出该折的条目：整个月都早于 cutoff、且自己不是摘要、且该月还没折过。
+ *
+ * 两条都是 1.39.0 补的，各自对应一个真实会发生的坏结果：
+ *
+ * ① **整月对齐。** 以前按"45 天前的那个毫秒"切，而分组是按月 ——
+ *    cutoff 落在 10 月 5 号时，10 月 1–5 号被折进摘要、6–31 号留在档案里，
+ *    同一个十月在档案里出现两次，摘要上的「共 N 件」也不是整月数。
+ *    现在只折**当月还没开始**的月份：要么整月折，要么整月不动。
+ * ② **该月折过就不再折。** 摘要 id 是固定的 `d_<年月>_digest`。同一个月折两次
+ *    会生成两条同 id 的条目，而召回索引、`lastShownTurn`、`applySummaries`
+ *    全按 id 建 Map —— 两条同 id 会互相覆盖。
+ */
 export function pickCompactionCandidates(entries, options = {}) {
   const now = Number.isFinite(options.now) ? options.now : Date.now();
   const days = Number.isFinite(options.olderThanDays) ? options.olderThanDays : DEFAULT_OLDER_THAN_DAYS;
   const cutoff = now - days * DAY_MS;
+  const cutoffMonth = new Date(cutoff).toISOString().slice(0, 7);
+  const covered = new Set();
+  for (const e of entries ?? []) {
+    if (e && e.compacted) {
+      const m = monthKeyOf(e);
+      if (m) covered.add(m);
+    }
+  }
   return (entries ?? []).filter((e) => {
     if (!e || e.compacted) return false;
     const t = entryStamp(e);
-    return t > 0 && t < cutoff;
+    if (!(t > 0)) return false;
+    const m = monthKeyOf(e);
+    if (!m) return false;
+    if (m >= cutoffMonth) return false;
+    if (covered.has(m)) return false;
+    return true;
   });
 }
 
@@ -51,38 +76,38 @@ export function pickCompactionCandidates(entries, options = {}) {
 export function digestForMonth(monthKey, entries, options = {}) {
   const list = entries ?? [];
   const counts = new Map();
-  const words = new Map();
   for (const e of list) {
     const kind = String(e?.kind ?? 'chat');
     counts.set(kind, (counts.get(kind) ?? 0) + 1);
-    for (const k of Array.isArray(e?.keywords) ? e.keywords : []) {
-      const key = String(k).trim();
-      if (key) words.set(key, (words.get(key) ?? 0) + 1);
-    }
   }
   const kinds = [...counts.entries()]
     .sort((a, b) => b[1] - a[1])
     .map(([kind, n]) => `${KIND_LABEL[kind] ?? kind} ${n}`)
     .join('、');
-  const top = [...words.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, Number.isFinite(options.maxWords) ? options.maxWords : 5)
-    .map(([w]) => w);
+  // 这里原来统计 `e.keywords` —— 而那个字段 2026-10-27 就没人写了，
+  // 于是每份摘要的「关键词：」都是空的。现在换成"那阵子的几句话"：
+  // 摘要得有点真内容，召回才搜得中它，否则一条摘要只剩"共 N 件"。
+  const highlights = [...list]
+    .sort((a, b) => (Number(b?.salience) || 0) - (Number(a?.salience) || 0))
+    .map((e) => String(e?.summary || e?.text || '').trim().replace(/\s+/g, ' ').slice(0, 42))
+    .filter(Boolean)
+    .slice(0, 3);
   const range = list
     .map((e) => String(e?.date ?? '').slice(8, 10))
     .filter(Boolean)
     .sort();
   const span = range.length ? `${range[0]}–${range[range.length - 1]} 日` : '';
   const head = `${monthKey} 共 ${list.length} 件${span ? `（${span}）` : ''}`;
-  const detail = [kinds && `类型：${kinds}`, top.length ? `关键词：${top.join('、')}` : '']
-    .filter(Boolean)
-    .join('；');
+  const detail = [
+    kinds && `类型：${kinds}`,
+    highlights.length ? `那阵子：${highlights.join(' / ')}` : '',
+  ].filter(Boolean).join('；');
   return {
     id: `d_${monthKey.replace('-', '')}_digest`,
     date: `${monthKey}-01`,
     text: `${head}${detail ? `。${detail}` : ''}。原文在 diary/archive/，要看细节去那儿找。`,
     tags: ['摘要'],
-    kind: 'note',
+    kind: DIGEST_KIND,
     salience: 0.35,
     compacted: true,
     covers: list.length,
@@ -105,7 +130,10 @@ export function planCompaction(entries, options = {}) {
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([key, list]) => ({ monthKey: key, digest: digestForMonth(key, list), entries: list }));
   const movedIds = new Set(candidates.map((e) => e?.id).filter(Boolean));
-  const keep = (entries ?? []).filter((e) => !movedIds.has(e?.id));
+  // 按**对象**记谁被移走，不按 id。以前是无 id 的条目会被 `filter(Boolean)`
+  // 从 movedIds 里丢掉，于是它既算进了摘要、又原样留在 keep 里（`movedCount` 还少算一条）。
+  const movedSet = new Set(candidates);
+  const keep = (entries ?? []).filter((e) => !movedSet.has(e));
   return {
     cutoff: (Number.isFinite(options.now) ? options.now : Date.now()) -
       (Number.isFinite(options.olderThanDays) ? options.olderThanDays : DEFAULT_OLDER_THAN_DAYS) * DAY_MS,

@@ -218,7 +218,17 @@ export const CONFIG_SPEC = [
   {
     key: 'unfinishedEnabled',
     type: 'boolean',
-    default: true,
+    /**
+     * **默认关掉了**（1.39.0）。
+     *
+     * 不是为了省 token —— 是它一直没真的用过：拿 118 条真实纸条跑
+     * `lookUnfinished()`，判出 **0 条**。判据（省略号 / 破折号 / 连问号结尾）
+     * 在小纸条这种"每行都是完整句"的语料上几乎不存在；想让它出东西，就得
+     * 把"句尾没标点"也算断句，那会造出一堆假半句 —— 假线索比没有线索更坏。
+     *
+     * 代码和数据（`未说完.json`）都留着：判据将来真能改好，把这个开关打开就行。
+     */
+    default: false,
     label: '（旧开关）没说完的半句话，过几天夜里浮上来问一句',
   },
   {
@@ -233,7 +243,9 @@ export const CONFIG_SPEC = [
   {
     key: 'maxShowPerTurn',
     type: 'number',
-    default: 4,
+    // 默认 2 是**当前实际行为**（代码以前写死封顶 2）。1.39.0 起不再封顶，
+    // 默认值直接写成 2 —— 否则「改代码」这一下会把每轮注入悄悄翻倍。
+    default: 2,
     min: 0,
     max: 12,
     step: 1,

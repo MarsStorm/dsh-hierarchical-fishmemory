@@ -452,6 +452,8 @@ window.__ModuleLoader__.load({
       cloudMemSame: "和现在一样，没东西要改。",
       cloudMemRestored: "已从云端恢复：写 {n} 个文件。日记和手记要重启后才重新加载。",
       cloudMemFail: "云端恢复失败：{detail}",
+      cloudNotConfigured: "还没配 WebDAV 地址和账号 —— 先在下面的「配置备份」里填好再来。",
+      cloudDisabled: "云端备份的开关是关着的，打开它才能列云上的备份。",
       cloudLoadFail: "读不到云端设置：{detail}",
       cloudSaveFail: "保存失败：{detail}",
       cloudPasswordSet: "已保存密码",
@@ -468,6 +470,20 @@ window.__ModuleLoader__.load({
       fragmentsEnabledHint: "三段小东西合成一段注入：他说的原话、我重复踩的坑、当时没接住的半句话。关掉就是三段一起不注入，记录照旧。",
       fieldFragmentsMaxChars: "「零碎记忆」整段最多多少字",
       fragmentsMaxCharsHint: "三段共用这一个数。教训和「没说完」先占位，小纸条拿剩下的 —— 它们要是被挤掉就白搭。",
+      groupRecall: "想起什么",
+      groupRecallHint: "这两个是「这一轮能想起来几条」的闸门，改大改小立刻有感觉",
+      fieldRecentEntries: "「最近的事」每轮留几条",
+      recentEntriesHint: "0–30。这几条是**免预算**的固定段，每轮都在 —— 它决定我此刻记不记得刚才。",
+      fieldMaxShowPerTurn: "每轮最多主动想起几条",
+      maxShowPerTurnHint: "0–12。0 = 这一轮完全不主动翻旧事。",
+      fieldWanderChance: "没有够格的时，随手翻一条的概率",
+      wanderChanceHint: "0–0.5。0 = 宁可不提，也不硬找一条。",
+      fieldMinSalience: "沾边的门槛：多重要才提",
+      minSalienceHint: "0–1。相似度不够时看这条，低于它的不提。0 = 不设门槛。",
+      fieldHighSim: "多像才算「就是它」",
+      highSimHint: "0–1。到这档直接选它、不再抽签；低一档只算沾边。",
+      fieldBudgetTokens: "每轮注入预算（token）",
+      budgetTokensHint: "3000 是量过的：常驻段要 2680，再少就开始裁「最近的事」。",
       groupEachTurn: "每轮都会注入的",
       groupEachTurnHint: "这几项决定每轮开头你眼前有没有东西",
       groupPace: "什么时候开口",
@@ -598,6 +614,8 @@ window.__ModuleLoader__.load({
       cloudMemSame: "Identical to what you have — nothing to change.",
       cloudMemRestored: "Restored {n} files from the cloud. Diaries reload after a restart.",
       cloudMemFail: "Cloud restore failed: {detail}",
+      cloudNotConfigured: "WebDAV address and account are not set yet - fill them in under config backup below first.",
+      cloudDisabled: "Cloud backup is switched off. Turn it on to list backups in the cloud.",
       cloudLoadFail: "Could not read cloud settings: {detail}",
       cloudSaveFail: "Save failed: {detail}",
       cloudPasswordSet: "password saved",
@@ -614,6 +632,20 @@ window.__ModuleLoader__.load({
       fragmentsEnabledHint: "Three small things injected as one block: his own words, the mistakes I keep repeating, and half-sentences I never caught. Turning it off stops the injection; the records stay.",
       fieldFragmentsMaxChars: "Fragment block size limit (characters)",
       fragmentsMaxCharsHint: "One budget for all three. Lessons and unfinished lines take their room first; sticky notes get what's left.",
+      groupRecall: "What comes back",
+      groupRecallHint: "These two decide how many old things this turn can surface",
+      fieldRecentEntries: "Recent events kept each turn",
+      recentEntriesHint: "0-30. These are pinned and exempt from the budget - they decide whether I remember what just happened.",
+      fieldMaxShowPerTurn: "Max recalled entries per turn",
+      maxShowPerTurnHint: "0-12. 0 = never volunteer anything from the past this turn.",
+      fieldWanderChance: "Chance to surface something unrelated",
+      wanderChanceHint: "0-0.5. 0 = rather say nothing than force one.",
+      fieldMinSalience: "Salience floor for a weak match",
+      minSalienceHint: "0-1. Used when similarity is low; anything below is skipped. 0 = no floor.",
+      fieldHighSim: "Similarity that counts as a solid match",
+      highSimHint: "0-1. At this level it is picked outright; just below only counts as a faint match.",
+      fieldBudgetTokens: "Per-turn injection budget (tokens)",
+      budgetTokensHint: "3000 was measured: the standing sections need 2680, below that recent events start getting trimmed.",
       groupEachTurn: "Injected every turn",
       groupEachTurnHint: "Whether anything reaches me at the start of each turn",
       groupPace: "When to speak up",
@@ -704,7 +736,15 @@ window.__ModuleLoader__.load({
       { key: "voiceEnabled", type: "checkbox", def: 1, label: "fieldVoiceEnabled", hint: "voiceEnabledHint" },
       { key: "silenceNudge", type: "number", min: 0, max: 20, def: 3, label: "fieldSilenceNudge", hint: "silenceNudgeHint" },
       { key: "staleLoopDays", type: "number", min: 0, max: 30, def: 3, label: "fieldStaleLoopDays", hint: "staleLoopDaysHint" },
-      { key: "fragmentsMaxChars", type: "number", min: 200, max: 4000, def: 1400, label: "fieldFragmentsMaxChars", hint: "fragmentsMaxCharsHint" }
+      { key: "fragmentsMaxChars", type: "number", min: 200, max: 4000, def: 1400, label: "fieldFragmentsMaxChars", hint: "fragmentsMaxCharsHint" },
+      // 下面这几个以前只能改 profile 里的 yml —— 全插件 37 项配置里有 23 项是这样，
+      // 等于"有这个功能，但界面上没有入口"。挑的是最常想动的那几个。
+      { key: "recentEntries", type: "number", min: 0, max: 30, def: 8, label: "fieldRecentEntries", hint: "recentEntriesHint" },
+      { key: "maxShowPerTurn", type: "number", min: 0, max: 12, def: 2, label: "fieldMaxShowPerTurn", hint: "maxShowPerTurnHint" },
+      { key: "wanderChance", type: "number", min: 0, max: 0.5, step: 0.01, def: 0.08, label: "fieldWanderChance", hint: "wanderChanceHint" },
+      { key: "minSalience", type: "number", min: 0, max: 1, step: 0.05, def: 0.15, label: "fieldMinSalience", hint: "minSalienceHint" },
+      { key: "highSim", type: "number", min: 0, max: 1, step: 0.05, def: 0.5, label: "fieldHighSim", hint: "highSimHint" },
+      { key: "budgetTokens", type: "number", min: 800, max: 8000, step: 100, def: 3000, label: "fieldBudgetTokens", hint: "budgetTokensHint" }
     ];
 
     // 分三组：常用的默认展开，另外两组折起来。字段本身一个没少，
@@ -712,7 +752,8 @@ window.__ModuleLoader__.load({
     var RECALL_GROUPS = [
       { key: "each", label: "groupEachTurn", hint: "groupEachTurnHint", open: true, keys: ["fragmentsEnabled", "onThisDay", "flashback", "voiceEnabled"] },
       { key: "pace", label: "groupPace", hint: "groupPaceHint", open: false, keys: ["silenceNudge", "staleLoopDays"] },
-      { key: "budget", label: "groupBudget", hint: "groupBudgetHint", open: false, keys: ["fragmentsMaxChars"] }
+      { key: "recall", label: "groupRecall", hint: "groupRecallHint", open: false, keys: ["recentEntries", "maxShowPerTurn", "wanderChance", "minSalience", "highSim"] },
+      { key: "budget", label: "groupBudget", hint: "groupBudgetHint", open: false, keys: ["fragmentsMaxChars", "budgetTokens"] }
     ];
 
     function RecallConfig(props) {
@@ -851,7 +892,7 @@ window.__ModuleLoader__.load({
                     return h("label", { key: f.key, className: "__sm_field" },
                       h("span", { className: "__sm_label" }, t(f.label)),
                       h("input", {
-                        className: "__sm_input", type: "number", min: f.min, max: f.max, step: 1,
+                        className: "__sm_input", type: "number", min: f.min, max: f.max, step: f.step || 1,
                         value: fieldValue(f), onChange: function (e) { setField(f, e.target.value); }
                       }),
                       f.hint ? h("span", { className: "__sm_hint" }, t(f.hint)) : null
@@ -1065,8 +1106,15 @@ window.__ModuleLoader__.load({
               setMemError(t("cloudMemFail", { detail: (body && body.error) || "unexpected response" }));
               return;
             }
+            // 以前这里说「配置很小：地址、账号……别混」—— 那是"两种备份别搞混"
+            // 的提示，跟"还没配 WebDAV"根本不是一回事。他看到的是一段讲道理的
+            // 话，而真正要做的只是去下面填地址。
+            if (body.enabled === false) {
+              setMemError(t("cloudMemFail", { detail: t("cloudDisabled") }));
+              return;
+            }
             if (body.configured === false) {
-              setMemError(t("cloudMemFail", { detail: t("cloudCfgHint") }));
+              setMemError(t("cloudMemFail", { detail: t("cloudNotConfigured") }));
               return;
             }
             setMemFiles(Array.isArray(body.files) ? body.files : []);
@@ -1120,7 +1168,9 @@ window.__ModuleLoader__.load({
           webdavUrl: d.url,
           webdavUser: d.user,
           webdavDir: d.dir,
-          webdavKeep: Number(d.keep),
+          // 空着就不传。以前这里 `Number("")` = 0，后端再夹到 1 ——
+          // 他把「保留 10 份」清空一下、点保存，就变成只留 1 份了。
+          ...(String(d.keep || "").trim() === "" ? {} : { webdavKeep: Number(d.keep) }),
           webdavEnabled: Boolean(d.enabled),
           webdavAuto: Boolean(d.auto)
         };

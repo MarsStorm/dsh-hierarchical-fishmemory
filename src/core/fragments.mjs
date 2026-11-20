@@ -29,6 +29,9 @@ export const FRAGMENTS_SECTION = 'fragments:memory';
 /** 比 `fish:memory`(100) 早很多：零碎的先说，正文在后。 */
 export const FRAGMENTS_ORDER = 0.6;
 /** 整段默认上限（字）。三个部分共用这一个数。 */
+/** 纸条整段被预算挤掉时留下的那句话。出口那一刀要认它，所以抽成常量。 */
+const STICKY_DROPPED = '（纸条这一段这次没地方放';
+
 export const FRAGMENTS_MAX_CHARS = 1400;
 /** 小纸条最少留多少 —— 剩下的不够这个数，就别让它只剩半行。 */
 export const STICKY_MIN_CHARS = 200;
@@ -96,6 +99,7 @@ export function renderFragments({
     const text = unfinishedSectionText(unfinishedFile, {
       at,
       limit: Number.isFinite(c.unfinishedPerTurn) ? c.unfinishedPerTurn : undefined,
+      maxChars: budget,
       log,
     });
     if (text) parts.push(text);
@@ -127,7 +131,7 @@ export function renderFragments({
         at,
       });
       if (wouldHave) {
-        parts.push(`（纸条这一段这次没地方放（只剩 ${Math.max(0, room)} 字）—— 用 sticky_list 看。）`);
+        parts.push(`${STICKY_DROPPED}，只剩 ${Math.max(0, room)} 字 —— 用 sticky_list 看。）`);
         log(`零碎记忆：纸条整段被预算挤掉（剩 ${Math.max(0, room)} 字 < ${STICKY_MIN_CHARS}）`);
       }
     }
@@ -144,8 +148,11 @@ export function renderFragments({
   // 整段撤掉并说一声（1.27.0 立的规矩：挤掉了要说）。
   let text = parts.join('\n\n');
   if (text.length > maxChars && parts.length > 0) {
-    const stickyIdx = parts.findIndex((p) => p.startsWith('## 小纸条'));
-    const lessonIdx = parts.findIndex((p) => p.startsWith('## 踩过的坑'));
+    // 这一刀得把"纸条整段被挤掉"那句占位也认成纸条，否则出口这一刀根本删不掉它
+    // （它不以 `## 小纸条` 开头），超预算时会一直挂在那儿当噪音。
+    const stickyIdx = parts.findIndex(
+      (p) => p.startsWith('## 小纸条') || p.startsWith(STICKY_DROPPED),
+    );
 
     // 第一刀：把纸条按"剩下的位置"重装。上一轮它拿到的是 `budget`
     // （= maxChars − 24），但教训和"没说完"最后装了多少只有这里知道。
@@ -183,11 +190,22 @@ export function renderFragments({
         text = parts.join('\n\n');
       }
     }
+    // 第三刀：「没说完」那一段。一次最多一条，但一条可能就是一大句原话。
+    // 它是三样里最该保住的，可保住它就得让别人挨饿 —— 只有在它自己就是
+    // 超预算的元凶时才动它。恢复方式是下一轮再看（`questions.json` 里问过的
+    // 已标，没问成的不算问过）。
     if (text.length > maxChars) {
-      // 兜底：连教训都放不下，就只剩"没说完"那一段 —— 它是三样里最短、
-      // 也最不能整段丢的（一次最多一条）。到这里还超，说明句子本身就长，
-      // 硬截会截出半句话，宁可留一句日志。
-      log(`零碎记忆：出口仍然超预算 ${text.length} > ${maxChars}（教训与纸条已让位）`);
+      const ui = parts.findIndex((p) => p.startsWith('## 忽然想起来一句'));
+      if (ui >= 0) {
+        parts.splice(ui, 1);
+        text = parts.join('\n\n');
+        log(`零碎记忆：出口超预算，这次先不问那半句话（${text.length} / ${maxChars}）`);
+      }
+    }
+    if (text.length > maxChars) {
+      // 到这里三段都让过位了还超，说明剩下的那一段自己就比预算长。
+      // 硬截会截出断头句，宁可超一点、留一句日志 —— 但得让我看得见。
+      log(`零碎记忆：出口仍然超预算 ${text.length} > ${maxChars}（三段已逐段让位）`);
     }
   }
   return text;

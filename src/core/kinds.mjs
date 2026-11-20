@@ -16,9 +16,20 @@ export const KIND_LABEL = {
   disclosure: '他说了点自己的事',
   grievance: '他不高兴了',
   note: '我自己写的',
+  // 1.39.0：月度摘要的 kind。以前它标的是 `note`，而 `renderFor` 第一件事
+  // 就是把 note 全滤掉 —— 于是"压缩"等于"从这个月的记忆里删除"。
+  digest: '那阵子的摘要',
 };
 
-/** 能从对话里固化成条目的 kind（`note` 不在内：那个入口已经下线）。 */
+/**
+ * 月度摘要的 kind。
+ *
+ * **它必须能进注入**（跟 `note` 相反）：`fish_compact` 把一个月折成一条的
+ * 目的从来不是"删掉那一个月"，而是"降噪但仍然想得起来"。
+ */
+export const DIGEST_KIND = 'digest';
+
+/** 能从对话里固化成条目的 kind（`note`/`digest` 不在内：它们不是从对话里固化的）。 */
 export const LIVE_KINDS = new Set(['failure', 'win', 'chat', 'disclosure', 'grievance']);
 
 /** 渲染时认不出来就用的那个词。 */

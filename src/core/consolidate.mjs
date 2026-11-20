@@ -14,7 +14,7 @@ import { scrub } from './privacy.mjs';
 import { dayKey } from './timeline.mjs';
 import { REINFORCE_RELIEF_MAX, reinforcementOf } from './feedback.mjs';
 import { errorText } from './errors.mjs';
-import { LIVE_KINDS } from './kinds.mjs';
+import { DIGEST_KIND, LIVE_KINDS } from './kinds.mjs';
 // 这里原本还 import 了 archive.mjs 的 ensurePersonaStructure / ANCHOR_END /
 // LEARNED_HEADING —— 它们只被 appendPersonaLearnings 用。那个函数删了，
 // 这三个名字跟着一起没了（留着就是死引用）。
@@ -264,10 +264,6 @@ export function applySummaries(archive, map, now = Date.now()) {
    * 而那些恰恰是"熟悉感"的原料。日记要像日记，不能只留"值得记载的大事"。
    */
   minSalience: 0.15,
-  /** tags 为空时是否丢弃。默认 false —— 丢掉真实记忆比缺个标签更糟 */
-  requireTags: false,
-  /** tags 为空时的兜底标签 */
-  fallbackTag: '琐事',
   /** 单次会话最多产出多少条日记。门槛降了，上限得跟着抬，否则一开闸就记满 */
   maxPerSession: 12,
   /**
@@ -289,22 +285,8 @@ export function applySummaries(archive, map, now = Date.now()) {
    * 不靠它听话，自己判。
    */
   appendSimilarity: 0.5,
-  /** 单个 trait 的 confidence 上限，避免某条偏好被无限强化 */
-  maxTraitConfidence: 20,
   /** 每天衰减系数 */
   decayRate: 0.9,
-  /**
-   * @deprecated 2026-11-15（1.29.0）起**不再使用**，别再拿它算衰减。
-   *
-   * 它原来把 `recall_count` 映射成衰减缓冲（`log1p(count)/log1p(10)`）——
-   * 那就是「曝光算强化」：一条被每轮注入顺手挑中的日记，能靠"被看到"
-   * 把衰减减半，而"被看到"跟"它重要"根本没有因果关系（明显错的记录
-   * 反而最容易在字面上撞上当前话题）。
-   *
-   * 现在衰减只吃 `feedback` 里带依据的正向反馈（见 `core/feedback.mjs`）。
-   * 这个字段留着只为一件事：别让还写着它的旧配置报错。
-   */
-  recallReliefFullCount: 10,
   /**
    * 衰减的**地板**。
    *
@@ -711,17 +693,12 @@ export function applyConsolidation(archive, rawParsed, context = {}, options = {
 
   if (!accepted && !skipNew && rawDiary && typeof rawDiary.text === 'string' && rawDiary.text.trim() !== '') {
     const salience = clamp(rawDiary.salience, 0, 1, 0.5);
-    const tags = Array.isArray(rawDiary.tags)
-      ? rawDiary.tags.filter((t) => typeof t === 'string' && t.trim() !== '').slice(0, 8)
-      : [];
 
     const already = context.sessionDiaryCount ?? 0;
     if (already >= opts.maxPerSession) {
       notes.push(`本次会话已记满 ${opts.maxPerSession} 条，这条丢弃`);
     } else if (salience < opts.minSalience) {
       notes.push(`salience ${salience.toFixed(2)} 低于门槛，丢弃`);
-    } else if (tags.length === 0 && opts.requireTags) {
-      notes.push('没有标签，按配置丢弃');
     } else {
       const text = rawDiary.text.trim();
       const kind = LIVE_KINDS.has(rawDiary.kind) ? rawDiary.kind : 'chat';
@@ -745,7 +722,7 @@ export function applyConsolidation(archive, rawParsed, context = {}, options = {
         created_at: now,
       });
       accepted = true;
-      next.manifest.session_count = next.manifest.session_count ?? 0;
+
       // 200 字是**提示词里的要求**，这里不截断 —— 截断会把话切成断头句。
       // 但要看得见它守不守：超了就记一笔，跑几天就知道这个要求管不管用。
       if (text.length > 200) {
@@ -820,6 +797,13 @@ export function applyConsolidation(archive, rawParsed, context = {}, options = {
 
   next.manifest.updated_at = now;
   next.manifest.diary_count = next.diary.length;
+  // 以前 `session_count` 是 `= next.manifest.session_count ?? 0` —— 初始化成 0 之后
+  // **再也没加过**，从出厂到现在一直是 0，面板上那个「会话数」从来没对过。
+  // 跟 `diary_count` 一样每次重算：数一遍档案里出现过几个不同的会话。
+  // 增量记账要多维护一个集合、还得处理档案被手改/被还原的情况，不值。
+  next.manifest.session_count = new Set(
+    next.diary.map((e) => (typeof e?.session === 'string' ? e.session : '')).filter(Boolean),
+  ).size;
 
   return { archive: next, notes, accepted, appended };
 }
@@ -900,6 +884,10 @@ export function decayArchive(archive, options = {}) {
   };
 
   const diary = (archive.diary ?? []).map((e) => {
+    // 月度摘要不衰减。它代表的是一整段时间，不是"某一天的琐事" ——
+    // 让 0.9 一路把它压到 floor，等于压缩完过两个月又被遗忘机制吃掉一次，
+    // 那正好抵消了「压缩是为了仍能想起」这件事。
+    if (e?.kind === DIGEST_KIND) return e;
     const factor = Math.pow(opts.decayRate, days * reliefOf(e));
     return {
       ...e,

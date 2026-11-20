@@ -427,7 +427,8 @@ export function createPanelRoutes(deps) {
         } else if (target === 'feelings') {
           file = path.join(archiveDirectory, FEELINGS_MD);
         }
-        if (!file) return panelReply(res, 400, { ok: false, error: '不认识这一层（浅层请在面板里改）' });
+        // 以前这里写「浅层请在面板里改」—— 面板根本没有浅层编辑入口，是句假话。
+        if (!file) return panelReply(res, 400, { ok: false, error: '不认识这一层（浅层请用 shallow_forget 或 shallow_list）' });
         const from = String(body.from ?? '').trim();
         const to = String(body.to ?? '').trim();
         if (!from || !to) return panelReply(res, 400, { ok: false, error: '缺 from / to' });
@@ -585,14 +586,6 @@ export function createPanelRoutes(deps) {
       if (!allow(req, res)) return;
       const wd = normalizeWebdavConfig(cfgNow());
       if (req.method === 'GET') {
-        let remote = null;
-        if (/[?&]list=1\b/.test(String(req.url ?? '')) && wd.configured && wd.enabled) {
-          try {
-            remote = await listRemoteBackups(wd);
-          } catch (err) {
-            remote = { error: errorText(err) };
-          }
-        }
         return panelReply(res, 200, {
           ok: true,
           enabled: wd.enabled,
@@ -610,7 +603,6 @@ export function createPanelRoutes(deps) {
           lastRemoved: cloudState.lastRemoved,
           lastReason: cloudState.lastReason,
           lastError: cloudState.lastError,
-          remote: Array.isArray(remote) ? remote : remote,
         });
       }
       if (!allow(req, res, 'POST')) return;
@@ -650,7 +642,7 @@ export function createPanelRoutes(deps) {
         const wd = normalizeWebdavConfig(raw);
         const result = await testConnection(wd);
         log(`云端连接测试通过：${result.url}（${result.elapsedMs} ms${result.listed ? `，云端 ${result.remoteCount} 份备份` : ''}）`);
-        return panelReply(res, 200, { ...result, dirWritable: true });
+        return panelReply(res, 200, result);
       } catch (err) {
         const message = explainWebdavError(err);
         warn(`云端连接测试失败：${message}`);
@@ -778,6 +770,11 @@ export function createPanelRoutes(deps) {
     handler: async (req, res) => {
       if (!allow(req, res, 'GET')) return;
       const wd = normalizeWebdavConfig(cfgNow());
+      // 开关关掉就连列也不列。以前这里只查 `configured`，于是把「云端备份」
+      // 整个关掉之后，面板仍然能列出并还原云上的文件 —— 关的是自动上传，
+      // 不是"这个功能"，用户看到的却是"已关闭"。`/cloud` 的 POST 是查了 enabled 的，
+      // 这两条漏了。
+      if (!wd.enabled) return panelReply(res, 200, { ok: true, enabled: false, configured: wd.configured, files: [] });
       if (!wd.configured) return panelReply(res, 200, { ok: true, configured: false, files: [] });
       try {
         const files = await listRemoteBackups(wd);
@@ -799,6 +796,7 @@ export function createPanelRoutes(deps) {
         const fileName = String(body.file ?? '').split(/[\\/]/).pop() ?? '';
         if (!/^备份-.+\.json$/.test(fileName)) throw new Error('请选一个 `备份-…json` 文件');
         const wd = normalizeWebdavConfig(cfgNow());
+        if (!wd.enabled) throw new Error('云端备份开关是关着的，要还原先把它打开');
         if (!wd.configured) throw new Error('WebDAV 还没配置，恢复不了');
         const got = await downloadRemoteText(wd, fileName);
         await loadPromise;
@@ -844,7 +842,9 @@ export function createPanelRoutes(deps) {
         }
         if (patch.webdavAuto !== undefined) next.webdavAuto = Boolean(patch.webdavAuto);
         if (patch.webdavEnabled !== undefined) next.webdavEnabled = Boolean(patch.webdavEnabled);
-        if (patch.webdavKeep !== undefined) {
+        // 空串等于"没填"，不是"要 0 份"。`Number("")` 是 0，夹到 1 就成了
+        // 「留 10 份」变「留 1 份」—— 一次手滑能把两边都覆盖掉。
+        if (patch.webdavKeep !== undefined && String(patch.webdavKeep).trim() !== '') {
           const keep = Number(patch.webdavKeep);
           next.webdavKeep = Number.isFinite(keep) ? Math.min(200, Math.max(1, Math.round(keep))) : 10;
         }
