@@ -12,7 +12,7 @@
  * —— 抓一份就等于永远看着那份旧的（这个 bug 我在 `lastShownTurn` 上踩过）。
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { packArchive } from '../core/archive.mjs';

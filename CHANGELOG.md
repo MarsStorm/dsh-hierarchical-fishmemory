@@ -1,3 +1,49 @@
+## 1.38.1 — 2026-11-20
+
+**一条静态自检，第一天就抓到一个"没发生，也没报"的 bug。**
+
+### 那个 bug
+
+`src/host/panel-routes.mjs:15` 的 import 里没有 `existsSync`，但文件里用了两次：
+
+- `/feiyu-diary/layer/unify`（体检页「把层间冲突统一成 X」）
+- `/feiyu-diary/layer/remove`（体检页「删掉重复的那一份」）
+
+运行时抛 `ReferenceError: existsSync is not defined`，被同函数里的
+`catch (err) { return panelReply(res, 400, …) }` 接住 —— 于是这两个 POST
+**每次调用都返回 400「这一层的文件不存在」**。看上去像一句正常的业务拒绝，
+实际是代码根本没跑到那一步。**体检页那两个按钮，从来没能用。**
+
+这和 1.38.0 那个 `sweepStrayTmpFiles` 漏 import 是同一个形状：
+`node --check` 只查语法、**不查标识符**；空/兜底的 catch 会把 ReferenceError
+一起吃下去。**报了没发生，和没发生也没报，一样坏。**
+
+### `test/selfcheck.test.mjs`
+
+扫 `src/core/*.mjs` 与 `src/host/*.mjs`（**不含 `client.js`** —— 里面有 JSX 风格
+对象、样式串、DOM 全局，判断不了"哪些是该 import 的"），用 **acorn** 解析成 AST，
+挑出「引用了、但这个文件里既没定义也没 import、也不是语言全局」的名字。
+
+解析器用 DSH 运行时自带的 acorn（找不到时**让测试失败而不是跳过** —— skip 掉
+等于这条检查永远走不到，正是这插件吃过两次亏的地方）。
+
+**第一版是正则写的，报出 20 多条"漏 import"，一条都不是真 bug**：解构赋值、
+参数默认值 `now = new Date()`、类的方法名 `constructor(`、`import.meta`、
+字符串里的路径…… 一个报得太多的检查，比不检查更坏 —— 我下次就学会无视它了。
+所以拆掉重写成 AST 版。现在误报 0，真话 1。
+
+`encodeURIComponent` / `decodeURIComponent` 这几个也得手写进全局名单：
+它们不在 `Object.keys(globalThis)` 里数得出来，但确实不用 import。
+
+### 负例
+
+五条负例护栏，防这条检查变成空转：
+- 真漏 import（就是事故的形状）必须抓出来；
+- 解构 / 参数默认值 / 方法名 / `for…of` / `while` 变量不许误报；
+- 注释与字符串里的词不算引用；
+- 对象字面量的 key（`{ name: 1 }`）不算引用；
+- acorn 加载不到就失败，不许静默跳过。
+
 ## 1.38.0 — 2026-11-19
 
 **「都修了吧」——修的是三件"没人会替我发现"的小事。**

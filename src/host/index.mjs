@@ -65,6 +65,7 @@ import { readJsonOrNull, readTextOrNull } from '../core/fsx.mjs';
 import { silentStreak, renderSilenceNudge } from '../core/nudge.mjs';
 import { renderDiaryFile } from '../core/render-diary.mjs';
 import { DIARY_MD, FEELINGS_MD, HEALTH_LOG } from '../core/files.mjs';
+import { describeSweep, sweepStrayTmpFiles } from '../core/stray.mjs';
 import { buildMaterial, feelingsOfWeek, groupByDay, previousWeekKey, renderWeekly, renderWeeklyNudge, weekKey, weekRange, weekSpan, weeklyPath, WEEK_DIR } from '../core/weekly.mjs';
 import { buildJudgeInput, parseVerdict, JUDGE_MAX_TOKENS } from '../core/judge.mjs';
 import { collectLayerReport } from '../core/stats.mjs';
@@ -1652,8 +1653,15 @@ export function apply(ctx, rawConfig) {
               const innerNote = describeSweep(inner);
               if (innerNote) log(innerNote);
             }
-          } catch {
-            // 清不掉就算了，绝不能挡住健康记录
+          } catch (err) {
+            // 清不掉不能挡住健康记录 —— 但**必须吭一声**。
+            //
+            // 这里原来是个裸 `catch {}`。结果第一次跑的时候，`stray.mjs` 的 import
+            // 压根没写进这个文件（`node --check` 只查语法，不查未定义标识符），
+            // `sweepStrayTmpFiles` 抛 ReferenceError，被这个空 catch 一口吞掉，
+            // 于是"每天自动清理"整整一版都没发生过，日志里一个字都没有。
+            // 那是"报了没发生"的反面：**没发生，也没报**。一样坏。
+            log(`孤儿清理失败：${err?.message ?? err}`);
           }
         }
       } catch {
