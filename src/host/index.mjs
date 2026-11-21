@@ -57,6 +57,7 @@ import { annotateLoops, buildMirror, renderMirror } from '../core/mirror.mjs';
 import { datesPath, loadDates, upcoming, renderDates } from '../core/dates.mjs';
 import { pickAnchors, renderAnchors } from '../core/anniversary.mjs';
 import { parseFeelingDays, pickFlashback, renderFlashback, FLASHBACK_FILE } from '../core/flashback.mjs';
+import { trimTranscript } from '../core/transcript.mjs';
 import { renderVoice } from '../core/voice.mjs';
 import { applyCompaction, planCompaction } from '../core/compact.mjs';
 
@@ -1531,30 +1532,47 @@ export function apply(ctx, rawConfig) {
           const today = dayKey();
           const body = readTextOrNull(feelingsFile) ?? '';
           const state = readJsonOrNull(stateFile) ?? {};
-          // 昨天抽过的还能用（同一天里重启会重算，不该换人），但换天要重抽。
-          let picked = state?.date === today && typeof state?.picked === 'string' ? state.picked : '';
           const days = parseFeelingDays(body);
-          if (picked === '' || !days.some((day) => day.date === picked)) {
-            const pick = pickFlashback(days, {
-              today,
-              recent: Array.isArray(state?.recent) ? state.recent : [],
-            });
+          const recent = Array.isArray(state?.recent) ? state.recent : [];
+          // 昨天抽过的还能用（同一天里重启会重算，不该换人），但换天要重抽。
+          const sameDay = state?.date === today && typeof state?.picked === 'string';
+          // 今天已经因为「话题撞上」定下来过 —— 换句话不再改，不然同一句话
+          // 说两遍就会把这一栏换来换去，前缀缓存每轮都断。
+          const lockedByTopic = sameDay && state?.matched === true;
+
+          let picked = '';
+          let matched = lockedByTopic;
+          if (lockedByTopic) {
+            picked = state.picked;
+          } else {
+            const pick = pickFlashback(days, { today, recent, hint: query });
             picked = pick?.date ?? '';
+            matched = pick?.matched === true;
+            // 同一天里先前随机抽的那天还站得住，就留着 —— 只有「撞上了」才换人。
+            if (!matched && sameDay && days.some((item) => item.date === state.picked)) {
+              picked = state.picked;
+            }
           }
+
           const day = picked === '' ? null : days.find((item) => item.date === picked);
           if (day) {
             const block = renderFlashback(day, { today });
             if (block) text = text ? `${text}\n\n${block}` : block;
-            // 只在换天时落盘：同一天反复写没有意义，还会每轮多一次 IO。
-            if (state?.date !== today || state?.picked !== picked) {
-              const recent = [picked, ...(Array.isArray(state?.recent) ? state.recent : [])]
+            // 只在换天（或刚撞上）时落盘：同一天反复写没有意义，还会每轮多一次 IO。
+            if (state?.date !== today || state?.picked !== picked || state?.matched !== matched) {
+              const nextRecent = [picked, ...recent]
                 .filter((item, index, all) => all.indexOf(item) === index)
                 .slice(0, 3);
               try {
-                writeFileSync(stateFile, JSON.stringify({ date: today, picked, recent }, null, 2), 'utf8');
+                writeFileSync(
+                  stateFile,
+                  JSON.stringify({ date: today, picked, recent: nextRecent, matched }, null, 2),
+                  'utf8',
+                );
               } catch {
                 // 记不住抽过哪天不影响这一次的注入
               }
+              log(`忽然想起那一天：${picked}${matched ? '（话题撞上了）' : ''}`);
             }
           }
         }
@@ -1856,7 +1874,7 @@ export function apply(ctx, rawConfig) {
         s.renderCache = { turn: -1, text: '' }; // 新一轮，作废缓存
         if (SUPPRESS_RE.test(text)) s.suppressedUntil = s.turn;
         s.transcript.push({ role: 'user', text });
-        if (s.transcript.length > 40) s.transcript.splice(0, s.transcript.length - 40);
+        trimTranscript(s.transcript);
         return;
       }
 
@@ -1883,7 +1901,7 @@ export function apply(ctx, rawConfig) {
           .trim();
         if (text !== '') {
           s.transcript.push({ role: 'assistant', text });
-          if (s.transcript.length > 40) s.transcript.splice(0, s.transcript.length - 40);
+          trimTranscript(s.transcript);
           // 这一轮我说过话了 —— 「闷太久」的计数归零。
           s.lastProseTurn = s.turn;
           // 回复到了 —— 如果这一轮的纸条已经先写了（turn-stopping 更早），

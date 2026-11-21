@@ -51,6 +51,9 @@ const EXCERPT_MAX = 180;
 /** 至少隔几天才算「回忆」；昨天的事不叫忽然想起。 */
 const MIN_AGE_DAYS = 2;
 
+/** 「撞上」用的滑动窗口宽度（字）。见 `topicGrams` 的注释。 */
+const TOPIC_GRAM = 3;
+
 
 /** 两个 `YYYY-MM-DD` 相差几个自然日（later − earlier）。 */
 /**
@@ -112,14 +115,71 @@ export function parseFeelingDays(text) {
 }
 
 /**
+ * 把一句话切成所有「三个字」的滑动窗口。
+ *
+ * 为什么不用分词：汉字没有空格，靠虚词表硬断会断出「运行逻辑列」这种先连后断
+ * 的残片（「下」不在虚词表里），越长越错；而引入真分词器是又一个依赖。
+ * 三个字的窗口有个好处是**自带的**：它既短到能容忍断句差异，又长到不会
+ * 靠「插件」两个字就撞上每一天 —— 「插件那」和「插件怎」不是同一句话。
+ *
+ * @param {string} text
+ * @returns {string[]} 去重后的三字窗口
+ */
+export function topicGrams(text) {
+  const flat = String(text ?? '').replace(/[^\p{L}\p{N}]+/gu, ' ');
+  const grams = new Set();
+  for (const chunk of flat.split(' ')) {
+    const chars = [...chunk];
+    for (let i = 0; i + TOPIC_GRAM <= chars.length; i += 1) {
+      grams.add(chars.slice(i, i + TOPIC_GRAM).join(''));
+    }
+  }
+  return [...grams];
+}
+
+/**
+ * 这一天里，有几句「刚说过的话」的字面撞上了。
+ *
+ * 判据故意硬：**至少两个不同的三字窗口原样出现**才算撞上。一个就认的话，
+ * 任何一句带「今天」的话都会撞上每一天 —— 那就不是想起，是抽签。
+ *
+ * @param {Array<{date: string, body: string}>} days
+ * @param {string} hint 他这一轮说的话
+ * @returns {({date: string, body: string, matched: true}) | null}
+ */
+export function matchFeelingDay(days, hint) {
+  const list = Array.isArray(days) ? days : [];
+  const grams = topicGrams(hint);
+  if (grams.length < 2) return null;
+  let best = null;
+  for (const day of list) {
+    const body = String(day?.body ?? '');
+    if (body === '') continue;
+    let hit = 0;
+    for (const gram of grams) {
+      if (body.includes(gram)) hit += 1;
+    }
+    if (hit < 2) continue;
+    if (best === null || hit > best.hit) best = { day, hit };
+  }
+  if (best === null) return null;
+  return { date: best.day.date, body: String(best.day.body), matched: true };
+}
+
+/**
  * 今天翻到哪一天。
  *
  * 规则：至少 `minAgeDays` 天前；优先挑最近没出现过的（`recent` 是
  * 前几次抽到的日期）—— 只有 6 天日记的时候，不排除就会连着抽同一天。
  *
+ * 2026-11-21 加 `hint`：**话题撞上了就翻那一天**。随机是这一栏的本意
+ * （「没规律的想起」），但它永远翻不到最该翻的那天 —— 他说「累」的时候，
+ * 抽到的是插件那个视频，而写过「他熬了一整夜才去睡」的那天躺在角落里
+ * 一辈子碰不上。撞上是低频事件，所以它不会把这一栏变成「按需检索」。
+ *
  * @param {Array<{date: string, body: string}>} days
- * @param {{ today?: string, recent?: string[], minAgeDays?: number }} [options]
- * @returns {{date: string, body: string, days: number} | null}
+ * @param {{ today?: string, recent?: string[], minAgeDays?: number, hint?: string }} [options]
+ * @returns {{date: string, body: string, days: number, matched?: boolean} | null}
  */
 export function pickFlashback(days, options = {}) {
   const list = Array.isArray(days) ? days : [];
@@ -137,8 +197,12 @@ export function pickFlashback(days, options = {}) {
   // 只跳过「还有别的可选」的那些；全被跳过了就退回整池，宁可重一次也要有东西。
   const fresh = pool.filter((day) => !recent.includes(day.date));
   const use = fresh.length > 0 ? fresh : pool;
-  const picked = use[seedOf(today) % use.length];
-  return picked;
+  const base = use[seedOf(today) % use.length];
+
+  // 撞上了就翻那天。只把 body/date 换掉，`days` 由调用方按 today 重算。
+  const hit = typeof options.hint === 'string' ? matchFeelingDay(use, options.hint) : null;
+  if (hit !== null) return { ...hit, days: daysBetween(hit.date, today) };
+  return base;
 }
 
 /**

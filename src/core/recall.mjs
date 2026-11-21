@@ -227,7 +227,7 @@ export function searchWithChars(index, query, options = {}) {
  * 就是纯寒暄。宁可漏判（多翻一次记忆），也别把「你上次说的那个公园」挡掉：
  * **这张表只影响"整句全是这些字"的情况**。
  */
-const FILLER_CHARS = new Set(
+export const FILLER_CHARS = new Set(
   '的了吗呢啊吧呀哦嗯么嘛唉诶哟哇啦咯喽呗呐嗨好哈呵嘿嘻是了在有我你他她它您这那哪个就都也还又很太不要能会可说对于把被给让跟和与或但而所以如果因然后先再才刚正啥什怎样多少点些一儿'.split(
     '',
   ),

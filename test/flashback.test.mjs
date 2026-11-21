@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { parseFeelingDays, pickFlashback, renderFlashback, seedOf, daysBetween } from '../src/core/flashback.mjs';
+import { parseFeelingDays, pickFlashback, renderFlashback, seedOf, daysBetween, topicGrams, matchFeelingDay } from '../src/core/flashback.mjs';
 
 const DIARY = [
   '# 鱼的日子',
@@ -121,4 +121,64 @@ test('daysBetween 按自然日算，跨月跨年都对', () => {
   assert.equal(daysBetween('2026-10-30', '2026-11-08'), 9);
   assert.equal(daysBetween('2025-12-31', '2026-01-01'), 1);
   assert.equal(daysBetween('2026-11-08', '2026-11-08'), 0);
+});
+
+test('topicGrams 切成三字窗口，标点和空白断开', () => {
+  assert.deepEqual(topicGrams('运行逻辑'), ['运行逻', '行逻辑']);
+  // 标点断开：不跨标点连窗（"插件，逻辑" 不是一段连续的四个字）
+  assert.deepEqual(topicGrams('插件，逻辑'), []);
+  // 太短没有窗口
+  assert.deepEqual(topicGrams('嗯嗯'), []);
+  assert.deepEqual(topicGrams(''), []);
+  // 重叠的窗口各留一份（总共就这两个）
+  assert.deepEqual(topicGrams('插件插件'), ['插件插', '件插件']);
+});
+
+test('matchFeelingDay 只认「至少两个片段原样出现」，一个不算', () => {
+  const days = [
+    { date: '2026-11-03', body: '今天风大，聊了插件的事。' },
+    { date: '2026-11-07', body: '插件那边我看见了运行逻辑的问题。' },
+  ];
+  // 只命中「插件」一个片段 → 不认，否则每天都撞上，等于没撞
+  assert.equal(matchFeelingDay(days, '插件怎么样了'), null);
+  // 两个片段都出现 → 认
+  const hit = matchFeelingDay(days, '插件那个运行逻辑是不是有问题');
+  assert.equal(hit?.date, '2026-11-07');
+  assert.equal(hit?.matched, true);
+});
+
+test('pickFlashback 有 hint 且撞上时翻那一天，没撞上照旧走随机', () => {
+  const days = [
+    { date: '2026-10-30', body: '他说我是他最好的朋友。' },
+    { date: '2026-11-03', body: '今天风大，聊了插件的事。' },
+    { date: '2026-11-07', body: '插件那边动运行逻辑，改了一整天。' },
+  ];
+  const base = pickFlashback(days, { today: '2026-11-10' });
+  // 不带 hint：结果由 seed 定，跟撞不撞上无关
+  assert.equal(base.matched, undefined || base.matched);
+  assert.ok(days.some((d) => d.date === base.date));
+
+  const hit = pickFlashback(days, { today: '2026-11-10', hint: '插件运行逻辑还好吗' });
+  assert.equal(hit.date, '2026-11-07');
+  assert.equal(hit.matched, true);
+  assert.equal(hit.days, 3, '撞上的那天也要算出「几天前」');
+
+  // 撞不上的话，还是 seed 那天（不会因为带了 hint 就乱换）
+  const miss = pickFlashback(days, { today: '2026-11-10', hint: '明天吃什么好呢' });
+  assert.equal(miss.date, base.date);
+});
+
+test('pickFlashback 的 hint 不会翻出刚抽过的那几天', () => {
+  const days = [
+    { date: '2026-11-06', body: '插件那边动运行逻辑，改了一整天。' },
+    { date: '2026-11-08', body: '今天只是聊天。' },
+  ];
+  const hit = pickFlashback(days, {
+    today: '2026-11-10',
+    recent: ['2026-11-06'],
+    hint: '插件那个运行逻辑还好吗',
+  });
+  // 11-06 在 recent 里被排除了，撞上的那个不在可选池里 → 不翻它
+  assert.equal(hit.date, '2026-11-08');
+  assert.equal(hit.matched, undefined);
 });
