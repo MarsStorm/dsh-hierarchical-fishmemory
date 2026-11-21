@@ -57,6 +57,7 @@ import { annotateLoops, buildMirror, renderMirror } from '../core/mirror.mjs';
 import { datesPath, loadDates, upcoming, renderDates } from '../core/dates.mjs';
 import { pickAnchors, renderAnchors } from '../core/anniversary.mjs';
 import { parseFeelingDays, pickFlashback, renderFlashback, FLASHBACK_FILE } from '../core/flashback.mjs';
+import { FEELING_HIT_MAX_CHARS, renderFeelingHits, searchFeelingDays } from '../core/feelings.mjs';
 import { trimTranscript } from '../core/transcript.mjs';
 import { renderVoice } from '../core/voice.mjs';
 import { applyCompaction, planCompaction } from '../core/compact.mjs';
@@ -93,7 +94,7 @@ import {
   readNotesSync,
   registerSticky,
 } from '../core/sticky.mjs';
-import { firstDay, readQuotes, renderQuotes, searchQuotes } from '../core/quotes.mjs';
+import { firstDay, readQuotes, renderQuotes, searchQuotes, sourceMark } from '../core/quotes.mjs';
 import { bumpRecalled, soughtCount, soughtNote } from '../core/revisit.mjs';
 import {
   FEEDBACK_KINDS,
@@ -3512,6 +3513,14 @@ export function apply(ctx, rawConfig) {
                 description:
                   '要找什么。用**当时的具体词** —— 人名、地点、物件、他那句话里的词。越具体越准，别写一整句话。',
               },
+              scope: {
+                type: 'string',
+                enum: ['diary', 'feelings'],
+                description:
+                  '查哪一本。默认 diary（共度时光：我记下的经过）。' +
+                  'feelings 查《鱼的日子》：**我写下的感受**，不是发生过什么 —— ' +
+                  '要问「我以前为这件事写过什么吗」才用它。',
+              },
               limit: {
                 type: 'integer',
                 description: '要几条。默认 5，最多 10。',
@@ -3563,6 +3572,37 @@ export function apply(ctx, rawConfig) {
             // 判断交给 timeline.inDateRange —— 同一套范围语义，fish_quote 和这里
             // 必须一致，否则同一个查询在两处一个命中一个落空。
             const inRange = (entry) => inDateRange(dayOf(entry), since, until);
+
+            // ── 第二本：《鱼的日子》（2026-11-21，1.41.0）──
+            //
+            // 那几万字从来没进过任何检索。`fish_recall` 只吃 `archive.diary`，
+            // 情感日记唯一的通路是「忽然想起那一天」每天随机一页 —— 所以
+            // 「我以前为这件事写过什么吗」这个问题，之前只能靠碰运气。
+            //
+            // 判定跟「撞上就翻」共用 `topicGrams`：同一件事在两处用两种
+            // 判据，结果就会互相打脸 —— 自动那栏撞上了，显式来查却说没有。
+            if (args?.scope === 'feelings') {
+              let feelBody = '';
+              try {
+                feelBody = await readFile(path.join(archiveDirectory, FEELINGS_MD), 'utf8');
+              } catch {
+                feelBody = '';
+              }
+              const feelDays = parseFeelingDays(feelBody, { maxChars: FEELING_HIT_MAX_CHARS });
+              const hits = searchFeelingDays(feelDays, query, { limit, since, until });
+              log(
+                `查情感日记「${query.slice(0, 20)}」：${feelDays.length} 天里翻到 ${hits.length} 天`,
+              );
+              return {
+                ok: true,
+                found: hits.length,
+                text: renderFeelingHits(hits, {
+                  query,
+                  today: dayKey(),
+                  earliest: feelDays.length > 0 ? feelDays[0].date : '',
+                }),
+              };
+            }
 
             const byId0 = new Map(archive.diary.map((e) => [e.id, e]));
 
@@ -3883,7 +3923,7 @@ export function apply(ctx, rawConfig) {
                     ? ''
                     : '\n' +
                       lines
-                        .map((n) => `- ${n.date ?? ''} ${n.time ?? ''}「${n.said}」`)
+                        .map((n) => `- ${n.date ?? ''} ${n.time ?? ''}「${n.said}」${sourceMark(n)}`)
                         .join('\n')),
               };
             }

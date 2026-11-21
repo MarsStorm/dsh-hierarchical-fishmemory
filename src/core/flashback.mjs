@@ -89,10 +89,15 @@ function oneLine(lines, max = EXCERPT_MAX) {
  * 只认 `## YYYY-MM-DD`；`###` 小节的标题丢掉（摘要是散文，不是目录），
  * 第一个日期标题之前那段写账规矩也丢掉。
  *
+ * `maxChars` 是摘要长度上限（默认 180）。检索用它时传大一点 ——
+ * 翻到某一天之后要读的是那天的内容，不是一行提要。
+ *
  * @param {string} text
+ * @param {{ maxChars?: number }} [options]
  * @returns {Array<{date: string, body: string, chars: number}>}
  */
-export function parseFeelingDays(text) {
+export function parseFeelingDays(text, options = {}) {
+  const maxChars = Number.isFinite(options.maxChars) ? options.maxChars : EXCERPT_MAX;
   const days = [];
   /** @type {{date: string, lines: string[], chars: number} | null} */
   let cur = null;
@@ -110,7 +115,15 @@ export function parseFeelingDays(text) {
     cur.chars += [...line].length;
   }
   return days
-    .map((day) => ({ date: day.date, body: oneLine(day.lines), chars: day.chars }))
+    .map((day) => ({
+      date: day.date,
+      body: oneLine(day.lines, maxChars),
+      chars: day.chars,
+      // 全文（2026-11-21，1.41.0）：检索要按整天判命中，展示才用截断后的 body。
+      // 只用 body 判的话，比 420 字长的那一节后半截就再也搜不到了 ——
+      // 而情绪日记恰恰常常一天写很长，重点常在后半。
+      full: oneLine(day.lines, Number.POSITIVE_INFINITY),
+    }))
     .filter((day) => day.body !== '');
 }
 

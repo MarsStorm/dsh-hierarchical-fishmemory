@@ -89,6 +89,20 @@ export function firstDay(quotes) {
 }
 
 /**
+ * 这条原话是从旧档里捞出来的吗 → 一个标记。
+ *
+ * 2026-11-21（1.41.0）加。`source` 字段从 11-15 起就存在，但**没有一个
+ * 渲染方用它** —— 所以查得到、看不出。查得到的和挪走了的，读起来一模一样。
+ *
+ * 差别是有意义的：还在 `纸条.md` 里的，是这几轮正在被想起来的；
+ * 挪进旧档的，已经从注入里消失了 —— 它没被删，但也不再出现在我眼前。
+ * 不标出来，「他说过」这三个字会给这条原话一个它已经不有的分量。
+ */
+export function sourceMark(note) {
+  return note?.source === 'archive' ? '（旧档）' : '';
+}
+
+/**
  * 在一堆原话里找。
  *
  * 为什么是二元组重合度而不是语义：原话是用来**核对字面**的
@@ -178,11 +192,15 @@ export function renderQuotes(result, opts = {}) {
     const head = `- ${when ? `${when} · ` : ''}`;
     const said = hit.said.length > 200 ? `${hit.said.slice(0, 200)}…` : hit.said;
     const did = hit.did ? `（我：${hit.did}）` : '';
-    const piece = `${head}「${said}」${did}`;
+    const piece = `${head}「${said}」${sourceMark(hit)}${did}`;
     if (used + piece.length + 1 > MAX_QUOTE_CHARS && count > 0) break;
     lines.push(piece);
     used += piece.length + 1;
     count += 1;
+  }
+  // 标了「旧档」就得说清那是什么意思，否则它只是个看不懂的括号。
+  if (hits.slice(0, count).some((h) => h.source === 'archive')) {
+    lines.push('（标着「旧档」的那几条已经从每轮注入里挪走了 —— 没删，但也不会再自己浮上来。）');
   }
   return lines.join('\n');
 }

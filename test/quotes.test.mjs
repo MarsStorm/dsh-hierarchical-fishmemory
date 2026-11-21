@@ -10,7 +10,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { readQuotes, renderQuotes, searchQuotes } from '../src/core/quotes.mjs';
+import { readQuotes, renderQuotes, searchQuotes, sourceMark } from '../src/core/quotes.mjs';
 
 function fixture(lines) {
   const dir = mkdtempSync(join(tmpdir(), 'fish-quotes-'));
@@ -122,4 +122,52 @@ test('说：找到了就照抄，带上「我这轮」', () => {
 test('说：库里一条都没有时明说', () => {
   const text = renderQuotes({ hits: [], scanned: 0, total: 0, first: '' }, { query: 'x' });
   assert.match(text, /一条都没有/);
+});
+
+
+// ── 「（旧档）」标记（2026-11-21，1.41.0）──
+//
+// 旧档从 11-15 起就在被读了，但 `source` 字段没有渲染方用过 ——
+// 所以查得到、看不出。查得到的和已从注入里消失的，读起来一模一样。
+// 标记不是装饰：它决定「他说过」这句话该有多重。
+
+test('sourceMark：旧档标，活跃不标，别的形状不标', () => {
+  assert.equal(sourceMark({ source: 'archive' }), '（旧档）');
+  assert.equal(sourceMark({ source: 'active' }), '');
+  assert.equal(sourceMark({}), '');
+  assert.equal(sourceMark(null), '');
+});
+
+test('渲染：旧档条目带标记，活跃条目不带', () => {
+  const text = renderQuotes(
+    {
+      hits: [
+        { said: '旧的那句', source: 'archive', at: 1, date: '2026-10-31', time: '深夜' },
+        { said: '新的那句', source: 'active', at: 2, date: '2026-11-20', time: '中午' },
+      ],
+      scanned: 2,
+      total: 2,
+      first: '2026-10-31',
+    },
+    { query: '那句', at: 2 },
+  );
+  assert.match(text, /旧的那句」/);
+  assert.match(text, /旧的那句」（旧档）/);
+  assert.match(text, /新的那句」\n|新的那句」（我/);
+  assert.doesNotMatch(text, /新的那句」（旧档）/);
+});
+
+test('渲染：命中里有旧档才补那句说明，没有就不补', () => {
+  const base = { scanned: 1, total: 1, first: '2026-11-01' };
+  const withArch = renderQuotes(
+    { ...base, hits: [{ said: '旧', source: 'archive', at: 1, date: '2026-10-31', time: '深夜' }] },
+    { query: '旧', at: 2 },
+  );
+  assert.match(withArch, /已经从每轮注入里挪走了/);
+
+  const without = renderQuotes(
+    { ...base, hits: [{ said: '新', source: 'active', at: 1, date: '2026-11-01', time: '中午' }] },
+    { query: '新', at: 2 },
+  );
+  assert.doesNotMatch(without, /已经从每轮注入里挪走了/);
 });
