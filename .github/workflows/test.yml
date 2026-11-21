@@ -12,5 +12,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # 自检那条要 acorn 解析 AST（`test/selfcheck.test.mjs`）。这里不装依赖，
+      # 它就找不到解析器 —— 而那条检查是**故意 fail 不 skip** 的（skip 等于
+      # 这条检查永远走不到）。`--legacy-peer-deps` 是因为 peer 写的是
+      # `@deepseek-ai/cordis ~4.0.4`，registry 上最新已是 4.1.0，不强装更省事。
+      - run: npm install --no-audit --no-fund --legacy-peer-deps
       - run: npm test
       - run: node tools/build-client.mjs --check
